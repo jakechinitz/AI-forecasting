@@ -26,7 +26,8 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
         month: results.months[i],
         label: formatMonth(results.months[i]),
         demand: nodeData.demand[i],
-        supply: nodeData.supply[i],
+        supply: nodeData.supply[i],                         // Shipments cleared
+        supplyPotential: nodeData.supplyPotential?.[i] || nodeData.supply[i],  // Production potential
         capacity: nodeData.capacity[i],
         tightness: nodeData.tightness[i],
         priceIndex: nodeData.priceIndex[i],
@@ -34,11 +35,16 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
         backlog: nodeData.backlog[i],
         yield: nodeData.yield[i] * 100,
         shortage: nodeData.shortage[i],
-        glut: nodeData.glut[i]
+        glut: nodeData.glut[i],
+        installedBase: nodeData.installedBase?.[i] || 0,    // Stock view
+        requiredBase: nodeData.requiredBase?.[i] || 0       // Stock view
       });
     }
     return data;
   }, [nodeData, results, timeRange]);
+
+  // Check if this is a GPU/stock node
+  const isStockNode = selectedNode === 'gpu_datacenter' || selectedNode === 'gpu_inference';
 
   // Heatmap data for tightness across nodes
   const heatmapData = useMemo(() => {
@@ -162,10 +168,10 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
             </div>
 
             <div className="grid grid-2" style={{ gap: 'var(--space-lg)' }}>
-              {/* Supply vs Demand */}
+              {/* Shipments vs Demand (Flow View) */}
               <div className="chart-container">
                 <div className="chart-header">
-                  <h3 className="chart-title">Supply vs Demand</h3>
+                  <h3 className="chart-title">{isStockNode ? 'Shipments vs Purchase Demand' : 'Shipments vs Demand'}</h3>
                 </div>
                 <ResponsiveContainer width="100%" height={280}>
                   <ComposedChart data={chartData}>
@@ -173,9 +179,9 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
                     <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} interval={Math.floor(chartData.length / 8)} />
                     <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickFormatter={(v) => formatNumber(v)} />
                     <Tooltip content={<CustomTooltip />} />
-                    <Area type="monotone" dataKey="capacity" fill="#6366f1" fillOpacity={0.1} stroke="none" name="Capacity" />
-                    <Line type="monotone" dataKey="supply" stroke="#22c55e" strokeWidth={2} dot={false} name="Supply" />
-                    <Line type="monotone" dataKey="demand" stroke="#ef4444" strokeWidth={2} dot={false} name="Demand" />
+                    <Area type="monotone" dataKey="supplyPotential" fill="#6366f1" fillOpacity={0.1} stroke="#6366f1" strokeDasharray="4 4" name="Production Potential" />
+                    <Line type="monotone" dataKey="supply" stroke="#22c55e" strokeWidth={2} dot={false} name="Shipments (Cleared)" />
+                    <Line type="monotone" dataKey="demand" stroke="#ef4444" strokeWidth={2} dot={false} name={isStockNode ? 'Purchase Demand' : 'Demand'} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -216,21 +222,39 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
                 </ResponsiveContainer>
               </div>
 
-              {/* Yield (for stacked yield nodes) */}
-              <div className="chart-container">
-                <div className="chart-header">
-                  <h3 className="chart-title">Effective Yield</h3>
+              {/* Stock View for GPU nodes OR Yield for others */}
+              {isStockNode ? (
+                <div className="chart-container">
+                  <div className="chart-header">
+                    <h3 className="chart-title">Installed Base vs Required Base</h3>
+                  </div>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <LineChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--bg-tertiary)" />
+                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} interval={Math.floor(chartData.length / 8)} />
+                      <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickFormatter={(v) => formatNumber(v)} />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Line type="monotone" dataKey="installedBase" stroke="#22c55e" strokeWidth={2} dot={false} name="Installed Base" />
+                      <Line type="monotone" dataKey="requiredBase" stroke="#ef4444" strokeWidth={2} strokeDasharray="4 4" dot={false} name="Required Base" />
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
-                <ResponsiveContainer width="100%" height={280}>
-                  <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--bg-tertiary)" />
-                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} interval={Math.floor(chartData.length / 8)} />
-                    <YAxis domain={[50, 100]} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickFormatter={v => v + '%'} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Line type="monotone" dataKey="yield" stroke="#8b5cf6" strokeWidth={2} dot={false} name="Yield" />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+              ) : (
+                <div className="chart-container">
+                  <div className="chart-header">
+                    <h3 className="chart-title">Effective Yield</h3>
+                  </div>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <LineChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--bg-tertiary)" />
+                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} interval={Math.floor(chartData.length / 8)} />
+                      <YAxis domain={[50, 100]} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickFormatter={v => v + '%'} />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Line type="monotone" dataKey="yield" stroke="#8b5cf6" strokeWidth={2} dot={false} name="Yield" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </div>
           </div>
 

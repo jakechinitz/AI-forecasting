@@ -284,10 +284,11 @@
 
 /* Assumption blocks */
 .assumption-block {
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
   border-radius: var(--radius-lg);
   padding: var(--space-lg);
-  border: 1px solid var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
 }
 
 .assumption-block-header {
@@ -296,7 +297,7 @@
   justify-content: space-between;
   margin-bottom: var(--space-md);
   padding-bottom: var(--space-md);
-  border-bottom: 1px solid var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color-light);
 }
 
 .assumption-block-title {
@@ -313,12 +314,13 @@
 
 /* Node cards */
 .node-card {
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
   border-radius: var(--radius-lg);
   padding: var(--space-md);
-  border: 1px solid var(--bg-tertiary);
+  border: 1px solid var(--border-color);
   cursor: pointer;
   transition: all var(--transition-fast);
+  box-shadow: var(--shadow-sm);
 }
 
 .node-card:hover {
@@ -378,10 +380,11 @@
 
 /* Chart containers */
 .chart-container {
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
   border-radius: var(--radius-lg);
   padding: var(--space-lg);
-  border: 1px solid var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
 }
 
 .chart-header {
@@ -416,10 +419,11 @@
 
 /* Analysis cards */
 .analysis-card {
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
   border-radius: var(--radius-lg);
   padding: var(--space-md);
-  border: 1px solid var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
 }
 
 .analysis-card-rank {
