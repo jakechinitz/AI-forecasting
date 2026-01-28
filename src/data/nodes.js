@@ -178,13 +178,13 @@ export const NODES = [
     inputIntensity: 1,
     parentNodeIds: ['training_frontier', 'training_midtier', 'inference_consumer', 'inference_enterprise', 'inference_agentic'],
 
-    // Base rate: ~3-4M datacenter GPUs shipped in 2024
+    // Base rate: ~6.5M datacenter GPUs shipped in 2025
     // Source: NVIDIA earnings, analyst estimates
-    startingCapacity: 350000,  // units/month
+    startingCapacity: 540000,  // units/month (~6.48M/yr)
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 50000, type: 'committed' },
-      { date: '2026-01', capacityAdd: 100000, type: 'committed' },
-      { date: '2026-06', capacityAdd: 150000, type: 'optional' }
+      { date: '2025-06', capacityAdd: 60000, type: 'committed' },
+      { date: '2026-01', capacityAdd: 140000, type: 'committed' },
+      { date: '2026-07', capacityAdd: 180000, type: 'optional' }
     ],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 18,
@@ -208,10 +208,10 @@ export const NODES = [
     exportControlSensitivity: 'high',
 
     baseRate: {
-      value: 350000,
+      value: 540000,
       confidence: 'high',
       source: 'NVIDIA quarterly reports, supply chain analysis',
-      historicalRange: [200000, 500000]
+      historicalRange: [400000, 700000]
     }
   },
   {
@@ -356,13 +356,14 @@ export const NODES = [
     inputIntensity: 8,  // 8 HBM stacks per H100/H200
     parentNodeIds: ['gpu_datacenter'],
 
-    // Base rate: HBM production ~15-20M stacks/year (2024)
+    // Base rate: HBM production ~75M stacks/year (2025)
     // Source: SK Hynix, Samsung, Micron capacity announcements
-    startingCapacity: 1500000,  // stacks/month
+    // HBM tight / sold out into 2026 per Reuters, industry reports
+    startingCapacity: 6250000,  // stacks/month (~75M/yr)
     committedExpansions: [
-      { date: '2025-03', capacityAdd: 200000, type: 'committed' },
-      { date: '2025-09', capacityAdd: 300000, type: 'committed' },
-      { date: '2026-03', capacityAdd: 400000, type: 'optional' }
+      { date: '2025-06', capacityAdd: 1500000, type: 'committed' },
+      { date: '2026-01', capacityAdd: 1500000, type: 'committed' },
+      { date: '2026-09', capacityAdd: 1250000, type: 'optional' }
     ],
     leadTimeDebottleneck: 9,
     leadTimeNewBuild: 24,
@@ -390,10 +391,10 @@ export const NODES = [
     exportControlSensitivity: 'high',
 
     baseRate: {
-      value: 1500000,
+      value: 6250000,
       confidence: 'medium',
-      source: 'Memory vendor capacity announcements',
-      historicalRange: [1000000, 2500000]
+      source: 'Memory vendor capacity announcements, Reuters HBM reports',
+      historicalRange: [5000000, 8000000]
     }
   },
   {
@@ -493,15 +494,14 @@ export const NODES = [
     inputIntensity: 0.5,  // 0.5 CoWoS wafer-equiv per GPU (2 GPUs per wafer)
     parentNodeIds: ['gpu_datacenter'],
 
-    // Base rate: ~75k wafers/month CoWoS capacity (2024)
-    // Growing to 130k+ by end 2025
-    // Source: TSMC investor calls, SemiAnalysis
-    startingCapacity: 75000,
+    // Base rate: ~250k wafers/month CoWoS capacity (2025)
+    // Target 6M GPU-eq/year = 500k GPUs/mo = 250k wafers/mo
+    // Source: TrendForce, TSMC investor calls
+    startingCapacity: 250000,
     committedExpansions: [
-      { date: '2025-03', capacityAdd: 15000, type: 'committed' },
-      { date: '2025-06', capacityAdd: 20000, type: 'committed' },
-      { date: '2025-12', capacityAdd: 20000, type: 'committed' },
-      { date: '2026-06', capacityAdd: 30000, type: 'optional' }
+      { date: '2025-10', capacityAdd: 80000, type: 'committed' },
+      { date: '2026-06', capacityAdd: 120000, type: 'committed' },
+      { date: '2026-12', capacityAdd: 120000, type: 'optional' }
     ],
     leadTimeDebottleneck: 9,
     leadTimeNewBuild: 24,
@@ -525,10 +525,10 @@ export const NODES = [
     exportControlSensitivity: 'critical',
 
     baseRate: {
-      value: 75000,
+      value: 250000,
       confidence: 'high',
-      source: 'TSMC quarterly reports, analyst estimates',
-      historicalRange: [60000, 90000]
+      source: 'TrendForce, TSMC quarterly reports',
+      historicalRange: [200000, 350000]
     }
   },
   {
@@ -1044,14 +1044,14 @@ export const NODES = [
     inputIntensity: 0.001,  // 1 kW per GPU average
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    // Base rate: ~50 GW global AI/cloud DC capacity
-    // Growing ~15-20% annually
-    startingCapacity: 50000,  // 50 GW
+    // Base rate: ~25 GW/year global AI DC bring-up capacity
+    // This is MW of NEW capacity that can be brought online per month
+    // Grid constraints and transformer lead times are real limiters
+    // Source: NERC reports, S&P Global data center analysis
+    startingCapacity: 2083,  // MW/month (~25GW/yr)
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 5000, type: 'committed' },
-      { date: '2025-12', capacityAdd: 5000, type: 'committed' },
-      { date: '2026-06', capacityAdd: 8000, type: 'committed' },
-      { date: '2026-12', capacityAdd: 10000, type: 'optional' }
+      { date: '2026-01', capacityAdd: 400, type: 'committed' },
+      { date: '2027-01', capacityAdd: 400, type: 'optional' }
     ],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 36,  // 3 years for new campus
@@ -1075,10 +1075,10 @@ export const NODES = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 50000,
-      confidence: 'high',
-      source: 'Datacenter market reports (JLL, CBRE)',
-      historicalRange: [40000, 60000]
+      value: 2083,
+      confidence: 'medium',
+      source: 'NERC reports, S&P Global data center analysis',
+      historicalRange: [1500, 3000]
     }
   },
   {

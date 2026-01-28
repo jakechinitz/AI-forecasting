@@ -529,6 +529,40 @@ export function calculateContinualLearningDemand(month, demandAssumptions) {
   return continualLearningCache[month];
 }
 
+/**
+ * Calculate effective HBM stacks per GPU based on continual learning adoption
+ * Continual learning increases memory demands due to:
+ * - Larger working sets for fine-tuning
+ * - Checkpoint storage during training
+ * - KV cache growth for longer contexts
+ *
+ * Formula: effectiveStacks = baseStacks * (1 + adoption(t) * (memoryMultiplierAtFull - 1))
+ */
+export function calculateEffectiveHbmPerGpu(month, demandAssumptions) {
+  const baseStacksPerGPU = 8;
+
+  // Memory multiplier at full adoption (25% more HBM per GPU for continual learning)
+  const memoryMultiplierAtFullAdoption = 1.25;
+
+  // Calculate adoption using logistic curve based on continual learning compute growth
+  // Adoption starts at 10% and saturates at 90% over time
+  const continualLearning = calculateContinualLearningDemand(month, demandAssumptions);
+
+  // Use accel-hours as proxy for adoption
+  // Month 0: 50K accel-hours = 10% adoption
+  // Grows toward 90% adoption as compute demand increases 10x
+  const baseAccelHours = 50000;
+  const growthRatio = continualLearning.accelHours / baseAccelHours;
+
+  // Logistic adoption: a(t) = 0.1 + 0.8 * (growthRatio / (1 + growthRatio))
+  const adoption = 0.1 + 0.8 * (growthRatio / (1 + growthRatio));
+
+  // Calculate effective stacks per GPU
+  const effectiveStacksPerGPU = baseStacksPerGPU * (1 + adoption * (memoryMultiplierAtFullAdoption - 1));
+
+  return effectiveStacksPerGPU;
+}
+
 // ============================================
 // TRANSLATION LAYER
 // ============================================
@@ -543,17 +577,19 @@ export function accelHoursToRequiredGpuBase(accelHours, utilization = 0.70) {
 
 /**
  * Translate GPU demand to component demands
+ * @param gpuCount - Number of GPUs
+ * @param effectiveHbmPerGpu - Effective HBM stacks per GPU (default 8, increases with continual learning)
  */
-export function gpuToComponentDemands(gpuCount) {
+export function gpuToComponentDemands(gpuCount, effectiveHbmPerGpu = 8) {
   return {
-    hbmStacks: gpuCount * 8,           // 8 HBM stacks per GPU
-    cowosWaferEquiv: gpuCount * 0.5,   // 2 GPUs per CoWoS wafer
-    advancedWafers: gpuCount * 0.5,    // Logic die wafers
-    serverDramGb: gpuCount * 64,       // 64GB DRAM per GPU
-    servers: gpuCount / 8,             // 8 GPUs per server
-    transceivers: gpuCount * 1,        // 1 transceiver per GPU
-    cdus: gpuCount * 0.05,             // 1 CDU per 20 GPUs
-    powerMw: gpuCount * 0.001          // 1 kW per GPU
+    hbmStacks: gpuCount * effectiveHbmPerGpu,  // HBM stacks per GPU (increases with continual learning)
+    cowosWaferEquiv: gpuCount * 0.5,           // 2 GPUs per CoWoS wafer
+    advancedWafers: gpuCount * 0.5,            // Logic die wafers
+    serverDramGb: gpuCount * 64,               // 64GB DRAM per GPU
+    servers: gpuCount / 8,                     // 8 GPUs per server
+    transceivers: gpuCount * 1,                // 1 transceiver per GPU
+    cdus: gpuCount * 0.05,                     // 1 CDU per 20 GPUs
+    powerMw: gpuCount * 0.001                  // 1 kW per GPU
   };
 }
 
@@ -647,6 +683,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       demand: [],
       supply: [],           // Actual shipments (what clears)
       supplyPotential: [],  // Max producible (capacity * util * yield)
+      gpuDelivered: [],     // GPUs actually usable after gating by components
+      idleGpus: [],         // GPUs produced but blocked by component shortages
       tightness: [],
       priceIndex: [],
       inventory: [],
@@ -681,67 +719,92 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Translate to GPU REQUIRED BASE (stock needed to run workloads)
     const requiredGpuBase = accelHoursToRequiredGpuBase(totalAccelHours);
 
-    // Track GPU purchases this month (will be set by gpu_datacenter node)
-    let gpuPurchasesThisMonth = 0;
+    // ============================================
+    // PHASE 1: Calculate GPU raw production and demands
+    // ============================================
+    const gpuNode = NODES.find(n => n.id === 'gpu_datacenter');
+    const gpuState = nodeState['gpu_datacenter'];
+    const gpuResults = results.nodes['gpu_datacenter'];
 
-    // Process each node - GPU first to get purchases for component demand
-    // First pass: Process GPU nodes to get purchase demand
-    NODES.filter(n => n.id === 'gpu_datacenter').forEach(node => {
-      const state = nodeState[node.id];
-      const nodeResults = results.nodes[node.id];
+    // Calculate GPU capacity and raw shipments (before gating)
+    const gpuCapacity = calculateCapacity(gpuNode, month, scenarioOverrides);
+    const gpuYield = calculateNodeYield(gpuNode, month);
+    const gpuMaxUtil = gpuNode.maxCapacityUtilization || 0.95;
+    const gpuShipmentsRaw = gpuCapacity * gpuMaxUtil * gpuYield;
 
-      // Calculate capacity and supply (shipments)
+    // Calculate GPU purchase demand
+    const gpuRetirements = gpuState.installedBase / gpuState.lifetimeMonths;
+    const gpuGap = Math.max(0, requiredGpuBase - gpuState.installedBase);
+    const gpuDemand = gpuGap + gpuRetirements;
+
+    // OPTION 3: Component demand driven by production requirement
+    const gpuProductionRequirement = gpuDemand + gpuState.backlog;
+    const gpuPurchasesThisMonth = gpuProductionRequirement;
+
+    // Calculate effective HBM per GPU (increases with continual learning adoption)
+    const effectiveHbmPerGpuThisMonth = calculateEffectiveHbmPerGpu(month, demandAssumptions);
+
+    // Compute component demands from GPU production requirement
+    const componentDemands = gpuToComponentDemands(gpuPurchasesThisMonth, effectiveHbmPerGpuThisMonth);
+
+    // ============================================
+    // PHASE 2: Process component nodes to get their supply
+    // ============================================
+    const componentSupply = {
+      hbm_stacks: 0,
+      cowos_capacity: 0,
+      datacenter_mw: 0
+    };
+
+    // Process gating component nodes first
+    ['hbm_stacks', 'cowos_capacity', 'datacenter_mw'].forEach(nodeId => {
+      const node = NODES.find(n => n.id === nodeId);
+      if (!node) return;
+
+      const state = nodeState[nodeId];
+      const nodeResults = results.nodes[nodeId];
+
       const capacity = calculateCapacity(node, month, scenarioOverrides);
       const nodeYield = calculateNodeYield(node, month);
       const maxUtilization = node.maxCapacityUtilization || 0.95;
-      const shipments = capacity * maxUtilization * nodeYield;
+      const maxProducible = capacity * maxUtilization * nodeYield;
 
-      // STOCK VS FLOW FIX: For GPU nodes, demand = purchase demand, not required base
-      // Calculate retirements
-      const retirements = state.installedBase / state.lifetimeMonths;
+      // Get demand for this component
+      let demand = 0;
+      if (nodeId === 'hbm_stacks') demand = componentDemands.hbmStacks;
+      else if (nodeId === 'cowos_capacity') demand = componentDemands.cowosWaferEquiv;
+      else if (nodeId === 'datacenter_mw') demand = componentDemands.powerMw;
 
-      // Purchase demand = gap to required base + replacements
-      const gap = Math.max(0, requiredGpuBase - state.installedBase);
-      const demand = gap + retirements;
+      // Calculate actual supply (what can ship given demand and inventory)
+      const actualSupply = Math.min(maxProducible + state.inventory, demand + state.backlog);
 
-      // Calculate tightness before shipments
-      const tightness = calculateTightness(demand, state.backlog, shipments, state.inventory);
+      // Store supply for gating calculation
+      componentSupply[nodeId] = actualSupply;
 
-      // Update installed base after this month's shipments
-      const actualShipments = Math.min(shipments + state.inventory, demand + state.backlog);
-      state.installedBase = Math.max(0, state.installedBase + actualShipments - retirements);
+      // Calculate tightness
+      const tightness = calculateTightness(demand, state.backlog, maxProducible, state.inventory);
 
-      // OPTION 3: Component demand driven by production requirement
-      // gpuProductionRequirement = purchaseDemand + backlog
-      // This signals to component suppliers what GPU makers WANT to build,
-      // not just what clears. This drives appropriate upstream ramp-up.
-      const gpuProductionRequirement = demand + state.backlog;
-      gpuPurchasesThisMonth = gpuProductionRequirement;
-
-      // Update price history
+      // Update state
       state.priceHistory.push(calculatePriceIndex(tightness));
-
-      // Update inventory and backlog
-      state.inventory = calculateInventory(state.inventory, shipments, actualShipments);
-      state.backlog = calculateBacklog(state.backlog, demand, actualShipments);
+      state.inventory = calculateInventory(state.inventory, maxProducible, actualSupply);
+      state.backlog = calculateBacklog(state.backlog, demand, actualSupply);
+      state.tightnessHistory.push(tightness);
 
       // Store results
-      // FIX: supply = actualShipments (cleared), supplyPotential = max producible
       nodeResults.demand.push(demand);
-      nodeResults.supply.push(actualShipments);           // What actually shipped (cleared)
-      nodeResults.supplyPotential.push(shipments);        // Max producible capacity
+      nodeResults.supply.push(actualSupply);
+      nodeResults.supplyPotential.push(maxProducible);
+      nodeResults.gpuDelivered.push(0);
+      nodeResults.idleGpus.push(0);
       nodeResults.capacity.push(capacity);
       nodeResults.yield.push(nodeYield);
       nodeResults.tightness.push(tightness);
       nodeResults.priceIndex.push(state.priceHistory[state.priceHistory.length - 1]);
       nodeResults.inventory.push(state.inventory);
       nodeResults.backlog.push(state.backlog);
-      nodeResults.installedBase.push(state.installedBase);
-      nodeResults.requiredBase.push(requiredGpuBase);     // Stock view: what's needed
-      nodeResults.gpuPurchases.push(gpuPurchasesThisMonth);
-
-      // Track tightness history for persistence-based detection
-      state.tightnessHistory.push(tightness);
+      nodeResults.installedBase.push(0);
+      nodeResults.requiredBase.push(0);
+      nodeResults.gpuPurchases.push(0);
 
       // Persistence-based shortage/glut detection
       const persistenceRequired = GLOBAL_PARAMS.glutThresholds.persistenceMonthsSoft;
@@ -754,11 +817,76 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       nodeResults.glut.push(isGlut ? 1 : 0);
     });
 
-    // Now compute component demands from GPU PURCHASES (not required base)
-    const componentDemands = gpuToComponentDemands(gpuPurchasesThisMonth);
+    // ============================================
+    // PHASE 3: Hard-gate GPU deliveries by bottlenecks
+    // ============================================
+    // Calculate max deliverable GPUs by each component
+    // Continual learning increases HBM demand per GPU
+    const effectiveStacksPerGPU = calculateEffectiveHbmPerGpu(month, demandAssumptions);
+    const cowosUnitsPerGPU = 0.5;
+    const MWperGPU = 0.001;
 
-    // Process all other nodes
-    NODES.filter(n => n.id !== 'gpu_datacenter').forEach(node => {
+    const maxByHBM = componentSupply.hbm_stacks / effectiveStacksPerGPU;
+    const maxByCoWoS = componentSupply.cowos_capacity / cowosUnitsPerGPU;
+    const maxByPower = componentSupply.datacenter_mw / MWperGPU;
+
+    // GPU delivered = min of production and all gating components
+    const gpuAvailableToShip = Math.min(gpuShipmentsRaw + gpuState.inventory, gpuDemand + gpuState.backlog);
+    const gpuDelivered = Math.min(gpuAvailableToShip, maxByHBM, maxByCoWoS, maxByPower);
+
+    // Idle GPUs = produced/shipped but blocked by component constraints
+    const idleGpus = Math.max(0, gpuAvailableToShip - gpuDelivered);
+
+    // ============================================
+    // PHASE 4: Finalize GPU node results
+    // ============================================
+    // Calculate tightness based on delivered GPUs
+    const gpuTightness = calculateTightness(gpuDemand, gpuState.backlog, gpuDelivered, gpuState.inventory);
+
+    // Update installed base with DELIVERED GPUs (not raw shipments)
+    gpuState.installedBase = Math.max(0, gpuState.installedBase + gpuDelivered - gpuRetirements);
+
+    // Update price history
+    gpuState.priceHistory.push(calculatePriceIndex(gpuTightness));
+
+    // Update inventory (produced but not delivered becomes idle inventory)
+    // Backlog is demand not met
+    const gpuActualShipments = Math.min(gpuShipmentsRaw, gpuDemand + gpuState.backlog);
+    gpuState.inventory = calculateInventory(gpuState.inventory, gpuShipmentsRaw, gpuActualShipments) + idleGpus;
+    gpuState.backlog = calculateBacklog(gpuState.backlog, gpuDemand, gpuDelivered);
+
+    // Store GPU results
+    gpuResults.demand.push(gpuDemand);
+    gpuResults.supply.push(gpuActualShipments);           // Raw GPU shipments that cleared
+    gpuResults.supplyPotential.push(gpuShipmentsRaw);     // Max producible
+    gpuResults.gpuDelivered.push(gpuDelivered);           // Actually usable after gating
+    gpuResults.idleGpus.push(idleGpus);                   // Blocked by components
+    gpuResults.capacity.push(gpuCapacity);
+    gpuResults.yield.push(gpuYield);
+    gpuResults.tightness.push(gpuTightness);
+    gpuResults.priceIndex.push(gpuState.priceHistory[gpuState.priceHistory.length - 1]);
+    gpuResults.inventory.push(gpuState.inventory);
+    gpuResults.backlog.push(gpuState.backlog);
+    gpuResults.installedBase.push(gpuState.installedBase);
+    gpuResults.requiredBase.push(requiredGpuBase);
+    gpuResults.gpuPurchases.push(gpuPurchasesThisMonth);
+
+    // Track tightness history for persistence-based detection
+    gpuState.tightnessHistory.push(gpuTightness);
+
+    // Persistence-based shortage/glut detection
+    const gpuPersistenceRequired = GLOBAL_PARAMS.glutThresholds.persistenceMonthsSoft;
+    const gpuRecentTightness = gpuState.tightnessHistory.slice(-gpuPersistenceRequired);
+    const gpuIsShortage = gpuRecentTightness.length >= gpuPersistenceRequired &&
+                         gpuRecentTightness.every(t => t > 1.05);
+    const gpuIsGlut = gpuRecentTightness.length >= gpuPersistenceRequired &&
+                     gpuRecentTightness.every(t => t < GLOBAL_PARAMS.glutThresholds.soft);
+    gpuResults.shortage.push(gpuIsShortage ? 1 : 0);
+    gpuResults.glut.push(gpuIsGlut ? 1 : 0);
+
+    // Process all other nodes (skip already processed: gpu_datacenter, hbm_stacks, cowos_capacity, datacenter_mw)
+    const processedNodes = ['gpu_datacenter', 'hbm_stacks', 'cowos_capacity', 'datacenter_mw'];
+    NODES.filter(n => !processedNodes.includes(n.id)).forEach(node => {
       const state = nodeState[node.id];
       const nodeResults = results.nodes[node.id];
 
@@ -886,6 +1014,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       nodeResults.demand.push(demand);
       nodeResults.supply.push(actualShipments);           // What actually shipped (cleared)
       nodeResults.supplyPotential.push(shipments);        // Max producible capacity
+      nodeResults.gpuDelivered.push(0);                   // N/A for non-GPU nodes
+      nodeResults.idleGpus.push(0);                       // N/A for non-GPU nodes
       nodeResults.capacity.push(capacity);
       nodeResults.yield.push(nodeYield);
       nodeResults.tightness.push(tightness);

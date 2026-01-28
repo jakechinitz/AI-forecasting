@@ -28,6 +28,8 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
         demand: nodeData.demand[i],
         supply: nodeData.supply[i],                         // Shipments cleared
         supplyPotential: nodeData.supplyPotential?.[i] || nodeData.supply[i],  // Production potential
+        gpuDelivered: nodeData.gpuDelivered?.[i] || 0,      // GPUs actually usable (after gating)
+        idleGpus: nodeData.idleGpus?.[i] || 0,              // GPUs blocked by components
         capacity: nodeData.capacity[i],
         tightness: nodeData.tightness[i],
         priceIndex: nodeData.priceIndex[i],
@@ -168,10 +170,10 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
             </div>
 
             <div className="grid grid-2" style={{ gap: 'var(--space-lg)' }}>
-              {/* Shipments vs Demand (Flow View) */}
+              {/* Shipments vs Demand (Flow View) - GPU nodes show 3 series */}
               <div className="chart-container">
                 <div className="chart-header">
-                  <h3 className="chart-title">{isStockNode ? 'Shipments vs Purchase Demand' : 'Shipments vs Demand'}</h3>
+                  <h3 className="chart-title">{isStockNode ? 'GPU: Demand vs Shipments vs Delivered' : 'Shipments vs Demand'}</h3>
                 </div>
                 <ResponsiveContainer width="100%" height={280}>
                   <ComposedChart data={chartData}>
@@ -180,7 +182,10 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
                     <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickFormatter={(v) => formatNumber(v)} />
                     <Tooltip content={<CustomTooltip />} />
                     <Area type="monotone" dataKey="supplyPotential" fill="#6366f1" fillOpacity={0.1} stroke="#6366f1" strokeDasharray="4 4" name="Production Potential" />
-                    <Line type="monotone" dataKey="supply" stroke="#22c55e" strokeWidth={2} dot={false} name="Shipments (Cleared)" />
+                    <Line type="monotone" dataKey="supply" stroke="#f59e0b" strokeWidth={2} dot={false} name="Raw Shipments" />
+                    {isStockNode && (
+                      <Line type="monotone" dataKey="gpuDelivered" stroke="#22c55e" strokeWidth={2} dot={false} name="Delivered (After Gating)" />
+                    )}
                     <Line type="monotone" dataKey="demand" stroke="#ef4444" strokeWidth={2} dot={false} name={isStockNode ? 'Purchase Demand' : 'Demand'} />
                   </ComposedChart>
                 </ResponsiveContainer>
@@ -205,10 +210,10 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
                 </ResponsiveContainer>
               </div>
 
-              {/* Inventory & Backlog */}
+              {/* Inventory, Backlog & Idle GPUs */}
               <div className="chart-container">
                 <div className="chart-header">
-                  <h3 className="chart-title">Inventory & Backlog</h3>
+                  <h3 className="chart-title">{isStockNode ? 'Inventory, Backlog & Idle GPUs' : 'Inventory & Backlog'}</h3>
                 </div>
                 <ResponsiveContainer width="100%" height={280}>
                   <AreaChart data={chartData}>
@@ -218,6 +223,9 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
                     <Tooltip content={<CustomTooltip />} />
                     <Area type="monotone" dataKey="inventory" stroke="#14b8a6" fill="#14b8a6" fillOpacity={0.3} name="Inventory" />
                     <Area type="monotone" dataKey="backlog" stroke="#ef4444" fill="#ef4444" fillOpacity={0.3} name="Backlog" />
+                    {isStockNode && (
+                      <Area type="monotone" dataKey="idleGpus" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.3} name="Idle GPUs (Blocked)" />
+                    )}
                   </AreaChart>
                 </ResponsiveContainer>
               </div>

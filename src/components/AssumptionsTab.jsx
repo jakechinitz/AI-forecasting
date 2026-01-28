@@ -151,6 +151,60 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               )}
             </div>
           </div>
+
+          <div className="section">
+            <h4 className="section-title" style={{ marginBottom: 'var(--space-md)' }}>
+              Continual Learning
+            </h4>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 'var(--space-md)' }}>
+              Fine-tuning, RLHF, RAG updates — drives compute + memory/storage demand
+            </p>
+            <div className="grid grid-3" style={{ gap: 'var(--space-md)' }}>
+              {renderInput(
+                'demand',
+                ['continualLearning', 'computeGrowth'],
+                'Compute',
+                '%/yr',
+                '',
+                demandBlock?.continualLearning?.computeGrowth?.source
+              )}
+              {renderInput(
+                'demand',
+                ['continualLearning', 'dataStorageGrowth'],
+                'Data Storage',
+                '%/yr',
+                '',
+                demandBlock?.continualLearning?.dataStorageGrowth?.source
+              )}
+              {renderInput(
+                'demand',
+                ['continualLearning', 'networkBandwidthGrowth'],
+                'Network BW',
+                '%/yr',
+                '',
+                demandBlock?.continualLearning?.networkBandwidthGrowth?.source
+              )}
+            </div>
+          </div>
+
+          <div className="section">
+            <h4 className="section-title" style={{ marginBottom: 'var(--space-md)' }}>
+              Inference Intensity
+            </h4>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 'var(--space-md)' }}>
+              Compute per token growth (context, reasoning, agents)
+            </p>
+            <div className="grid grid-1" style={{ gap: 'var(--space-md)' }}>
+              {renderInput(
+                'demand',
+                ['intensityGrowth'],
+                'Intensity Growth',
+                '%/yr',
+                '',
+                demandBlock?.intensityGrowth?.source
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Efficiency Assumptions */}
