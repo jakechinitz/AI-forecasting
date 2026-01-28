@@ -20,6 +20,10 @@
  * SUBSTITUTION (with damping):
  *   SubTarget = min(SubMax, SubK * max(0, P_signal - 1))
  *   SubShare_t = SubShare_{t-1} + λ * (SubTarget - SubShare_{t-1})
+ *
+ * STOCK VS FLOW FIX:
+ *   For GPUs and other "stock" assets, we track installed base separately
+ *   from shipments (flow). Demand = purchase demand, not required base.
  */
 
 import { NODES, getNode, getChildNodes } from '../data/nodes.js';
@@ -27,7 +31,6 @@ import {
   GLOBAL_PARAMS,
   DEMAND_ASSUMPTIONS,
   EFFICIENCY_ASSUMPTIONS,
-  SUPPLY_ASSUMPTIONS,
   getBlockKeyForMonth,
   calculateMt,
   calculateSt,
@@ -40,7 +43,19 @@ import {
 // CONSTANTS
 // ============================================
 const EPSILON = 1e-10;  // Small value to prevent division by zero
-const MONTHS_PER_YEAR = 12;
+
+// ============================================
+// GROWTH CACHE - Fix for block spikes
+// Cumulative growth computed month-by-month
+// ============================================
+const growthCache = new Map();
+
+/**
+ * Clear the growth cache (call when assumptions change)
+ */
+export function clearGrowthCache() {
+  growthCache.clear();
+}
 
 // ============================================
 // CORE CALCULATION FUNCTIONS
@@ -48,16 +63,17 @@ const MONTHS_PER_YEAR = 12;
 
 /**
  * Calculate efficiency multipliers for a given month
+ * Uses RUNTIME assumptions, not defaults
  */
 export function calculateEfficiencyMultipliers(month, assumptions) {
   const blockKey = getBlockKeyForMonth(month);
-  const block = assumptions[blockKey] || EFFICIENCY_ASSUMPTIONS[blockKey];
+  const block = assumptions?.[blockKey] || EFFICIENCY_ASSUMPTIONS[blockKey];
 
-  const m_infer = block.modelEfficiency?.m_inference?.value ?? 0.40;
-  const m_train = block.modelEfficiency?.m_training?.value ?? 0.20;
-  const s_infer = block.systemsEfficiency?.s_inference?.value ?? 0.25;
-  const s_train = block.systemsEfficiency?.s_training?.value ?? 0.15;
-  const h = block.hardwareEfficiency?.h?.value ?? 0.30;
+  const m_infer = block?.modelEfficiency?.m_inference?.value ?? 0.40;
+  const m_train = block?.modelEfficiency?.m_training?.value ?? 0.20;
+  const s_infer = block?.systemsEfficiency?.s_inference?.value ?? 0.25;
+  const s_train = block?.systemsEfficiency?.s_training?.value ?? 0.15;
+  const h = block?.hardwareEfficiency?.h?.value ?? 0.30;
 
   return {
     // Model efficiency (compute per token) - DECREASES over time
@@ -90,21 +106,37 @@ export function calculateNodeYield(node, month) {
 
 /**
  * Calculate demand growth multiplier for a given month
+ * FIXED: Uses piecewise cumulative growth to avoid block discontinuities
  */
 export function calculateDemandGrowth(category, segment, month, assumptions) {
-  const blockKey = getBlockKeyForMonth(month);
-  const block = assumptions[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
+  const key = `${category}:${segment}`;
 
-  let rate = 0;
-  if (category === 'inference') {
-    rate = block.inferenceGrowth?.[segment]?.value ?? 0.40;
-  } else if (category === 'training') {
-    rate = block.trainingGrowth?.[segment]?.value ?? 0.25;
+  // Initialize cache for this key if needed
+  if (!growthCache.has(key)) {
+    growthCache.set(key, [1]); // month 0 multiplier = 1
   }
 
-  // Compound monthly from annual rate
-  const monthlyRate = Math.pow(1 + rate, 1 / 12) - 1;
-  return Math.pow(1 + monthlyRate, month);
+  const arr = growthCache.get(key);
+
+  // Build up multipliers month by month
+  for (let m = arr.length; m <= month; m++) {
+    const blockKey = getBlockKeyForMonth(m);
+    const block = assumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
+
+    let rate = 0;
+    if (category === 'inference') {
+      rate = block?.inferenceGrowth?.[segment]?.value ?? 0.40;
+    } else if (category === 'training') {
+      rate = block?.trainingGrowth?.[segment]?.value ?? 0.25;
+    }
+
+    // Convert annual rate to monthly
+    const monthlyRate = Math.pow(1 + rate, 1 / 12) - 1;
+    // Compound from previous month
+    arr[m] = arr[m - 1] * (1 + monthlyRate);
+  }
+
+  return arr[month];
 }
 
 /**
@@ -260,19 +292,18 @@ export function sma(values, window) {
 /**
  * Calculate total inference demand for a given month
  * Returns tokens/month
+ * FIXED: Uses runtime assumptions
  */
-export function calculateInferenceDemand(month, assumptions, efficiencyAssumptions) {
-  const demandBlock = assumptions[getBlockKeyForMonth(month)] || DEMAND_ASSUMPTIONS[getBlockKeyForMonth(month)];
-
+export function calculateInferenceDemand(month, assumptions) {
   // Base rates from nodes
   const consumerBase = 1.5e12;  // 1.5T tokens/month
   const enterpriseBase = 2.0e12;
   const agenticBase = 0.3e12;
 
-  // Growth multipliers
-  const consumerGrowth = calculateDemandGrowth('inference', 'consumer', month, DEMAND_ASSUMPTIONS);
-  const enterpriseGrowth = calculateDemandGrowth('inference', 'enterprise', month, DEMAND_ASSUMPTIONS);
-  const agenticGrowth = calculateDemandGrowth('inference', 'agentic', month, DEMAND_ASSUMPTIONS);
+  // Growth multipliers - using runtime assumptions
+  const consumerGrowth = calculateDemandGrowth('inference', 'consumer', month, assumptions);
+  const enterpriseGrowth = calculateDemandGrowth('inference', 'enterprise', month, assumptions);
+  const agenticGrowth = calculateDemandGrowth('inference', 'agentic', month, assumptions);
 
   return {
     consumer: consumerBase * consumerGrowth,
@@ -287,8 +318,9 @@ export function calculateInferenceDemand(month, assumptions, efficiencyAssumptio
 /**
  * Calculate training demand for a given month
  * Returns accelerator-hours/month
+ * FIXED: Uses runtime assumptions
  */
-export function calculateTrainingDemand(month, assumptions) {
+export function calculateTrainingDemand(month, demandAssumptions, efficiencyAssumptions) {
   const frontierBase = 1.2;  // runs/month
   const midtierBase = 150;   // runs/month
 
@@ -296,11 +328,11 @@ export function calculateTrainingDemand(month, assumptions) {
   const frontierComputePerRun = 1e6;   // 1M accelerator-hours per frontier run
   const midtierComputePerRun = 5000;   // 5K accelerator-hours per mid-tier run
 
-  const frontierGrowth = calculateDemandGrowth('training', 'frontier', month, DEMAND_ASSUMPTIONS);
-  const midtierGrowth = calculateDemandGrowth('training', 'midtier', month, DEMAND_ASSUMPTIONS);
+  const frontierGrowth = calculateDemandGrowth('training', 'frontier', month, demandAssumptions);
+  const midtierGrowth = calculateDemandGrowth('training', 'midtier', month, demandAssumptions);
 
-  // Get efficiency multipliers
-  const eff = calculateEfficiencyMultipliers(month, EFFICIENCY_ASSUMPTIONS);
+  // Get efficiency multipliers - using runtime assumptions
+  const eff = calculateEfficiencyMultipliers(month, efficiencyAssumptions);
 
   return {
     frontierRuns: frontierBase * frontierGrowth,
@@ -316,9 +348,10 @@ export function calculateTrainingDemand(month, assumptions) {
 
 /**
  * Calculate accelerator hours required for inference
+ * FIXED: Uses runtime assumptions
  */
-export function calculateInferenceAccelHours(tokens, month) {
-  const eff = calculateEfficiencyMultipliers(month, EFFICIENCY_ASSUMPTIONS);
+export function calculateInferenceAccelHours(tokens, month, efficiencyAssumptions) {
+  const eff = calculateEfficiencyMultipliers(month, efficiencyAssumptions);
 
   // Base conversion: FLOPs per token at t=0
   const flopsPerToken = 2e9;  // 2 GFLOP per token
@@ -336,9 +369,9 @@ export function calculateInferenceAccelHours(tokens, month) {
 // ============================================
 
 /**
- * Translate accelerator hours to GPU demand
+ * Translate accelerator hours to GPU REQUIRED BASE (stock needed)
  */
-export function accelHoursToGpus(accelHours, utilization = 0.70) {
+export function accelHoursToRequiredGpuBase(accelHours, utilization = 0.70) {
   const hoursPerMonth = 720;  // 30 days * 24 hours
   return accelHours / (hoursPerMonth * utilization);
 }
@@ -378,8 +411,17 @@ export function dcMwToPowerDemands(mw) {
 /**
  * Run the full simulation for all months
  * Returns complete time series data for all nodes
+ *
+ * FIXES APPLIED:
+ * 1. Cumulative growth (no block spikes)
+ * 2. Stock vs flow for GPUs (installed base tracking)
+ * 3. Runtime assumptions used everywhere
+ * 4. Group A excluded from market clearing
  */
 export function runSimulation(assumptions, scenarioOverrides = {}) {
+  // Clear growth cache for fresh calculation with new assumptions
+  clearGrowthCache();
+
   const months = GLOBAL_PARAMS.horizonYears * 12;
   const results = {
     months: [],
@@ -391,15 +433,27 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     }
   };
 
+  // Extract demand and efficiency assumptions
+  const demandAssumptions = assumptions?.demand || DEMAND_ASSUMPTIONS;
+  const efficiencyAssumptions = assumptions?.efficiency || EFFICIENCY_ASSUMPTIONS;
+
   // Initialize node state
   const nodeState = {};
   NODES.forEach(node => {
+    // STOCK VS FLOW FIX: Track installed base for GPU nodes
+    const isStockNode = ['gpu_datacenter', 'gpu_inference'].includes(node.id);
+    const startingInstalledBase = isStockNode ? (node.startingCapacity || 0) * 6 : 0; // ~6 months of initial shipments
+    const lifetimeMonths = node.lifetimeMonths || 48; // 4 year default lifetime
+
     nodeState[node.id] = {
       inventory: (node.inventoryBufferTarget || 0) * (node.startingCapacity || 0) / 4,
       backlog: 0,
       subShare: 0,
       priceHistory: [1],
-      tightnessHistory: [1]
+      tightnessHistory: [1],
+      // Stock tracking
+      installedBase: startingInstalledBase,
+      lifetimeMonths: lifetimeMonths
     };
     results.nodes[node.id] = {
       demand: [],
@@ -411,7 +465,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       capacity: [],
       yield: [],
       shortage: [],
-      glut: []
+      glut: [],
+      installedBase: []
     };
   });
 
@@ -419,55 +474,99 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   for (let month = 0; month < months; month++) {
     results.months.push(month);
 
-    // Calculate workload demands
-    const inferenceDemand = calculateInferenceDemand(month, DEMAND_ASSUMPTIONS, EFFICIENCY_ASSUMPTIONS);
-    const trainingDemand = calculateTrainingDemand(month, DEMAND_ASSUMPTIONS);
+    // Calculate workload demands using runtime assumptions
+    const inferenceDemand = calculateInferenceDemand(month, demandAssumptions);
+    const trainingDemand = calculateTrainingDemand(month, demandAssumptions, efficiencyAssumptions);
 
     // Calculate total accelerator hours
-    const inferenceAccelHours = calculateInferenceAccelHours(inferenceDemand.total, month);
+    const inferenceAccelHours = calculateInferenceAccelHours(inferenceDemand.total, month, efficiencyAssumptions);
     const totalAccelHours = inferenceAccelHours + trainingDemand.frontierAccelHours + trainingDemand.midtierAccelHours;
 
-    // Translate to GPU demand
-    const gpuDemand = accelHoursToGpus(totalAccelHours);
-    const componentDemands = gpuToComponentDemands(gpuDemand);
+    // Translate to GPU REQUIRED BASE (stock needed to run workloads)
+    const requiredGpuBase = accelHoursToRequiredGpuBase(totalAccelHours);
+    const componentDemands = gpuToComponentDemands(requiredGpuBase);
 
     // Process each node
     NODES.forEach(node => {
       const state = nodeState[node.id];
       const nodeResults = results.nodes[node.id];
 
-      // Calculate demand for this node
-      let demand = 0;
+      // Skip market clearing for Group A (workload drivers)
       if (node.group === 'A') {
-        // Workload nodes - direct demand
-        demand = node.baseRate?.value || 0;
-        demand *= calculateDemandGrowth(
+        // For workload nodes, just track demand for display
+        let workloadDemand = node.baseRate?.value || 0;
+        workloadDemand *= calculateDemandGrowth(
           node.id.includes('inference') ? 'inference' : 'training',
           node.id.includes('consumer') ? 'consumer' :
             node.id.includes('enterprise') ? 'enterprise' :
               node.id.includes('agentic') ? 'agentic' :
                 node.id.includes('frontier') ? 'frontier' : 'midtier',
           month,
-          DEMAND_ASSUMPTIONS
+          demandAssumptions
         );
-      } else if (node.id === 'gpu_datacenter') {
-        demand = gpuDemand;
+
+        // Store workload demand but use neutral values for market metrics
+        nodeResults.demand.push(workloadDemand);
+        nodeResults.supply.push(workloadDemand); // Supply = demand (no constraint)
+        nodeResults.capacity.push(workloadDemand);
+        nodeResults.yield.push(1);
+        nodeResults.tightness.push(1);  // Neutral - not a market
+        nodeResults.priceIndex.push(1);
+        nodeResults.inventory.push(0);
+        nodeResults.backlog.push(0);
+        nodeResults.shortage.push(0);
+        nodeResults.glut.push(0);
+        nodeResults.installedBase.push(0);
+        return; // Skip rest of market clearing
+      }
+
+      // Calculate capacity and supply (shipments)
+      const capacity = calculateCapacity(node, month, scenarioOverrides);
+      const nodeYield = calculateNodeYield(node, month);
+      const maxUtilization = node.maxCapacityUtilization || 0.95;
+      const shipments = capacity * maxUtilization * nodeYield;
+
+      // Calculate demand based on node type
+      let demand = 0;
+
+      // STOCK VS FLOW FIX: For GPU nodes, demand = purchase demand, not required base
+      if (node.id === 'gpu_datacenter') {
+        // Calculate retirements
+        const retirements = state.installedBase / state.lifetimeMonths;
+
+        // Purchase demand = gap to required base + replacements
+        const gap = Math.max(0, requiredGpuBase - state.installedBase);
+        demand = gap + retirements;
+
+        // Update installed base after this month's shipments
+        const actualShipments = Math.min(shipments + state.inventory, demand + state.backlog);
+        state.installedBase = Math.max(0, state.installedBase + actualShipments - retirements);
+
+        nodeResults.installedBase.push(state.installedBase);
       } else if (node.id === 'hbm_stacks') {
         demand = componentDemands.hbmStacks;
+        nodeResults.installedBase.push(0);
       } else if (node.id === 'cowos_capacity') {
         demand = componentDemands.cowosWaferEquiv;
+        nodeResults.installedBase.push(0);
       } else if (node.id === 'advanced_wafers') {
         demand = componentDemands.advancedWafers;
+        nodeResults.installedBase.push(0);
       } else if (node.id === 'server_assembly') {
         demand = componentDemands.servers;
+        nodeResults.installedBase.push(0);
       } else if (node.id === 'datacenter_mw') {
         demand = componentDemands.powerMw;
+        nodeResults.installedBase.push(0);
       } else if (node.id === 'transformers_lpt') {
         demand = dcMwToPowerDemands(componentDemands.powerMw).transformers;
+        nodeResults.installedBase.push(0);
       } else if (node.id === 'optical_transceivers') {
         demand = componentDemands.transceivers;
+        nodeResults.installedBase.push(0);
       } else if (node.id === 'liquid_cooling') {
         demand = componentDemands.cdus;
+        nodeResults.installedBase.push(0);
       } else {
         // Derived demand from parent nodes using intensity
         const parentDemands = (node.parentNodeIds || []).map(pid => {
@@ -478,16 +577,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
           return 0;
         });
         demand = parentDemands.reduce((sum, d) => sum + d, 0) * (node.inputIntensity || 1);
+        nodeResults.installedBase.push(0);
       }
 
-      // Calculate capacity and supply
-      const capacity = calculateCapacity(node, month, scenarioOverrides);
-      const nodeYield = calculateNodeYield(node, month);
-      const maxUtilization = node.maxCapacityUtilization || 0.95;
-      const supply = capacity * maxUtilization * nodeYield;
-
       // Calculate tightness
-      const tightness = calculateTightness(demand, state.backlog, supply, state.inventory);
+      const tightness = calculateTightness(demand, state.backlog, shipments, state.inventory);
 
       // Update price history and calculate SMA for substitution
       state.priceHistory.push(calculatePriceIndex(tightness));
@@ -508,13 +602,13 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       }
 
       // Update inventory and backlog
-      const shipments = Math.min(supply + state.inventory, demand + state.backlog);
-      state.inventory = calculateInventory(state.inventory, supply, shipments);
-      state.backlog = calculateBacklog(state.backlog, demand, shipments);
+      const actualShipments = Math.min(shipments + state.inventory, demand + state.backlog);
+      state.inventory = calculateInventory(state.inventory, shipments, actualShipments);
+      state.backlog = calculateBacklog(state.backlog, demand, actualShipments);
 
       // Store results
       nodeResults.demand.push(demand);
-      nodeResults.supply.push(supply);
+      nodeResults.supply.push(shipments);
       nodeResults.capacity.push(capacity);
       nodeResults.yield.push(nodeYield);
       nodeResults.tightness.push(tightness);
@@ -541,6 +635,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
 /**
  * Analyze simulation results to find shortages, gluts, and bottlenecks
+ * FIXED: Close open-ended periods and exclude Group A
  */
 function analyzeResults(results) {
   const shortages = [];
@@ -550,6 +645,9 @@ function analyzeResults(results) {
   Object.entries(results.nodes).forEach(([nodeId, data]) => {
     const node = getNode(nodeId);
     if (!node) return;
+
+    // EXCLUDE Group A from shortage/glut analysis (they're demand drivers, not supply nodes)
+    if (node.group === 'A') return;
 
     // Find shortage periods
     let shortageStart = null;
@@ -577,6 +675,19 @@ function analyzeResults(results) {
       }
     });
 
+    // FIX: Close open-ended shortage at horizon end
+    if (shortageStart !== null) {
+      shortages.push({
+        nodeId,
+        nodeName: node.name,
+        group: node.group,
+        startMonth: shortageStart,
+        peakTightness,
+        duration: shortageDuration,
+        severity: peakTightness * shortageDuration
+      });
+    }
+
     // Find glut periods
     let glutStart = null;
     let minTightness = 1;
@@ -602,6 +713,19 @@ function analyzeResults(results) {
         glutDuration = 0;
       }
     });
+
+    // FIX: Close open-ended glut at horizon end
+    if (glutStart !== null) {
+      gluts.push({
+        nodeId,
+        nodeName: node.name,
+        group: node.group,
+        startMonth: glutStart,
+        minTightness,
+        duration: glutDuration,
+        severity: (1 - minTightness) * glutDuration
+      });
+    }
 
     // Calculate bottleneck score
     const avgTightness = data.tightness.reduce((a, b) => a + b, 0) / data.tightness.length;
