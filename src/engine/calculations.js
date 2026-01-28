@@ -45,6 +45,31 @@ import {
 const EPSILON = 1e-10;  // Small value to prevent division by zero
 
 // ============================================
+// UTILITY FUNCTIONS
+// ============================================
+
+/**
+ * Deep merge objects - scenario overrides merge into base assumptions
+ * Arrays are replaced, not concatenated
+ */
+function deepMerge(target, source) {
+  if (!source) return target;
+  if (!target) return source;
+
+  const result = { ...target };
+
+  for (const key of Object.keys(source)) {
+    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+      result[key] = deepMerge(target[key], source[key]);
+    } else {
+      result[key] = source[key];
+    }
+  }
+
+  return result;
+}
+
+// ============================================
 // CALIBRATION PARAMETERS
 // These ensure month-0 demand matches reality
 // ============================================
@@ -75,6 +100,7 @@ export function clearGrowthCache() {
   growthCache.clear();
   efficiencyCache.clear();
   intensityCache.length = 0;
+  continualLearningCache.length = 0;
 }
 
 // ============================================
@@ -406,6 +432,11 @@ export function calculateTrainingDemand(month, demandAssumptions, efficiencyAssu
 // ============================================
 const intensityCache = [];
 
+// ============================================
+// CONTINUAL LEARNING CACHE - For fine-tuning/RLHF demand
+// ============================================
+const continualLearningCache = [];
+
 /**
  * Calculate inference intensity multiplier for a given month
  * This captures increasing compute per token from:
@@ -456,6 +487,46 @@ export function calculateInferenceAccelHours(tokens, month, efficiencyAssumption
                         (eff.S_inference * eff.H * accelFlopsPerHour);
 
   return rawAccelHours;
+}
+
+/**
+ * Calculate continual learning demand for a given month
+ * Continual learning includes: fine-tuning, RLHF, RAG updates, periodic retraining
+ * Returns: { accelHours, dataTB, networkGbps }
+ */
+export function calculateContinualLearningDemand(month, demandAssumptions) {
+  // Build cache up to requested month
+  for (let m = continualLearningCache.length; m <= month; m++) {
+    const blockKey = getBlockKeyForMonth(m);
+    const block = demandAssumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
+
+    // Get growth rates
+    const computeGrowthRate = block?.continualLearning?.computeGrowth?.value ?? 0.60;
+    const dataGrowthRate = block?.continualLearning?.dataStorageGrowth?.value ?? 0.50;
+    const networkGrowthRate = block?.continualLearning?.networkBandwidthGrowth?.value ?? 0.45;
+
+    if (m === 0) {
+      // Base continual learning demand at month 0
+      continualLearningCache[m] = {
+        accelHours: 50000,    // 50K accel-hours/month base for fine-tuning
+        dataTB: 500,          // 500 TB base storage
+        networkGbps: 100      // 100 Gbps base bandwidth
+      };
+    } else {
+      const prev = continualLearningCache[m - 1];
+      const monthlyComputeRate = Math.pow(1 + computeGrowthRate, 1 / 12);
+      const monthlyDataRate = Math.pow(1 + dataGrowthRate, 1 / 12);
+      const monthlyNetworkRate = Math.pow(1 + networkGrowthRate, 1 / 12);
+
+      continualLearningCache[m] = {
+        accelHours: prev.accelHours * monthlyComputeRate,
+        dataTB: prev.dataTB * monthlyDataRate,
+        networkGbps: prev.networkGbps * monthlyNetworkRate
+      };
+    }
+  }
+
+  return continualLearningCache[month];
 }
 
 // ============================================
@@ -512,8 +583,9 @@ export function dcMwToPowerDemands(mw) {
  * 3. Runtime assumptions used everywhere
  * 4. Group A excluded from market clearing
  * 5. CALIBRATION: Month-0 demand matches reality
- * 6. Component demand driven by GPU purchases, not required base
+ * 6. Component demand driven by gpuProductionRequirement (purchaseDemand + backlog)
  * 7. Persistence-based shortage/glut detection
+ * 8. Deep-merge scenario overrides
  */
 export function runSimulation(assumptions, scenarioOverrides = {}) {
   // Clear all caches for fresh calculation with new assumptions
@@ -530,9 +602,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     }
   };
 
-  // Extract demand and efficiency assumptions
-  const demandAssumptions = assumptions?.demand || DEMAND_ASSUMPTIONS;
-  const efficiencyAssumptions = assumptions?.efficiency || EFFICIENCY_ASSUMPTIONS;
+  // Extract demand and efficiency assumptions with deep-merge
+  // Scenario overrides deep-merge into base assumptions
+  const baseDemandAssumptions = assumptions?.demand || DEMAND_ASSUMPTIONS;
+  const baseEfficiencyAssumptions = assumptions?.efficiency || EFFICIENCY_ASSUMPTIONS;
+
+  // Deep-merge scenario overrides if provided
+  const demandAssumptions = deepMerge(baseDemandAssumptions, scenarioOverrides?.demand);
+  const efficiencyAssumptions = deepMerge(baseEfficiencyAssumptions, scenarioOverrides?.efficiency);
 
   // ============================================
   // CALIBRATION: Compute multiplier so month-0 matches reality
@@ -591,10 +668,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Calculate workload demands using runtime assumptions
     const inferenceDemand = calculateInferenceDemand(month, demandAssumptions);
     const trainingDemand = calculateTrainingDemand(month, demandAssumptions, efficiencyAssumptions);
+    const continualLearningDemand = calculateContinualLearningDemand(month, demandAssumptions);
 
-    // Calculate total accelerator hours with calibration (now includes intensity growth)
+    // Calculate total accelerator hours with calibration (now includes intensity growth + continual learning)
     const inferenceAccelHours = calculateInferenceAccelHours(inferenceDemand.total, month, efficiencyAssumptions, demandAssumptions);
-    const rawTotalAccelHours = inferenceAccelHours + trainingDemand.frontierAccelHours + trainingDemand.midtierAccelHours;
+    const rawTotalAccelHours = inferenceAccelHours +
+                               trainingDemand.frontierAccelHours +
+                               trainingDemand.midtierAccelHours +
+                               continualLearningDemand.accelHours;
     const totalAccelHours = rawTotalAccelHours * CALIBRATION.globalAccelHoursMultiplier;
 
     // Translate to GPU REQUIRED BASE (stock needed to run workloads)
@@ -630,8 +711,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const actualShipments = Math.min(shipments + state.inventory, demand + state.backlog);
       state.installedBase = Math.max(0, state.installedBase + actualShipments - retirements);
 
-      // CRITICAL: Track GPU purchases for component demand
-      gpuPurchasesThisMonth = actualShipments;
+      // OPTION 3: Component demand driven by production requirement
+      // gpuProductionRequirement = purchaseDemand + backlog
+      // This signals to component suppliers what GPU makers WANT to build,
+      // not just what clears. This drives appropriate upstream ramp-up.
+      const gpuProductionRequirement = demand + state.backlog;
+      gpuPurchasesThisMonth = gpuProductionRequirement;
 
       // Update price history
       state.priceHistory.push(calculatePriceIndex(tightness));
