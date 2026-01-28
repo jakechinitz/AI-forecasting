@@ -106,6 +106,16 @@ export const DEMAND_ASSUMPTIONS = {
       growthRate: 0.30,     // 30% annual increase
       confidence: 'medium',
       source: 'Model releases, long-context adoption'
+    },
+
+    // Inference intensity growth (compute per token increases)
+    // Captures: longer contexts, multi-step reasoning, agentic loops, tool use
+    // This partially offsets efficiency gains to keep required GPU base growing
+    intensityGrowth: {
+      value: 0.25,  // 25% annual increase in compute per token
+      confidence: 'medium',
+      source: 'Context scaling, chain-of-thought, agent loops',
+      historicalRange: [0.15, 0.40]
     }
   },
 
@@ -127,6 +137,11 @@ export const DEMAND_ASSUMPTIONS = {
     contextLength: {
       averageTokens: 16000,
       growthRate: 0.20,
+      confidence: 'low'
+    },
+
+    intensityGrowth: {
+      value: 0.20,  // Moderating intensity growth
       confidence: 'low'
     }
   },

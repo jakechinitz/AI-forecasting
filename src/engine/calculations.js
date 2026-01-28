@@ -74,6 +74,7 @@ const efficiencyCache = new Map();
 export function clearGrowthCache() {
   growthCache.clear();
   efficiencyCache.clear();
+  intensityCache.length = 0;
 }
 
 // ============================================
@@ -400,19 +401,58 @@ export function calculateTrainingDemand(month, demandAssumptions, efficiencyAssu
   };
 }
 
+// ============================================
+// INTENSITY CACHE - For compute intensity growth
+// ============================================
+const intensityCache = [];
+
+/**
+ * Calculate inference intensity multiplier for a given month
+ * This captures increasing compute per token from:
+ * - Longer contexts (attention scales quadratically)
+ * - Multi-step reasoning / chain-of-thought
+ * - Agentic loops and tool use
+ * - Higher quality / larger model deployment mix
+ *
+ * Intensity_t = (1 + i)^(t/12) where i is annual intensity growth rate
+ */
+export function calculateIntensityMultiplier(month, assumptions) {
+  // Build cache up to requested month
+  for (let m = intensityCache.length; m <= month; m++) {
+    const blockKey = getBlockKeyForMonth(m);
+    const block = assumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
+
+    // Default intensity growth: 25% per year (context + reasoning + agents)
+    // This partially offsets the ~63% efficiency gain
+    const intensityGrowthRate = block?.intensityGrowth?.value ?? 0.25;
+
+    if (m === 0) {
+      intensityCache[m] = 1;
+    } else {
+      const monthlyRate = Math.pow(1 + intensityGrowthRate, 1 / 12);
+      intensityCache[m] = intensityCache[m - 1] * monthlyRate;
+    }
+  }
+
+  return intensityCache[month];
+}
+
 /**
  * Calculate accelerator hours required for inference
- * FIXED: Uses runtime assumptions
+ * FIXED: Uses runtime assumptions + intensity multiplier
  */
-export function calculateInferenceAccelHours(tokens, month, efficiencyAssumptions) {
+export function calculateInferenceAccelHours(tokens, month, efficiencyAssumptions, demandAssumptions) {
   const eff = calculateEfficiencyMultipliers(month, efficiencyAssumptions);
 
   // Base conversion: FLOPs per token at t=0
   const flopsPerToken = 2e9;  // 2 GFLOP per token
   const accelFlopsPerHour = 1e15 * 3600;  // ~1 PFLOP-hour per accel-hour
 
-  // Apply efficiency: tokens * flops/token * M_t / (S_t * H_t * throughput)
-  const rawAccelHours = (tokens * flopsPerToken * eff.M_inference) /
+  // Get intensity multiplier (compute per token grows with context/reasoning/agents)
+  const intensity = calculateIntensityMultiplier(month, demandAssumptions);
+
+  // Apply efficiency AND intensity: tokens * flops/token * M_t * Intensity_t / (S_t * H_t * throughput)
+  const rawAccelHours = (tokens * flopsPerToken * eff.M_inference * intensity) /
                         (eff.S_inference * eff.H * accelFlopsPerHour);
 
   return rawAccelHours;
@@ -499,7 +539,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // ============================================
   const rawMonth0Inference = calculateInferenceDemand(0, demandAssumptions);
   const rawMonth0Training = calculateTrainingDemand(0, demandAssumptions, efficiencyAssumptions);
-  const rawMonth0InferAccelHours = calculateInferenceAccelHours(rawMonth0Inference.total, 0, efficiencyAssumptions);
+  const rawMonth0InferAccelHours = calculateInferenceAccelHours(rawMonth0Inference.total, 0, efficiencyAssumptions, demandAssumptions);
   const rawMonth0TotalAccelHours = rawMonth0InferAccelHours + rawMonth0Training.frontierAccelHours + rawMonth0Training.midtierAccelHours;
   const rawMonth0RequiredBase = accelHoursToRequiredGpuBase(rawMonth0TotalAccelHours);
 
@@ -528,7 +568,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     };
     results.nodes[node.id] = {
       demand: [],
-      supply: [],
+      supply: [],           // Actual shipments (what clears)
+      supplyPotential: [],  // Max producible (capacity * util * yield)
       tightness: [],
       priceIndex: [],
       inventory: [],
@@ -538,7 +579,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       shortage: [],
       glut: [],
       installedBase: [],
-      gpuPurchases: []  // Track GPU purchases for component demand
+      requiredBase: [],     // For stock nodes: required installed base
+      gpuPurchases: []      // Track GPU purchases for component demand
     };
   });
 
@@ -550,8 +592,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const inferenceDemand = calculateInferenceDemand(month, demandAssumptions);
     const trainingDemand = calculateTrainingDemand(month, demandAssumptions, efficiencyAssumptions);
 
-    // Calculate total accelerator hours with calibration
-    const inferenceAccelHours = calculateInferenceAccelHours(inferenceDemand.total, month, efficiencyAssumptions);
+    // Calculate total accelerator hours with calibration (now includes intensity growth)
+    const inferenceAccelHours = calculateInferenceAccelHours(inferenceDemand.total, month, efficiencyAssumptions, demandAssumptions);
     const rawTotalAccelHours = inferenceAccelHours + trainingDemand.frontierAccelHours + trainingDemand.midtierAccelHours;
     const totalAccelHours = rawTotalAccelHours * CALIBRATION.globalAccelHoursMultiplier;
 
@@ -599,8 +641,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       state.backlog = calculateBacklog(state.backlog, demand, actualShipments);
 
       // Store results
+      // FIX: supply = actualShipments (cleared), supplyPotential = max producible
       nodeResults.demand.push(demand);
-      nodeResults.supply.push(shipments);
+      nodeResults.supply.push(actualShipments);           // What actually shipped (cleared)
+      nodeResults.supplyPotential.push(shipments);        // Max producible capacity
       nodeResults.capacity.push(capacity);
       nodeResults.yield.push(nodeYield);
       nodeResults.tightness.push(tightness);
@@ -608,6 +652,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       nodeResults.inventory.push(state.inventory);
       nodeResults.backlog.push(state.backlog);
       nodeResults.installedBase.push(state.installedBase);
+      nodeResults.requiredBase.push(requiredGpuBase);     // Stock view: what's needed
       nodeResults.gpuPurchases.push(gpuPurchasesThisMonth);
 
       // Track tightness history for persistence-based detection
@@ -648,7 +693,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
         // Store workload demand but use neutral values for market metrics
         nodeResults.demand.push(workloadDemand);
-        nodeResults.supply.push(workloadDemand); // Supply = demand (no constraint)
+        nodeResults.supply.push(workloadDemand);          // Supply = demand (no constraint)
+        nodeResults.supplyPotential.push(workloadDemand); // Same for workloads
         nodeResults.capacity.push(workloadDemand);
         nodeResults.yield.push(1);
         nodeResults.tightness.push(1);  // Neutral - not a market
@@ -658,6 +704,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         nodeResults.shortage.push(0);
         nodeResults.glut.push(0);
         nodeResults.installedBase.push(0);
+        nodeResults.requiredBase.push(0);
         nodeResults.gpuPurchases.push(0);
         return; // Skip rest of market clearing
       }
@@ -750,14 +797,17 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       state.backlog = calculateBacklog(state.backlog, demand, actualShipments);
 
       // Store results
+      // FIX: supply = actualShipments (cleared), supplyPotential = max producible
       nodeResults.demand.push(demand);
-      nodeResults.supply.push(shipments);
+      nodeResults.supply.push(actualShipments);           // What actually shipped (cleared)
+      nodeResults.supplyPotential.push(shipments);        // Max producible capacity
       nodeResults.capacity.push(capacity);
       nodeResults.yield.push(nodeYield);
       nodeResults.tightness.push(tightness);
       nodeResults.priceIndex.push(state.priceHistory[state.priceHistory.length - 1]);
       nodeResults.inventory.push(state.inventory);
       nodeResults.backlog.push(state.backlog);
+      nodeResults.requiredBase.push(0);
       nodeResults.gpuPurchases.push(0);
 
       // Track tightness history for persistence-based detection
