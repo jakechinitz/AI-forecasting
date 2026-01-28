@@ -48,6 +48,16 @@ export const GLOBAL_PARAMS = {
     maxCapacityAddPct: 0.30    // Cap expansion at 30% of current/year
   },
 
+  // Predictive supply elasticity
+  // Simulates firms looking ahead and starting builds before peaks
+  predictiveSupply: {
+    forecastHorizonMonths: 6,     // Look-ahead window
+    shortageThreshold: 1.2,       // Demand/capacity ratio that triggers investment
+    expansionFraction: 0.10,      // Fraction of current capacity added per trigger (10%)
+    cooldownMonths: 12,           // Min months between dynamic triggers per node
+    maxDynamicExpansions: 5       // Max dynamic expansions per node over full horizon
+  },
+
   // Inventory display
   inventoryDisplay: {
     forwardMonths: 3  // Average forward demand for MoS calculation

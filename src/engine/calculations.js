@@ -221,22 +221,39 @@ export function calculateDemandGrowth(category, segment, month, assumptions) {
 }
 
 /**
- * Calculate capacity at a given month, including expansions
+ * Calculate capacity at a given month, including committed and dynamic expansions
+ * @param node - Node definition
+ * @param month - Current month
+ * @param scenarioOverrides - Scenario override parameters
+ * @param dynamicExpansions - Array of dynamically triggered expansions [{month, capacityAdd}]
  */
-export function calculateCapacity(node, month, scenarioOverrides = {}) {
+export function calculateCapacity(node, month, scenarioOverrides = {}, dynamicExpansions = []) {
   let capacity = node.startingCapacity || 0;
 
   // Add committed expansions
   (node.committedExpansions || []).forEach(expansion => {
     const expansionMonth = dateToMonth(expansion.date);
     if (month >= expansionMonth) {
-      // Apply ramp profile
       const monthsSinceExpansion = month - expansionMonth;
       const rampedCapacity = applyRampProfile(
         expansion.capacityAdd,
         monthsSinceExpansion,
         node.rampProfile || 'linear',
         6  // Default ramp duration
+      );
+      capacity += rampedCapacity;
+    }
+  });
+
+  // Add dynamic (predictive) expansions triggered by the sim
+  dynamicExpansions.forEach(expansion => {
+    if (month >= expansion.month) {
+      const monthsSinceExpansion = month - expansion.month;
+      const rampedCapacity = applyRampProfile(
+        expansion.capacityAdd,
+        monthsSinceExpansion,
+        node.rampProfile || 'linear',
+        6
       );
       capacity += rampedCapacity;
     }
@@ -376,10 +393,13 @@ export function sma(values, window) {
  * FIXED: Uses runtime assumptions
  */
 export function calculateInferenceDemand(month, assumptions) {
-  // Base rates from nodes
-  const consumerBase = 1.5e12;  // 1.5T tokens/month
-  const enterpriseBase = 2.0e12;
-  const agenticBase = 0.3e12;
+  // Base rates - updated Jan 2026
+  // Consumer AI (ChatGPT, Claude, Gemini) hitting billions of daily tokens
+  // Enterprise AI spend $37B in 2025 (3.2x YoY), token usage exploding
+  // Agentic AI projected in 40% enterprise apps by 2026
+  const consumerBase = 5e12;   // 5T tokens/month
+  const enterpriseBase = 6e12; // 6T tokens/month
+  const agenticBase = 1e12;    // 1T tokens/month
 
   // Growth multipliers - using runtime assumptions
   const consumerGrowth = calculateDemandGrowth('inference', 'consumer', month, assumptions);
@@ -541,20 +561,22 @@ export function calculateContinualLearningDemand(month, demandAssumptions) {
 export function calculateEffectiveHbmPerGpu(month, demandAssumptions) {
   const baseStacksPerGPU = 8;
 
-  // Memory multiplier at full adoption (25% more HBM per GPU for continual learning)
-  const memoryMultiplierAtFullAdoption = 1.25;
+  // Memory multiplier at full adoption (60% more HBM per GPU for continual learning)
+  // HBM pressure 20-40% higher in AI workloads; HBM market $54.6B in 2026 (58% YoY)
+  const memoryMultiplierAtFullAdoption = 1.6;
 
   // Calculate adoption using logistic curve based on continual learning compute growth
-  // Adoption starts at 10% and saturates at 90% over time
+  // Adoption starts at 10% and saturates at 90% by 2030
   const continualLearning = calculateContinualLearningDemand(month, demandAssumptions);
 
   // Use accel-hours as proxy for adoption
   // Month 0: 50K accel-hours = 10% adoption
-  // Grows toward 90% adoption as compute demand increases 10x
+  // Grows toward 90% adoption as compute demand increases
   const baseAccelHours = 50000;
   const growthRatio = continualLearning.accelHours / baseAccelHours;
 
   // Logistic adoption: a(t) = 0.1 + 0.8 * (growthRatio / (1 + growthRatio))
+  // Reaches ~0.9 adoption rate by 2030
   const adoption = 0.1 + 0.8 * (growthRatio / (1 + growthRatio));
 
   // Calculate effective stacks per GPU
@@ -622,6 +644,8 @@ export function dcMwToPowerDemands(mw) {
  * 6. Component demand driven by gpuProductionRequirement (purchaseDemand + backlog)
  * 7. Persistence-based shortage/glut detection
  * 8. Deep-merge scenario overrides
+ * 9. Hard-gating: GPU delivered = min(raw, HBM, CoWoS, power)
+ * 10. Predictive supply elasticity (dynamic expansions from forecast)
  */
 export function runSimulation(assumptions, scenarioOverrides = {}) {
   // Clear all caches for fresh calculation with new assumptions
@@ -677,7 +701,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       tightnessHistory: [],  // Track for persistence
       // Stock tracking
       installedBase: startingInstalledBase,
-      lifetimeMonths: lifetimeMonths
+      lifetimeMonths: lifetimeMonths,
+      // Predictive supply elasticity
+      dynamicExpansions: [],       // [{month, capacityAdd}] triggered by forecast
+      lastTriggerMonth: -Infinity, // Cooldown tracking
+      dynamicExpansionCount: 0     // Cap total dynamic expansions
     };
     results.nodes[node.id] = {
       demand: [],
@@ -727,7 +755,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuResults = results.nodes['gpu_datacenter'];
 
     // Calculate GPU capacity and raw shipments (before gating)
-    const gpuCapacity = calculateCapacity(gpuNode, month, scenarioOverrides);
+    const gpuCapacity = calculateCapacity(gpuNode, month, scenarioOverrides, gpuState.dynamicExpansions);
     const gpuYield = calculateNodeYield(gpuNode, month);
     const gpuMaxUtil = gpuNode.maxCapacityUtilization || 0.95;
     const gpuShipmentsRaw = gpuCapacity * gpuMaxUtil * gpuYield;
@@ -764,7 +792,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const state = nodeState[nodeId];
       const nodeResults = results.nodes[nodeId];
 
-      const capacity = calculateCapacity(node, month, scenarioOverrides);
+      const capacity = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
       const nodeYield = calculateNodeYield(node, month);
       const maxUtilization = node.maxCapacityUtilization || 0.95;
       const maxProducible = capacity * maxUtilization * nodeYield;
@@ -923,7 +951,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       }
 
       // Calculate capacity and supply (shipments)
-      const capacity = calculateCapacity(node, month, scenarioOverrides);
+      const capacity = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
       const nodeYield = calculateNodeYield(node, month);
       const maxUtilization = node.maxCapacityUtilization || 0.95;
       const shipments = capacity * maxUtilization * nodeYield;
@@ -1038,6 +1066,54 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       nodeResults.shortage.push(isShortage ? 1 : 0);
       nodeResults.glut.push(isGlut ? 1 : 0);
     });
+
+    // ============================================
+    // PHASE 5: Predictive supply elasticity
+    // Check if any node's projected demand exceeds capacity threshold
+    // If so, trigger a dynamic expansion (delayed by lead time)
+    // ============================================
+    const ps = GLOBAL_PARAMS.predictiveSupply;
+    if (ps) {
+      NODES.forEach(node => {
+        if (!node.startingCapacity || node.group === 'A') return;
+
+        const state = nodeState[node.id];
+        const nodeResults = results.nodes[node.id];
+
+        // Check cooldown and expansion cap
+        if (state.dynamicExpansionCount >= ps.maxDynamicExpansions) return;
+        if (month - state.lastTriggerMonth < ps.cooldownMonths) return;
+
+        // Get current tightness - use most recent
+        const currentTightness = nodeResults.tightness[nodeResults.tightness.length - 1] || 1;
+
+        // Trigger if tightness exceeds threshold for this and recent months
+        if (currentTightness >= ps.shortageThreshold) {
+          // Check persistence: need at least 3 consecutive tight months
+          const recentTight = state.tightnessHistory.slice(-3);
+          const persistentShortage = recentTight.length >= 3 &&
+                                     recentTight.every(t => t >= ps.shortageThreshold);
+
+          if (persistentShortage) {
+            // Calculate expansion amount: fraction of current capacity
+            const currentCapacity = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
+            const expansionAmount = currentCapacity * ps.expansionFraction;
+
+            // Delay by lead time (debottleneck time for existing suppliers)
+            const leadTime = node.leadTimeDebottleneck || 6;
+            const onlineMonth = month + leadTime;
+
+            // Add dynamic expansion
+            state.dynamicExpansions.push({
+              month: onlineMonth,
+              capacityAdd: expansionAmount
+            });
+            state.lastTriggerMonth = month;
+            state.dynamicExpansionCount++;
+          }
+        }
+      });
+    }
   }
 
   // Analyze results for summary
