@@ -165,6 +165,11 @@ export const DEMAND_ASSUMPTIONS = {
       averageTokens: 32000,
       growthRate: 0.10,
       confidence: 'low'
+    },
+
+    intensityGrowth: {
+      value: 0.15,  // Slowing intensity growth
+      confidence: 'low'
     }
   },
 
@@ -186,6 +191,11 @@ export const DEMAND_ASSUMPTIONS = {
     contextLength: {
       averageTokens: 64000,
       growthRate: 0.05,
+      confidence: 'low'
+    },
+
+    intensityGrowth: {
+      value: 0.10,  // Minimal intensity growth in far future
       confidence: 'low'
     }
   }
