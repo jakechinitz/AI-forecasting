@@ -116,6 +116,27 @@ export const DEMAND_ASSUMPTIONS = {
       confidence: 'medium',
       source: 'Context scaling, chain-of-thought, agent loops',
       historicalRange: [0.15, 0.40]
+    },
+
+    // Continual Learning demand (fine-tuning, RLHF, RAG updates)
+    // Drives compute for training + memory/storage/network for data
+    continualLearning: {
+      computeGrowth: {
+        value: 0.60,  // 60% annual growth in continual learning compute
+        confidence: 'medium',
+        source: 'Enterprise fine-tuning adoption, RLHF scaling',
+        historicalRange: [0.40, 0.80]
+      },
+      dataStorageGrowth: {
+        value: 0.50,  // 50% annual growth in data storage needs
+        confidence: 'medium',
+        source: 'RAG corpus growth, checkpoint storage'
+      },
+      networkBandwidthGrowth: {
+        value: 0.45,  // 45% annual growth in network bandwidth
+        confidence: 'medium',
+        source: 'Distributed training, data movement'
+      }
     }
   },
 
@@ -143,6 +164,12 @@ export const DEMAND_ASSUMPTIONS = {
     intensityGrowth: {
       value: 0.20,  // Moderating intensity growth
       confidence: 'low'
+    },
+
+    continualLearning: {
+      computeGrowth: { value: 0.40, confidence: 'low' },
+      dataStorageGrowth: { value: 0.35, confidence: 'low' },
+      networkBandwidthGrowth: { value: 0.30, confidence: 'low' }
     }
   },
 
@@ -170,6 +197,12 @@ export const DEMAND_ASSUMPTIONS = {
     intensityGrowth: {
       value: 0.15,  // Slowing intensity growth
       confidence: 'low'
+    },
+
+    continualLearning: {
+      computeGrowth: { value: 0.25, confidence: 'low' },
+      dataStorageGrowth: { value: 0.25, confidence: 'low' },
+      networkBandwidthGrowth: { value: 0.20, confidence: 'low' }
     }
   },
 
@@ -197,6 +230,12 @@ export const DEMAND_ASSUMPTIONS = {
     intensityGrowth: {
       value: 0.10,  // Minimal intensity growth in far future
       confidence: 'low'
+    },
+
+    continualLearning: {
+      computeGrowth: { value: 0.15, confidence: 'low' },
+      dataStorageGrowth: { value: 0.15, confidence: 'low' },
+      networkBandwidthGrowth: { value: 0.12, confidence: 'low' }
     }
   }
 };
