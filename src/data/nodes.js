@@ -105,13 +105,14 @@ export const NODES = [
     leadTimeMonths: 0,
     rampProfile: 'step',
 
-    // Base rate: ~1-2 trillion tokens/month consumer inference (2024)
-    // Source: SimilarWeb traffic estimates, OpenAI usage reports
+    // Base rate: ~5T tokens/month consumer inference (Jan 2026)
+    // Consumer AI (ChatGPT, Claude, Gemini) hitting billions of daily tokens
+    // Source: SimilarWeb traffic estimates, OpenAI usage reports. As of 2026-01.
     baseRate: {
-      value: 1.5e12,  // 1.5T tokens/month
+      value: 5e12,  // 5T tokens/month
       confidence: 'medium',
-      source: 'SimilarWeb, company disclosures',
-      historicalRange: [0.5e12, 3e12]
+      source: 'SimilarWeb, company disclosures. As of 2026-01.',
+      historicalRange: [2e12, 8e12]
     }
   },
   {
@@ -130,12 +131,13 @@ export const NODES = [
     leadTimeMonths: 0,
     rampProfile: 'step',
 
-    // Base rate: Enterprise growing faster than consumer
+    // Base rate: 6T tokens/month enterprise inference (Jan 2026)
+    // Enterprise AI spend hit $37B in 2025 (3.2x YoY), token usage exploding
     baseRate: {
-      value: 2.0e12,
-      confidence: 'low',
-      source: 'Cloud provider earnings, analyst estimates',
-      historicalRange: [0.5e12, 5e12]
+      value: 6e12,  // 6T tokens/month
+      confidence: 'medium',
+      source: 'Cloud provider earnings, $37B enterprise AI spend. As of 2026-01.',
+      historicalRange: [2e12, 10e12]
     }
   },
   {
@@ -154,13 +156,13 @@ export const NODES = [
     leadTimeMonths: 0,
     rampProfile: 'step',
 
-    // Base rate: Early stage, high growth potential
-    // Agentic multiplier: 10-100x tokens per task vs chat
+    // Base rate: 1T tokens/month agentic inference (Jan 2026)
+    // Agentic AI projected in 40% enterprise apps by 2026; 10-100x tokens per task
     baseRate: {
-      value: 0.3e12,
+      value: 1e12,  // 1T tokens/month
       confidence: 'low',
-      source: 'Emerging category, high uncertainty',
-      historicalRange: [0.1e12, 1e12]
+      source: 'Agentic AI in 40% enterprise apps. As of 2026-01.',
+      historicalRange: [0.3e12, 3e12]
     }
   },
 
@@ -266,7 +268,7 @@ export const NODES = [
     description: 'Intel Xeon, AMD EPYC server processors',
 
     demandDriverType: 'derived',
-    inputIntensity: 2,  // 2 CPUs per GPU server average
+    inputIntensity: 0.25,  // 2 CPUs per 8-GPU server = 0.25 CPUs per GPU
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
     startingCapacity: 2500000,
@@ -404,14 +406,21 @@ export const NODES = [
     name: 'Server DRAM',
     group: 'C',
     unit: 'GB/month',
-    description: 'DDR5 server memory modules',
+    description: 'DDR5 server memory modules for AI servers',
 
     demandDriverType: 'derived',
-    inputIntensity: 512,  // 512GB average per GPU server
+    inputIntensity: 64,  // 64GB per GPU (512GB per 8-GPU server / 8)
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    startingCapacity: 500000000000,  // 500 PB/month global
-    committedExpansions: [],
+    // AI-allocated server DRAM capacity
+    // Global DRAM: ~120B GB/year; server DRAM ~30%; AI portion growing
+    // HBM production consumes DRAM wafers, creating tightness
+    // At 64 GB/GPU and ~500K GPU demand, need ~32M GB/month
+    startingCapacity: 40000000,  // 40M GB/month AI-allocated
+    committedExpansions: [
+      { date: '2026-01', capacityAdd: 5000000, type: 'committed' },
+      { date: '2026-09', capacityAdd: 8000000, type: 'optional' }
+    ],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 18,
     rampProfile: 'linear',
@@ -434,10 +443,10 @@ export const NODES = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 500000000000,
-      confidence: 'high',
-      source: 'DRAM market reports',
-      historicalRange: [400000000000, 600000000000]
+      value: 40000000,
+      confidence: 'medium',
+      source: 'AI-allocated server DRAM; HBM wafer competition tightens supply. As of 2026-01.',
+      historicalRange: [30000000, 60000000]
     }
   },
   {
@@ -448,11 +457,16 @@ export const NODES = [
     description: 'Enterprise NVMe SSDs for AI storage',
 
     demandDriverType: 'derived',
-    inputIntensity: 8000,  // 8TB average per GPU server
+    inputIntensity: 1,  // 1 TB per GPU (8 TB per 8-GPU server / 8)
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    startingCapacity: 200000000000,  // 200 EB/month
-    committedExpansions: [],
+    // AI-allocated enterprise SSD capacity
+    // At 1 TB/GPU and ~500K GPU demand = ~500K TB/month
+    // Enterprise SSD market: ~80M TB/year total; AI portion ~10%
+    startingCapacity: 800000,  // 800K TB/month AI-allocated
+    committedExpansions: [
+      { date: '2026-06', capacityAdd: 200000, type: 'committed' }
+    ],
     leadTimeDebottleneck: 4,
     leadTimeNewBuild: 12,
     rampProfile: 'linear',
@@ -475,10 +489,10 @@ export const NODES = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 200000000000,
-      confidence: 'high',
-      source: 'Flash market reports',
-      historicalRange: [150000000000, 300000000000]
+      value: 800000,
+      confidence: 'medium',
+      source: 'Enterprise SSD market, AI-allocated portion. As of 2026-01.',
+      historicalRange: [500000, 1200000]
     }
   },
 
@@ -496,15 +510,14 @@ export const NODES = [
     inputIntensity: 0.5,  // 0.5 CoWoS wafer-equiv per GPU (2 GPUs per wafer)
     parentNodeIds: ['gpu_datacenter'],
 
-    // Base rate: ~200k wafers/month CoWoS capacity (2025), tightened for shortage
-    // TSMC 75-80k wafer-equiv/month end-2025, to 115k end-2026 (sold out)
-    // At 0.5 wafer/GPU caps ~4.8M GPU-eq/year - intentionally below GPU capacity
+    // TSMC CoWoS: 75-80k wafer-equiv/month end-2025, to 115k end-2026 (sold out)
+    // At 0.5 wafer/GPU, 80K wafers → 160K GPUs/month → hard bottleneck
     // Source: TrendForce, TSMC investor calls. As of 2026-01.
-    startingCapacity: 200000,
+    startingCapacity: 80000,  // wafer-equiv/month (down from 200K — real TSMC capacity)
     committedExpansions: [
-      { date: '2025-10', capacityAdd: 60000, type: 'committed' },
-      { date: '2026-06', capacityAdd: 100000, type: 'committed' },
-      { date: '2026-12', capacityAdd: 100000, type: 'optional' }
+      { date: '2025-10', capacityAdd: 15000, type: 'committed' },   // ramp to ~95K
+      { date: '2026-06', capacityAdd: 20000, type: 'committed' },   // ramp to ~115K
+      { date: '2026-12', capacityAdd: 10000, type: 'optional' }     // ramp to ~125K
     ],
     leadTimeDebottleneck: 9,
     leadTimeNewBuild: 24,
@@ -528,10 +541,10 @@ export const NODES = [
     exportControlSensitivity: 'critical',
 
     baseRate: {
-      value: 200000,
+      value: 80000,
       confidence: 'high',
-      source: 'TrendForce, TSMC quarterly reports. As of 2026-01.',
-      historicalRange: [150000, 300000]
+      source: 'TrendForce, TSMC quarterly reports. 75-80K wafer-equiv/month. As of 2026-01.',
+      historicalRange: [60000, 125000]
     }
   },
   {
