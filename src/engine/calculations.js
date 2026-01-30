@@ -393,13 +393,15 @@ export function sma(values, window) {
  * FIXED: Uses runtime assumptions
  */
 export function calculateInferenceDemand(month, assumptions) {
-  // Base rates - updated Jan 2026
-  // Consumer AI (ChatGPT, Claude, Gemini) hitting billions of daily tokens
-  // Enterprise AI spend $37B in 2025 (3.2x YoY), token usage exploding
-  // Agentic AI projected in 40% enterprise apps by 2026
-  const consumerBase = 5e12;   // 5T tokens/month
-  const enterpriseBase = 6e12; // 6T tokens/month
-  const agenticBase = 1e12;    // 1T tokens/month
+  // Read base rates from workloadBase (single source of truth in assumptions.js)
+  const blockKey = getBlockKeyForMonth(month);
+  const block = assumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
+  const base = block?.workloadBase?.inferenceTokensPerMonth ||
+               DEMAND_ASSUMPTIONS.block0.workloadBase.inferenceTokensPerMonth;
+
+  const consumerBase = base.consumer;    // 5T tokens/month (Jan 2026)
+  const enterpriseBase = base.enterprise; // 6T tokens/month
+  const agenticBase = base.agentic;       // 1T tokens/month
 
   // Growth multipliers - using runtime assumptions
   const consumerGrowth = calculateDemandGrowth('inference', 'consumer', month, assumptions);
@@ -422,12 +424,20 @@ export function calculateInferenceDemand(month, assumptions) {
  * FIXED: Uses runtime assumptions
  */
 export function calculateTrainingDemand(month, demandAssumptions, efficiencyAssumptions) {
-  const frontierBase = 1.2;  // runs/month
-  const midtierBase = 150;   // runs/month
+  // Read base rates from workloadBase (single source of truth)
+  const blockKey = getBlockKeyForMonth(month);
+  const block = demandAssumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
+  const baseTrain = block?.workloadBase?.trainingRunsPerMonth ||
+                    DEMAND_ASSUMPTIONS.block0.workloadBase.trainingRunsPerMonth;
+  const baseCompute = block?.workloadBase?.trainingComputePerRun ||
+                      DEMAND_ASSUMPTIONS.block0.workloadBase.trainingComputePerRun;
+
+  const frontierBase = baseTrain.frontier;   // runs/month
+  const midtierBase = baseTrain.midtier;     // runs/month
 
   // Compute per run (accelerator-hours)
-  const frontierComputePerRun = 1e6;   // 1M accelerator-hours per frontier run
-  const midtierComputePerRun = 5000;   // 5K accelerator-hours per mid-tier run
+  const frontierComputePerRun = baseCompute.frontier;  // 1M accelerator-hours per frontier run
+  const midtierComputePerRun = baseCompute.midtier;    // 5K accelerator-hours per mid-tier run
 
   const frontierGrowth = calculateDemandGrowth('training', 'frontier', month, demandAssumptions);
   const midtierGrowth = calculateDemandGrowth('training', 'midtier', month, demandAssumptions);
@@ -526,11 +536,13 @@ export function calculateContinualLearningDemand(month, demandAssumptions) {
     const networkGrowthRate = block?.continualLearning?.networkBandwidthGrowth?.value ?? 0.45;
 
     if (m === 0) {
-      // Base continual learning demand at month 0
+      // Base continual learning demand at month 0 - read from workloadBase
+      const baseCL = block?.workloadBase?.continualLearningBase ||
+                     DEMAND_ASSUMPTIONS.block0.workloadBase.continualLearningBase;
       continualLearningCache[m] = {
-        accelHours: 50000,    // 50K accel-hours/month base for fine-tuning
-        dataTB: 500,          // 500 TB base storage
-        networkGbps: 100      // 100 Gbps base bandwidth
+        accelHours: baseCL.accelHoursPerMonth,  // 150K accel-hours/month
+        dataTB: baseCL.dataTB,                   // 1500 TB base storage
+        networkGbps: baseCL.networkGbps           // 300 Gbps base bandwidth
       };
     } else {
       const prev = continualLearningCache[m - 1];
@@ -561,18 +573,21 @@ export function calculateContinualLearningDemand(month, demandAssumptions) {
 export function calculateEffectiveHbmPerGpu(month, demandAssumptions) {
   const baseStacksPerGPU = 8;
 
-  // Memory multiplier at full adoption (60% more HBM per GPU for continual learning)
-  // HBM pressure 20-40% higher in AI workloads; HBM market $54.6B in 2026 (58% YoY)
-  const memoryMultiplierAtFullAdoption = 1.6;
+  // Read memory multiplier from assumptions (single source of truth)
+  const blockKey = getBlockKeyForMonth(month);
+  const block = demandAssumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
+  const memoryMultiplierAtFullAdoption =
+    block?.continualLearning?.memoryMultiplierAtFullAdoption?.value ?? 1.6;
 
   // Calculate adoption using logistic curve based on continual learning compute growth
-  // Adoption starts at 10% and saturates at 90% by 2030
   const continualLearning = calculateContinualLearningDemand(month, demandAssumptions);
 
   // Use accel-hours as proxy for adoption
-  // Month 0: 50K accel-hours = 10% adoption
+  // Month 0: base accel-hours (from workloadBase) = 10% adoption
   // Grows toward 90% adoption as compute demand increases
-  const baseAccelHours = 50000;
+  const baseCL = block?.workloadBase?.continualLearningBase ||
+                 DEMAND_ASSUMPTIONS.block0.workloadBase.continualLearningBase;
+  const baseAccelHours = baseCL.accelHoursPerMonth;
   const growthRatio = continualLearning.accelHours / baseAccelHours;
 
   // Logistic adoption: a(t) = 0.1 + 0.8 * (growthRatio / (1 + growthRatio))
@@ -604,12 +619,29 @@ export function accelHoursToRequiredGpuBase(accelHours, utilization = 0.70) {
  */
 export function gpuToComponentDemands(gpuCount, effectiveHbmPerGpu = 8) {
   return {
+    // Semiconductor components
     hbmStacks: gpuCount * effectiveHbmPerGpu,  // HBM stacks per GPU (increases with continual learning)
     cowosWaferEquiv: gpuCount * 0.5,           // 2 GPUs per CoWoS wafer
     advancedWafers: gpuCount * 0.5,            // Logic die wafers
-    serverDramGb: gpuCount * 64,               // 64GB DRAM per GPU
+    hybridBonding: gpuCount * 0.1,             // 3D stacking for next-gen (fraction of GPUs)
+
+    // Memory & storage (per GPU, not per server)
+    serverDramGb: gpuCount * 64,               // 64 GB DRAM per GPU (512 GB / 8-GPU server)
+    ssdTb: gpuCount * 1,                       // 1 TB SSD per GPU (8 TB / 8-GPU server)
+
+    // Compute & networking
+    cpus: gpuCount * 0.25,                     // 2 CPUs per 8-GPU server = 0.25 per GPU
+    dpuNics: gpuCount * 1,                     // 1 DPU/NIC per GPU
+    switchAsics: gpuCount * 0.125,             // 1 switch per 8 GPUs
+    transceivers: gpuCount * 1,                // 1 optical transceiver per GPU
+    infinibandCables: gpuCount * 4,            // 4 cables per GPU
+
+    // Packaging & substrates
+    abfSubstrate: gpuCount * 0.02,             // 0.02 sqm ABF per GPU
+    osatUnits: gpuCount * 1,                   // 1 OSAT test per GPU
+
+    // Server & infrastructure
     servers: gpuCount / 8,                     // 8 GPUs per server
-    transceivers: gpuCount * 1,                // 1 transceiver per GPU
     cdus: gpuCount * 0.05,                     // 1 CDU per 20 GPUs
     powerMw: gpuCount * 0.001                  // 1 kW per GPU
   };
@@ -623,7 +655,9 @@ export function dcMwToPowerDemands(mw) {
     transformers: mw * 0.02,           // 1 transformer per 50 MW
     gridApprovals: mw * 1.0,           // 1:1 for MW approvals
     ppas: mw * 1.2,                    // 120% for redundancy
-    backupMw: mw * 1.5                 // 150% for N+1
+    backupMw: mw * 1.5,               // 150% for N+1
+    dcConstruction: mw * 500,          // 500 worker-months per MW
+    dcOpsStaff: mw * 0.5              // 0.5 FTE per MW
   };
 }
 
@@ -673,11 +707,16 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
   // ============================================
   // CALIBRATION: Compute multiplier so month-0 matches reality
+  // Now includes continual learning for calibration parity
   // ============================================
   const rawMonth0Inference = calculateInferenceDemand(0, demandAssumptions);
   const rawMonth0Training = calculateTrainingDemand(0, demandAssumptions, efficiencyAssumptions);
+  const rawMonth0Continual = calculateContinualLearningDemand(0, demandAssumptions);
   const rawMonth0InferAccelHours = calculateInferenceAccelHours(rawMonth0Inference.total, 0, efficiencyAssumptions, demandAssumptions);
-  const rawMonth0TotalAccelHours = rawMonth0InferAccelHours + rawMonth0Training.frontierAccelHours + rawMonth0Training.midtierAccelHours;
+  const rawMonth0TotalAccelHours = rawMonth0InferAccelHours +
+    rawMonth0Training.frontierAccelHours +
+    rawMonth0Training.midtierAccelHours +
+    rawMonth0Continual.accelHours;  // Include continual learning
   const rawMonth0RequiredBase = accelHoursToRequiredGpuBase(rawMonth0TotalAccelHours);
 
   // Target accel-hours needed to justify the target installed base
@@ -694,8 +733,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const lifetimeMonths = node.lifetimeMonths || 48; // 4 year default lifetime
 
     nodeState[node.id] = {
-      inventory: (node.inventoryBufferTarget || 0) * (node.startingCapacity || 0) / 4,
-      backlog: 0,
+      inventory: (scenarioOverrides?.startingState?.inventoryByNode?.[node.id] ??
+        ((node.inventoryBufferTarget || 0) * (node.startingCapacity || 0) / 4)),
+      backlog: (scenarioOverrides?.startingState?.backlogByNode?.[node.id] ??
+        node.startingBacklog ?? 0),
       subShare: 0,
       priceHistory: [1],
       tightnessHistory: [],  // Track for persistence
@@ -726,6 +767,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       gpuPurchases: []      // Track GPU purchases for component demand
     };
   });
+
+  // Unit sanity check (one-time): confirm CoWoS capacity is in wafers/month
+  if (!globalThis.__printedUnitsOnce) {
+    globalThis.__printedUnitsOnce = true;
+    const cowos = NODES.find(n => n.id === 'cowos_capacity');
+    console.log('[units] cowos_capacity assumed wafer-equiv/month =', cowos?.startingCapacity,
+      '| If not wafers/month, scale values and adjust waferPerGPU accordingly');
+  }
 
   // Run simulation for each month
   for (let month = 0; month < months; month++) {
@@ -957,8 +1006,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const shipments = capacity * maxUtilization * nodeYield;
 
       // Calculate demand based on node type
-      // FIXED: Component demand driven by GPU PURCHASES, not required base
+      // ALL nodes explicitly wired via componentDemands or dcMwToPowerDemands
+      // No generic parent-based fallthrough for supply chain nodes
       let demand = 0;
+      const powerDemands = dcMwToPowerDemands(componentDemands.powerMw);
 
       if (node.id === 'gpu_inference') {
         // Similar to datacenter but smaller scale
@@ -969,37 +1020,97 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         const actualShipments = Math.min(shipments + state.inventory, demand + state.backlog);
         state.installedBase = Math.max(0, state.installedBase + actualShipments - retirements);
         nodeResults.installedBase.push(state.installedBase);
-      } else if (node.id === 'hbm_stacks') {
-        // HBM demand driven by GPU purchases (8 stacks per GPU)
-        demand = componentDemands.hbmStacks;
-        nodeResults.installedBase.push(0);
-      } else if (node.id === 'cowos_capacity') {
-        // CoWoS demand driven by GPU purchases (0.5 wafer per GPU)
-        demand = componentDemands.cowosWaferEquiv;
-        nodeResults.installedBase.push(0);
+
+      // --- Semiconductor components (derived from GPU production requirement) ---
       } else if (node.id === 'advanced_wafers') {
-        // Wafer demand driven by GPU purchases
         demand = componentDemands.advancedWafers;
         nodeResults.installedBase.push(0);
-      } else if (node.id === 'server_assembly') {
-        // Server demand driven by GPU purchases (1 server per 8 GPUs)
-        demand = componentDemands.servers;
+      } else if (node.id === 'hybrid_bonding') {
+        demand = componentDemands.hybridBonding;
         nodeResults.installedBase.push(0);
-      } else if (node.id === 'datacenter_mw') {
-        // Power demand driven by GPU purchases
-        demand = componentDemands.powerMw;
+      } else if (node.id === 'abf_substrate') {
+        demand = componentDemands.abfSubstrate;
         nodeResults.installedBase.push(0);
-      } else if (node.id === 'transformers_lpt') {
-        demand = dcMwToPowerDemands(componentDemands.powerMw).transformers;
+      } else if (node.id === 'osat_capacity') {
+        demand = componentDemands.osatUnits;
+        nodeResults.installedBase.push(0);
+
+      // --- Memory & storage ---
+      } else if (node.id === 'dram_server') {
+        demand = componentDemands.serverDramGb;
+        nodeResults.installedBase.push(0);
+      } else if (node.id === 'ssd_datacenter') {
+        demand = componentDemands.ssdTb;
+        nodeResults.installedBase.push(0);
+
+      // --- Compute ---
+      } else if (node.id === 'cpu_server') {
+        demand = componentDemands.cpus;
+        nodeResults.installedBase.push(0);
+      } else if (node.id === 'dpu_nic') {
+        demand = componentDemands.dpuNics;
+        nodeResults.installedBase.push(0);
+
+      // --- Networking ---
+      } else if (node.id === 'switch_asics') {
+        demand = componentDemands.switchAsics;
         nodeResults.installedBase.push(0);
       } else if (node.id === 'optical_transceivers') {
         demand = componentDemands.transceivers;
         nodeResults.installedBase.push(0);
+      } else if (node.id === 'infiniband_cables') {
+        demand = componentDemands.infinibandCables;
+        nodeResults.installedBase.push(0);
+
+      // --- Server manufacturing ---
+      } else if (node.id === 'server_assembly') {
+        demand = componentDemands.servers;
+        nodeResults.installedBase.push(0);
+      } else if (node.id === 'rack_pdu') {
+        // 1 rack per 40 servers; servers = GPUs/8, so racks = GPUs/320
+        demand = componentDemands.servers * 0.25;  // 1 rack per 4 servers
+        nodeResults.installedBase.push(0);
       } else if (node.id === 'liquid_cooling') {
         demand = componentDemands.cdus;
         nodeResults.installedBase.push(0);
+
+      // --- Power chain (derived from datacenter MW demand) ---
+      } else if (node.id === 'transformers_lpt') {
+        demand = powerDemands.transformers;
+        nodeResults.installedBase.push(0);
+      } else if (node.id === 'grid_interconnect') {
+        demand = powerDemands.gridApprovals;
+        nodeResults.installedBase.push(0);
+      } else if (node.id === 'power_generation') {
+        demand = powerDemands.ppas;
+        nodeResults.installedBase.push(0);
+      } else if (node.id === 'backup_power') {
+        demand = powerDemands.backupMw;
+        nodeResults.installedBase.push(0);
+
+      // --- Data center & facilities ---
+      } else if (node.id === 'dc_construction') {
+        demand = powerDemands.dcConstruction;
+        nodeResults.installedBase.push(0);
+      } else if (node.id === 'dc_ops_staff') {
+        demand = powerDemands.dcOpsStaff;
+        nodeResults.installedBase.push(0);
+
+      // --- Foundry equipment ---
+      } else if (node.id === 'euv_tools') {
+        // EUV demand: very low intensity per wafer (tools process thousands of wafers)
+        demand = componentDemands.advancedWafers * 0.00001;
+        nodeResults.installedBase.push(0);
+
+      // --- Human capital ---
+      } else if (node.id === 'ml_engineers') {
+        // ML engineer demand scales with GPU installed base
+        // ~5 ML engineers per 1000 GPUs in the field
+        demand = requiredGpuBase * 0.005;
+        nodeResults.installedBase.push(0);
+
       } else {
-        // Derived demand from parent nodes using intensity
+        // Safety fallback for any future nodes not yet explicitly wired
         const parentDemands = (node.parentNodeIds || []).map(pid => {
           const parentResult = results.nodes[pid];
           if (parentResult && parentResult.demand.length > 0) {

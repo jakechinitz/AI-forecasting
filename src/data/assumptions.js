@@ -71,6 +71,30 @@ export const DEMAND_ASSUMPTIONS = {
   // Block 0: Years 0-5 (2025-2030)
   block0: {
     label: 'Years 0-5 (2025-2030)',
+    asOfDate: '2026-01-01',
+
+    // Single source of truth for workload baselines
+    // All base rates centralized here; calculations.js reads from this
+    workloadBase: {
+      inferenceTokensPerMonth: {
+        consumer: 5e12,    // 5T tokens/month - ChatGPT/Claude billions of daily tokens
+        enterprise: 6e12,  // 6T tokens/month - $37B enterprise AI spend, 3.2x YoY
+        agentic: 1e12      // 1T tokens/month - agentic AI in 40% enterprise apps by 2026
+      },
+      trainingRunsPerMonth: {
+        frontier: 1.2,     // ~10-15 frontier runs/year globally
+        midtier: 150       // ~100-200 significant runs/month
+      },
+      trainingComputePerRun: {
+        frontier: 1e6,     // 1M accel-hours per frontier run
+        midtier: 5000      // 5K accel-hours per mid-tier run
+      },
+      continualLearningBase: {
+        accelHoursPerMonth: 150000,  // 150K accel-hours/month for fine-tuning/RLHF
+        dataTB: 1500,                // 1500 TB base storage
+        networkGbps: 300             // 300 Gbps base bandwidth
+      }
+    },
 
     // Inference demand growth (CAGR)
     inferenceGrowth: {
@@ -146,6 +170,17 @@ export const DEMAND_ASSUMPTIONS = {
         value: 0.45,  // 45% annual growth in network bandwidth
         confidence: 'medium',
         source: 'Distributed training, data movement'
+      },
+      // HBM memory pressure from continual learning adoption
+      adoptionRateBy2030: {
+        value: 0.90,  // 90% of AI workloads use continual learning by 2030
+        confidence: 'medium',
+        source: 'Enterprise fine-tuning, RLHF ubiquity'
+      },
+      memoryMultiplierAtFullAdoption: {
+        value: 1.6,  // 60% more HBM per GPU for continual learning
+        confidence: 'medium',
+        source: 'HBM pressure 20-40% higher in AI workloads; larger working sets'
       }
     }
   },
@@ -538,6 +573,34 @@ export const TRANSLATION_INTENSITIES = {
 // ============================================
 // SCENARIO DEFINITIONS
 // ============================================
+/**
+ * Scenario inheritance helper - deep-merges overrides into block0 defaults
+ * Ensures scenarios don't duplicate block0 and only override what's different
+ */
+function inheritBlock0(overrides = {}) {
+  const b0 = DEMAND_ASSUMPTIONS.block0;
+  return {
+    ...b0,
+    ...overrides,
+    workloadBase: {
+      ...b0.workloadBase,
+      ...(overrides.workloadBase || {}),
+      inferenceTokensPerMonth: {
+        ...b0.workloadBase.inferenceTokensPerMonth,
+        ...(overrides.workloadBase?.inferenceTokensPerMonth || {})
+      },
+      trainingRunsPerMonth: {
+        ...b0.workloadBase.trainingRunsPerMonth,
+        ...(overrides.workloadBase?.trainingRunsPerMonth || {})
+      },
+      continualLearningBase: {
+        ...b0.workloadBase.continualLearningBase,
+        ...(overrides.workloadBase?.continualLearningBase || {})
+      }
+    }
+  };
+}
+
 export const SCENARIOS = {
   base: {
     id: 'base',
@@ -613,6 +676,25 @@ export const SCENARIOS = {
         affectedNodes: ['cowos_capacity', 'advanced_wafers', 'hbm_stacks'],
         capacityReduction: 0.50,  // 50% reduction
         recoveryMonths: 36        // 3 years to recover
+      }
+    }
+  },
+
+  tight2026: {
+    id: 'tight2026',
+    name: '2026 Tight Market (Backlog + Allocation)',
+    description: 'Sold-out components + large order backlogs; shortages visible immediately. ' +
+      'Reflects Jan 2026 market: HBM sold out, CoWoS at capacity, GPU backlog ~900K.',
+    demandAssumptions: inheritBlock0({ asOfDate: '2026-01-01' }),
+    overrides: {
+      startingState: {
+        backlogByNode: {
+          gpu_datacenter: 900000,   // ~900K GPU order backlog
+          hbm_stacks: 7200000,     // 900K GPUs × 8 stacks = 7.2M stacks backlog
+          cowos_capacity: 450000,  // 900K GPUs × 0.5 wafer-equiv = 450K wafer backlog
+          server_assembly: 112500, // 900K / 8 GPUs per server
+          datacenter_mw: 900       // 900K GPUs × 0.001 MW
+        }
       }
     }
   }
