@@ -629,7 +629,7 @@ export function gpuToComponentDemands(gpuCount, effectiveHbmPerGpu = 8) {
   return {
     // Semiconductor components
     hbmStacks: gpuCount * effectiveHbmPerGpu,  // HBM stacks per GPU (increases with continual learning)
-    cowosWaferEquiv: gpuCount * 0.5,           // 2 GPUs per CoWoS wafer
+    cowosWaferEquiv: gpuCount * 1.0,           // 1 CoWoS wafer-equiv per GPU (H100/B100 class)
     advancedWafers: gpuCount * 0.5,            // Logic die wafers
     hybridBonding: gpuCount * 0.1,             // 3D stacking for next-gen (fraction of GPUs)
 
@@ -817,15 +817,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuMaxUtil = gpuNode.maxCapacityUtilization || 0.95;
     const gpuShipmentsRaw = gpuCapacity * gpuMaxUtil * gpuYield;
 
-    // Calculate GPU purchase demand (backlog-aware)
-    // Subtract pending backlog from shortfall — orders already in the pipeline
-    // will eventually fill the gap, so don't re-order what's already coming.
-    // Without this, demand re-orders the full gap every month, backlog grows
-    // unbounded, and installed base overshoots required base when backlog delivers.
+    // Calculate GPU purchase demand
+    // Demand = current shortfall (gap) + replacement demand (retirements)
     const gpuRetirements = gpuState.installedBase / gpuState.lifetimeMonths;
-    const gpuShortfall = Math.max(0, requiredGpuBase - gpuState.installedBase);
-    const gpuNewGapOrders = Math.max(0, gpuShortfall - gpuState.backlog);
-    const gpuDemand = gpuNewGapOrders + gpuRetirements;
+    const gpuGap = Math.max(0, requiredGpuBase - gpuState.installedBase);
+    const gpuDemand = gpuGap + gpuRetirements;
 
     // OPTION 3: Component demand driven by production requirement
     const gpuProductionRequirement = gpuDemand + gpuState.backlog;
@@ -913,7 +909,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Calculate max deliverable GPUs by each component
     // Continual learning increases HBM demand per GPU
     const effectiveStacksPerGPU = calculateEffectiveHbmPerGpu(month, demandAssumptions);
-    const cowosUnitsPerGPU = 0.5;
+    const cowosUnitsPerGPU = 1.0;  // Each H100/B100 needs 1 CoWoS wafer-equiv
     const MWperGPU = 0.001;
 
     const maxByHBM = componentSupply.hbm_stacks / effectiveStacksPerGPU;
@@ -944,6 +940,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuActualShipments = Math.min(gpuShipmentsRaw, gpuDemand + gpuState.backlog);
     gpuState.inventory = calculateInventory(gpuState.inventory, gpuShipmentsRaw, gpuActualShipments) + idleGpus;
     gpuState.backlog = calculateBacklog(gpuState.backlog, gpuDemand, gpuDelivered);
+
+    // Cap backlog to current shortfall — prevents unbounded backlog growth
+    // that would cause installed base to overshoot required base when cleared.
+    // As deliveries close the gap, excess orders are effectively cancelled.
+    const gpuCurrentShortfall = Math.max(0, requiredGpuBase - gpuState.installedBase);
+    gpuState.backlog = Math.min(gpuState.backlog, gpuCurrentShortfall);
 
     // Store GPU results
     gpuResults.demand.push(gpuDemand);
@@ -1025,12 +1027,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const powerDemands = dcMwToPowerDemands(componentDemands.powerMw);
 
       if (node.id === 'gpu_inference') {
-        // Similar to datacenter but smaller scale (backlog-aware)
+        // Similar to datacenter but smaller scale
         const retirements = state.installedBase / state.lifetimeMonths;
         const inferenceRequiredBase = requiredGpuBase * 0.3;  // 30% of workload
-        const shortfall = Math.max(0, inferenceRequiredBase - state.installedBase);
-        const newGapOrders = Math.max(0, shortfall - state.backlog);
-        demand = newGapOrders + retirements;
+        const gap = Math.max(0, inferenceRequiredBase - state.installedBase);
+        demand = gap + retirements;
         const actualShipments = Math.min(shipments + state.inventory, demand + state.backlog);
         state.installedBase = Math.max(0, state.installedBase + actualShipments - retirements);
         nodeResults.installedBase.push(state.installedBase);
