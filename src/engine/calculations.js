@@ -74,8 +74,15 @@ function deepMerge(target, source) {
 // These ensure month-0 demand matches reality
 // ============================================
 const CALIBRATION = {
-  // Target installed base at month 0 (2025)
-  targetInstalledBaseGpuDc_2025: 2000000,  // 2M GPUs installed
+  // Target REQUIRED base at month 0 — what the market needs
+  // Used for calibration multiplier computation
+  targetRequiredBaseGpuDc_2025: 2000000,  // 2M GPUs required by market
+
+  // Starting INSTALLED base — what's actually deployed
+  // Below required base = real-world GPU shortage at month 0
+  // Gap of 500K represents the backlog/shortage visible in Jan 2026
+  startingInstalledBaseGpuDc: 1500000,  // 1.5M GPUs actually installed
+
   targetUtilization: 0.70,
   // This will be computed at simulation start
   globalAccelHoursMultiplier: 1
@@ -133,11 +140,12 @@ export function calculateEfficiencyMultipliers(month, assumptions) {
     const block = assumptions?.[blockKey] || EFFICIENCY_ASSUMPTIONS[blockKey];
 
     // Get annual rates from the active block
-    const m_infer = block?.modelEfficiency?.m_inference?.value ?? 0.40;
-    const m_train = block?.modelEfficiency?.m_training?.value ?? 0.20;
-    const s_infer = block?.systemsEfficiency?.s_inference?.value ?? 0.25;
-    const s_train = block?.systemsEfficiency?.s_training?.value ?? 0.15;
-    const h = block?.hardwareEfficiency?.h?.value ?? 0.30;
+    // Defaults match assumptions.js block0 (deployed efficiency rates)
+    const m_infer = block?.modelEfficiency?.m_inference?.value ?? 0.25;
+    const m_train = block?.modelEfficiency?.m_training?.value ?? 0.15;
+    const s_infer = block?.systemsEfficiency?.s_inference?.value ?? 0.15;
+    const s_train = block?.systemsEfficiency?.s_training?.value ?? 0.12;
+    const h = block?.hardwareEfficiency?.h?.value ?? 0.20;
 
     // Convert annual rates to monthly multipliers
     // M_t: (1-m)^(1/12) - decreases each month
@@ -719,8 +727,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     rawMonth0Continual.accelHours;  // Include continual learning
   const rawMonth0RequiredBase = accelHoursToRequiredGpuBase(rawMonth0TotalAccelHours);
 
-  // Target accel-hours needed to justify the target installed base
-  const targetAccelHours = CALIBRATION.targetInstalledBaseGpuDc_2025 * 720 * CALIBRATION.targetUtilization;
+  // Target accel-hours needed to justify the target REQUIRED base (not installed)
+  const targetAccelHours = CALIBRATION.targetRequiredBaseGpuDc_2025 * 720 * CALIBRATION.targetUtilization;
   CALIBRATION.globalAccelHoursMultiplier = targetAccelHours / (rawMonth0TotalAccelHours + EPSILON);
 
   // Initialize node state
@@ -728,8 +736,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   NODES.forEach(node => {
     // STOCK VS FLOW FIX: Track installed base for GPU nodes
     const isStockNode = ['gpu_datacenter', 'gpu_inference'].includes(node.id);
-    // Initialize with calibrated installed base
-    const startingInstalledBase = isStockNode ? CALIBRATION.targetInstalledBaseGpuDc_2025 : 0;
+    // Initialize with ACTUAL installed base (below required base = shortage)
+    const startingInstalledBase = isStockNode ? CALIBRATION.startingInstalledBaseGpuDc : 0;
     const lifetimeMonths = node.lifetimeMonths || 48; // 4 year default lifetime
 
     nodeState[node.id] = {

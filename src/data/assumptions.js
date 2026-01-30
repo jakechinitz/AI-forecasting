@@ -144,12 +144,13 @@ export const DEMAND_ASSUMPTIONS = {
 
     // Inference intensity growth (compute per token increases)
     // Captures: longer contexts, multi-step reasoning, agentic loops, tool use
-    // This partially offsets efficiency gains to keep required GPU base growing
+    // Critical for offsetting efficiency gains and keeping GPU demand growing
+    // Old: 25% → New: 40% reflecting reasoning models (o1/o3), agent loops
     intensityGrowth: {
-      value: 0.25,  // 25% annual increase in compute per token
+      value: 0.40,  // 40% annual increase in compute per token
       confidence: 'medium',
-      source: 'Context scaling, chain-of-thought, agent loops',
-      historicalRange: [0.15, 0.40]
+      source: 'Reasoning models (o1/o3), agent loops, 10-100x tokens per task',
+      historicalRange: [0.25, 0.60]
     },
 
     // Continual Learning demand (fine-tuning, RLHF, RAG updates)
@@ -312,50 +313,56 @@ export const EFFICIENCY_ASSUMPTIONS = {
     label: 'Years 0-5 (2025-2030)',
 
     // Model efficiency (compute per token declines)
+    // NOTE: These are DEPLOYED efficiency rates, not theoretical peaks.
+    // Real deployments lag: new architectures take 6-12 months to propagate.
+    // Old: 40% → New: 25% for inference. Still aggressive but realistic.
     modelEfficiency: {
       m_inference: {
-        value: 0.40,  // 40% annual reduction in compute per token
+        value: 0.25,  // 25% annual reduction (deployed systems lag theoretical gains)
         confidence: 'medium',
-        source: 'GPT-4 to GPT-4o-mini trajectory, distillation gains',
-        historicalRange: [0.25, 0.60]
+        source: 'Deployed model efficiency; propagation lag from theory',
+        historicalRange: [0.15, 0.40]
       },
       m_training: {
-        value: 0.20,  // 20% annual reduction in compute per capability
+        value: 0.15,  // 15% annual reduction in compute per capability
         confidence: 'low',
         source: 'Chinchilla-optimal training, architecture improvements',
-        historicalRange: [0.10, 0.35]
+        historicalRange: [0.08, 0.25]
       }
     },
 
     // Systems/software throughput improvements
+    // Real-world batching/scheduling gains are more like 15% deployed
     systemsEfficiency: {
       s_inference: {
-        value: 0.25,  // 25% annual throughput gain from batching, scheduling
+        value: 0.15,  // 15% annual throughput gain (deployed batching, scheduling)
         confidence: 'medium',
-        source: 'vLLM, continuous batching, speculative decoding',
-        historicalRange: [0.15, 0.40]
+        source: 'vLLM, continuous batching; deployment lag from cutting edge',
+        historicalRange: [0.10, 0.25]
       },
       s_training: {
-        value: 0.15,  // 15% annual improvement
+        value: 0.12,  // 12% annual improvement
         confidence: 'medium',
         source: 'Distributed training optimizations',
-        historicalRange: [0.10, 0.25]
+        historicalRange: [0.08, 0.20]
       }
     },
 
     // Hardware throughput improvements (perf/$)
+    // H applies to NEW purchases only conceptually, but the model uses it
+    // on all demand. 20% is more realistic for blended fleet improvement.
     hardwareEfficiency: {
       h: {
-        value: 0.30,  // 30% annual perf/$ improvement
+        value: 0.20,  // 20% annual perf/$ improvement (blended fleet)
         confidence: 'high',
-        source: 'NVIDIA generation-over-generation gains',
-        historicalRange: [0.20, 0.45]
+        source: 'NVIDIA generation-over-generation; blended fleet effect',
+        historicalRange: [0.12, 0.30]
       },
       h_memory: {
-        value: 0.25,  // 25% memory bandwidth improvement
+        value: 0.18,  // 18% memory bandwidth improvement
         confidence: 'medium',
         source: 'HBM generation improvements',
-        historicalRange: [0.15, 0.35]
+        historicalRange: [0.10, 0.25]
       }
     }
   },
