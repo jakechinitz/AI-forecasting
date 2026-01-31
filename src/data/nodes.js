@@ -588,10 +588,10 @@ const BASE_NODES = [
     inputIntensity: 1.0,  // Adoption curve applied in demand translation
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 5000,
+    startingCapacity: 1500,
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 5000, type: 'committed' },
-      { date: '2026-06', capacityAdd: 10000, type: 'optional' }
+      { date: '2026-06', capacityAdd: 1500, type: 'committed' },
+      { date: '2027-06', capacityAdd: 2000, type: 'optional' }
     ],
     leadTimeDebottleneck: 12,
     leadTimeNewBuild: 30,
@@ -618,10 +618,10 @@ const BASE_NODES = [
     exportControlSensitivity: 'critical',
 
     baseRate: {
-      value: 5000,
+      value: 1500,
       confidence: 'low',
       source: 'Emerging technology, limited data',
-      historicalRange: [2000, 10000]
+      historicalRange: [1000, 4000]
     }
   },
   {
@@ -769,7 +769,7 @@ const BASE_NODES = [
     description: 'ASML EUV scanners (new tools/month)',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.00001,  // Tiny - tools process many wafers
+    inputIntensity: 0.00002,  // Tools per wafer-start (calibrated to ~4/month demand)
     parentNodeIds: ['advanced_wafers'],
 
     // Base rate: ~44-48 EUV tools shipped annually (~3.7-4.0/month)

@@ -681,7 +681,7 @@ export const TRANSLATION_INTENSITIES = {
       source: 'Advanced packaging adoption curves'
     },
     advancedWafersPerGpu: {
-      value: 0.5,  // Logic die
+      value: 0.3,  // Logic die (reticle-limited, multi-die packages)
       confidence: 'high',
       source: 'Reticle limit analysis'
     },

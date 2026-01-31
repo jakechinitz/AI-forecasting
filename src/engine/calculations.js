@@ -996,10 +996,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Update price history
     gpuState.priceHistory.push(calculatePriceIndex(gpuTightness));
 
-    // Update inventory (produced but not delivered becomes idle inventory)
+    // Update inventory (deliverable inventory only; idle tracked separately)
     // Backlog is demand not met
     const gpuActualShipments = Math.min(gpuShipmentsRaw, gpuDemand + gpuState.backlog);
-    gpuState.inventory = calculateInventory(gpuState.inventory, gpuShipmentsRaw, gpuActualShipments) + idleGpus;
+    gpuState.inventory = calculateInventory(gpuState.inventory, gpuShipmentsRaw, gpuActualShipments);
     gpuState.backlog = calculateBacklog(gpuState.backlog, gpuDemand, gpuDelivered);
 
     // Cap backlog to current shortfall — prevents unbounded backlog growth
@@ -1175,7 +1175,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // --- Foundry equipment ---
       } else if (node.id === 'euv_tools') {
         // EUV demand: very low intensity per wafer (tools process thousands of wafers)
-        demand = componentDemands.advancedWafers * 0.00001;
+        demand = componentDemands.advancedWafers * (node.inputIntensity || 0.00001);
         nodeResults.installedBase.push(0);
 
       // --- Human capital ---
