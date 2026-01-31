@@ -1,20 +1,27 @@
 /**
  * AI Infrastructure Supply Chain - Assumptions & Base Rates
  *
- * This file defines all user-adjustable assumptions organized into yearly
- * segments for years 1-5 and 5-year blocks thereafter.
- * Historical base rates are documented with sources for transparency.
+ * Purpose:
+ * - Single source of truth for all user-adjustable assumptions.
+ * - Guarantees every time block has required baselines (no "drop to 0" after Year 5).
+ * - Normalizes scenario overrides so numbers like { consumer: 0.55 } are treated as { consumer: { value: 0.55 } }.
  *
- * IMPORTANT: Efficiency formulas use the CORRECTED math:
- * - M_t = (1-m)^(t/12)  : Compute per token DECREASES (in numerator)
- * - S_t = (1+s)^(t/12)  : Systems throughput INCREASES (in denominator)
- * - H_t = (1+h)^(t/12)  : Hardware throughput INCREASES (in denominator)
+ * IMPORTANT (Efficiency math conventions used by calculations.js):
+ * - Model efficiency M_t = (1 - m)^(t/12)  (compute per unit work decreases)
+ * - Systems throughput S_t = (1 + s)^(t/12) (throughput increases)
+ * - Hardware throughput H_t = (1 + h)^(t/12) (throughput increases)
+ *
+ * NOTE:
+ * - calculations.js already applies M in the numerator and S/H in the denominator.
+ * - This file ensures those values exist for every time block.
  */
+
 import assumptionOverrides from './assumptionOverrides.json';
 
 // ============================================
 // GLOBAL MODEL PARAMETERS
 // ============================================
+
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -25,7 +32,7 @@ const addMonths = (date, months) => new Date(Date.UTC(date.getUTCFullYear(), dat
 
 const NOW = new Date();
 const CURRENT_YEAR = NOW.getUTCFullYear();
-const CURRENT_MONTH = NOW.getUTCMonth() + 1;
+const CURRENT_MONTH = NOW.getUTCMonth() + 1; // 1..12
 const START_DATE = new Date(Date.UTC(CURRENT_YEAR, CURRENT_MONTH - 1, 1));
 const DEFAULT_AS_OF_DATE = formatAsOfDate(CURRENT_YEAR, CURRENT_MONTH);
 
@@ -37,54 +44,54 @@ export const GLOBAL_PARAMS = {
 
   // Price index shape parameters (global, not per-node)
   priceIndex: {
-    a: 2.0,      // Sensitivity to tightness above 1
-    b: 1.5,      // Exponent for price response
-    minPrice: 0.5,  // Floor (even in glut, price doesn't go to zero)
-    maxPrice: 5.0   // Ceiling for extreme shortages
+    a: 2.0,
+    b: 1.5,
+    minPrice: 0.5,
+    maxPrice: 5.0
   },
 
   // Glut thresholds (can override per node)
   glutThresholds: {
-    soft: 0.95,           // Pricing softens
-    hard: 0.80,           // Capex cuts begin
+    soft: 0.95,
+    hard: 0.80,
     persistenceMonthsSoft: 3,
     persistenceMonthsHard: 2
   },
 
   // Substitution damping
   substitution: {
-    priceSignalSmaMonths: 4,  // Smooth price signal
-    adjustmentSpeed: 0.15      // Lambda - how fast substitution adjusts
+    priceSignalSmaMonths: 4,
+    adjustmentSpeed: 0.15
   },
 
-  // Capex trigger parameters
+  // Capex trigger parameters (kept for UI / future enhancements)
   capexTrigger: {
-    priceThreshold: 1.3,      // Price index must exceed this
-    persistenceMonths: 6,      // For this many consecutive months
-    maxCapacityAddPct: 0.30,   // Cap expansion at 30% of current/year
-    cooldownMonths: 12,        // Min months between endogenous triggers per node
-    maxExpansions: 6           // Max endogenous expansions per node over full horizon
+    priceThreshold: 1.3,
+    persistenceMonths: 6,
+    maxCapacityAddPct: 0.30,
+    cooldownMonths: 12,
+    maxExpansions: 6
   },
 
   // Predictive supply elasticity
-  // Simulates firms looking ahead and starting builds before peaks
   predictiveSupply: {
-    forecastHorizonMonths: 6,     // Look-ahead window
-    shortageThreshold: 1.0,       // Demand/capacity ratio that triggers investment
-    expansionFraction: 0.10,      // Fraction of current capacity added per trigger (10%)
-    cooldownMonths: 12,           // Min months between dynamic triggers per node
-    maxDynamicExpansions: 5       // Max dynamic expansions per node over full horizon
+    forecastHorizonMonths: 6,
+    shortageThreshold: 1.0,
+    expansionFraction: 0.10,
+    cooldownMonths: 12,
+    maxDynamicExpansions: 5
   },
 
   // Inventory display
   inventoryDisplay: {
-    forwardMonths: 3  // Average forward demand for MoS calculation
+    forwardMonths: 3
   }
 };
 
 // ============================================
 // ASSUMPTION TIME SEGMENTS
 // ============================================
+
 const SEGMENT_DEFS = [
   { key: 'year1', label: 'Year 1', startMonth: 0, endMonth: 11 },
   { key: 'year2', label: 'Year 2', startMonth: 12, endMonth: 23 },
@@ -113,8 +120,13 @@ const SEGMENT_LABELS = ASSUMPTION_SEGMENTS.reduce((acc, segment) => {
   return acc;
 }, {});
 
+// ============================================
+// CORE HELPERS
+// ============================================
+
 const cloneBlock = (block) => JSON.parse(JSON.stringify(block));
 const isPlainObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
+
 const deepMerge = (base, overrides) => {
   if (!isPlainObject(overrides)) return base;
   const merged = { ...base };
@@ -128,504 +140,312 @@ const deepMerge = (base, overrides) => {
   return merged;
 };
 
+/**
+ * Normalize overrides against a template so that:
+ * - If template expects { value: number, ... } and override provides a number,
+ *   we convert it to { ...template, value: overrideNumber }.
+ * - Works recursively.
+ */
+const normalizeOverridesToTemplate = (template, overrides) => {
+  if (!isPlainObject(overrides) || !isPlainObject(template)) return overrides;
+
+  const out = { ...overrides };
+
+  Object.entries(overrides).forEach(([key, val]) => {
+    const t = template[key];
+
+    if (val === null || val === undefined) return;
+
+    // If template is a value-object and override is a number, wrap it.
+    if (typeof val === 'number' && isPlainObject(t) && Object.prototype.hasOwnProperty.call(t, 'value')) {
+      out[key] = { ...cloneBlock(t), value: val };
+      return;
+    }
+
+    // Recurse if both are plain objects.
+    if (isPlainObject(val) && isPlainObject(t)) {
+      out[key] = normalizeOverridesToTemplate(t, val);
+    }
+  });
+
+  return out;
+};
+
+const applyBlockLabel = (block, segmentKey, includeAsOfDate) => {
+  const segment = ASSUMPTION_SEGMENTS.find(s => s.key === segmentKey);
+  const labeled = { ...block, label: `${segment.label} (${segment.years})` };
+  if (includeAsOfDate) labeled.asOfDate = DEFAULT_AS_OF_DATE;
+  return labeled;
+};
+
 // ============================================
-// DEMAND ASSUMPTIONS BY 5-YEAR BLOCK
+// DEMAND ASSUMPTIONS
 // ============================================
-const DEMAND_YEAR1 = {
+
+/**
+ * Workload baselines MUST exist for every block.
+ * The UI can still display block-specific baselines, but calculations.js
+ * should never see missing workloadBase.
+ */
+const WORKLOAD_BASE_DEFAULT = {
+  inferenceTokensPerMonth: {
+    consumer: 5e12,
+    enterprise: 6e12,
+    agentic: 1e12
+  },
+  trainingRunsPerMonth: {
+    frontier: 1.2,
+    midtier: 150
+  },
+  // Assumption is accelerator-hours per run (not tokens)
+  trainingComputePerRun: {
+    frontier: 50e6,
+    midtier: 200000
+  },
+  continualLearningBase: {
+    accelHoursPerMonth: 150000,
+    dataTB: 1500,
+    networkGbps: 300
+  }
+};
+
+const DEMAND_TEMPLATE_YEAR1 = {
   label: SEGMENT_LABELS.year1,
   asOfDate: DEFAULT_AS_OF_DATE,
 
-  // Single source of truth for workload baselines
-  // All base rates centralized here; calculations.js reads from this
-  workloadBase: {
-    inferenceTokensPerMonth: {
-      consumer: 5e12,    // 5T tokens/month - ChatGPT/Claude billions of daily tokens
-      enterprise: 6e12,  // 6T tokens/month - $37B enterprise AI spend, 3.2x YoY
-      agentic: 1e12      // 1T tokens/month - agentic AI in 40% enterprise apps by 2026
-    },
-    trainingRunsPerMonth: {
-      frontier: 1.2,     // ~10-15 frontier runs/year globally
-      midtier: 150       // ~100-200 significant runs/month
-    },
-    
-    // FIX: Updated Magnitudes for Realism (v32)
-    trainingComputePerRun: {
-      frontier: 50e6,    // 50M accel-hours (~25k GPUs * 3 months) - Was 1M
-      midtier: 200000    // 200K accel-hours (Fine-tuning runs) - Was 5K
-    },
-    
-    continualLearningBase: {
-      accelHoursPerMonth: 150000,  // 150K accel-hours/month for fine-tuning/RLHF
-      dataTB: 1500,                // 1500 TB base storage
-      networkGbps: 300             // 300 Gbps base bandwidth
-    }
-  },
+  workloadBase: cloneBlock(WORKLOAD_BASE_DEFAULT),
 
-  // Inference demand growth (CAGR)
   inferenceGrowth: {
-    consumer: {
-      value: 2.00,  // 3x annual growth
-      confidence: 'medium',
-      source: 'Usage growth + consumer adoption, 2024-2026 trend',
-      historicalRange: [0.25, 0.60]
-    },
-    enterprise: {
-      value: 3.00,  // 300% annual growth
-      confidence: 'medium',
-      source: 'Enterprise AI adoption surveys, cloud earnings',
-      historicalRange: [0.35, 0.80]
-    },
-    agentic: {
-      value: 2.50,  // 250% annual growth
-      confidence: 'low',
-      source: 'Emerging category, high uncertainty',
-      historicalRange: [0.50, 2.00]
-    }
+    consumer: { value: 2.00, confidence: 'medium', source: 'Usage growth + consumer adoption', historicalRange: [0.25, 0.60] },
+    enterprise: { value: 3.00, confidence: 'medium', source: 'Enterprise AI adoption + cloud earnings', historicalRange: [0.35, 0.80] },
+    agentic: { value: 2.50, confidence: 'low', source: 'Emerging category', historicalRange: [0.50, 2.00] }
   },
 
-  // Training demand growth
   trainingGrowth: {
-    frontier: {
-      value: 3.00,  // 300% more frontier runs per year
-      confidence: 'medium',
-      source: 'Supply-constrained training demand; increased runs once capacity expands',
-      historicalRange: [0.10, 3.00]
-    },
-    midtier: {
-      value: 3.00,  // 300% growth in mid-tier training
-      confidence: 'low',
-      source: 'Supply-constrained training demand; increased runs once capacity expands',
-      historicalRange: [0.30, 3.00]
-    }
+    frontier: { value: 3.00, confidence: 'medium', source: 'Supply-constrained demand unlocking', historicalRange: [0.10, 3.00] },
+    midtier: { value: 3.00, confidence: 'low', source: 'Supply-constrained demand unlocking', historicalRange: [0.30, 3.00] }
   },
 
-  // Context length trend (affects memory)
   contextLength: {
-    averageTokens: 4000,  // Starting average
-    growthRate: 0.30,     // 30% annual increase
+    averageTokens: 4000,
+    growthRate: 0.30,
     confidence: 'medium',
     source: 'Model releases, long-context adoption'
   },
 
-  // Inference intensity growth (compute per token increases)
-  // Captures: longer contexts, multi-step reasoning, agentic loops, tool use
-  // Critical for offsetting efficiency gains and keeping GPU demand growing
   intensityGrowth: {
-    value: 0.40,  // 40% annual increase in compute per token
+    value: 0.40,
     confidence: 'medium',
-    source: 'Reasoning models, agent loops, 10-100x tokens per task',
+    source: 'Reasoning models, agent loops, tool use',
     historicalRange: [0.25, 0.60]
   },
 
-  // Continual Learning demand (fine-tuning, RLHF, RAG updates)
-  // Drives compute for training + memory/storage/network for data
   continualLearning: {
-    computeGrowth: {
-      value: 0.60,  // 60% annual growth in continual learning compute
-      confidence: 'medium',
-      source: 'Enterprise fine-tuning adoption, RLHF scaling',
-      historicalRange: [0.40, 0.80]
-    },
-    dataStorageGrowth: {
-      value: 0.50,  // 50% annual growth in data storage needs
-      confidence: 'medium',
-      source: 'RAG corpus growth, checkpoint storage'
-    },
-    networkBandwidthGrowth: {
-      value: 0.45,  // 45% annual growth in network bandwidth
-      confidence: 'medium',
-      source: 'Distributed training, data movement'
-    },
-    // HBM memory pressure from continual learning adoption
-    adoptionRateBy2030: {
-      value: 0.90,  // 90% of AI workloads use continual learning by 2030
-      confidence: 'medium',
-      source: 'Enterprise fine-tuning, RLHF ubiquity'
-    },
-    memoryMultiplierAtFullAdoption: {
-      value: 1.6,  // 60% more HBM per GPU for continual learning
-      confidence: 'medium',
-      source: 'HBM pressure 20-40% higher in AI workloads; larger working sets'
-    }
+    computeGrowth: { value: 0.60, confidence: 'medium', source: 'Enterprise fine-tuning adoption' },
+    dataStorageGrowth: { value: 0.50, confidence: 'medium', source: 'RAG + checkpoint growth' },
+    networkBandwidthGrowth: { value: 0.45, confidence: 'medium', source: 'Distributed training + data movement' },
+
+    adoptionRateBy2030: { value: 0.90, confidence: 'medium', source: 'Fine-tuning ubiquity by 2030' },
+    memoryMultiplierAtFullAdoption: { value: 1.6, confidence: 'medium', source: 'Larger working sets + HBM pressure' }
   }
 };
 
-const DEMAND_YEARLY_BLOCKS = FIRST_FIVE_YEAR_KEYS.reduce((acc, key, index) => {
-  const segment = ASSUMPTION_SEGMENTS[index];
-  acc[key] = {
-    ...cloneBlock(DEMAND_YEAR1),
-    label: `${segment.label} (${segment.years})`
-  };
-  if (index > 0) {
-    delete acc[key].asOfDate;
-  }
-  return acc;
-}, {});
+/**
+ * Build demand blocks for all segments:
+ * - Year 1 defines full structure (template).
+ * - Year 2-5 clone and tweak growth rates.
+ * - Years 6-20 ALSO clone the full structure so workloadBase never disappears.
+ */
+const buildDemandBlocks = () => {
+  const blocks = {};
 
-DEMAND_YEARLY_BLOCKS.year2.inferenceGrowth.consumer.value = 2.00;
-DEMAND_YEARLY_BLOCKS.year2.inferenceGrowth.enterprise.value = 3.00;
-DEMAND_YEARLY_BLOCKS.year2.inferenceGrowth.agentic.value = 2.00;
-DEMAND_YEARLY_BLOCKS.year2.trainingGrowth.frontier.value = 2.00;
-DEMAND_YEARLY_BLOCKS.year2.trainingGrowth.midtier.value = 2.00;
+  // Start from full template for every segment (prevents "0 after Year 5").
+  ASSUMPTION_SEGMENTS.forEach((seg, idx) => {
+    const base = cloneBlock(DEMAND_TEMPLATE_YEAR1);
+    delete base.asOfDate; // only include it for year1 display
+    blocks[seg.key] = applyBlockLabel(base, seg.key, idx === 0);
+  });
 
-DEMAND_YEARLY_BLOCKS.year3.inferenceGrowth.consumer.value = 1.00;
-DEMAND_YEARLY_BLOCKS.year3.inferenceGrowth.enterprise.value = 3.00;
-DEMAND_YEARLY_BLOCKS.year3.inferenceGrowth.agentic.value = 1.50;
-DEMAND_YEARLY_BLOCKS.year3.trainingGrowth.frontier.value = 1.00;
-DEMAND_YEARLY_BLOCKS.year3.trainingGrowth.midtier.value = 1.00;
+  // Targeted tweaks (only the values that should change by period)
+  // Year 2
+  blocks.year2.inferenceGrowth.consumer.value = 2.00;
+  blocks.year2.inferenceGrowth.enterprise.value = 3.00;
+  blocks.year2.inferenceGrowth.agentic.value = 2.00;
+  blocks.year2.trainingGrowth.frontier.value = 2.00;
+  blocks.year2.trainingGrowth.midtier.value = 2.00;
 
-DEMAND_YEARLY_BLOCKS.year4.inferenceGrowth.consumer.value = 0.60;
-DEMAND_YEARLY_BLOCKS.year4.inferenceGrowth.enterprise.value = 1.00;
-DEMAND_YEARLY_BLOCKS.year4.inferenceGrowth.agentic.value = 0.90;
+  // Year 3
+  blocks.year3.inferenceGrowth.consumer.value = 1.00;
+  blocks.year3.inferenceGrowth.enterprise.value = 3.00;
+  blocks.year3.inferenceGrowth.agentic.value = 1.50;
+  blocks.year3.trainingGrowth.frontier.value = 1.00;
+  blocks.year3.trainingGrowth.midtier.value = 1.00;
 
-DEMAND_YEARLY_BLOCKS.year5.inferenceGrowth.consumer.value = 0.50;
-DEMAND_YEARLY_BLOCKS.year5.inferenceGrowth.enterprise.value = 1.00;
-DEMAND_YEARLY_BLOCKS.year5.inferenceGrowth.agentic.value = 0.70;
+  // Year 4
+  blocks.year4.inferenceGrowth.consumer.value = 0.60;
+  blocks.year4.inferenceGrowth.enterprise.value = 1.00;
+  blocks.year4.inferenceGrowth.agentic.value = 0.90;
 
-export const DEMAND_ASSUMPTIONS_BASE = {
-  ...DEMAND_YEARLY_BLOCKS,
+  // Year 5
+  blocks.year5.inferenceGrowth.consumer.value = 0.50;
+  blocks.year5.inferenceGrowth.enterprise.value = 1.00;
+  blocks.year5.inferenceGrowth.agentic.value = 0.70;
 
-  years6_10: {
-    label: SEGMENT_LABELS.years6_10,
+  // Years 6-10
+  blocks.years6_10.inferenceGrowth.consumer.value = 0.25;
+  blocks.years6_10.inferenceGrowth.enterprise.value = 0.35;
+  blocks.years6_10.inferenceGrowth.agentic.value = 0.60;
+  blocks.years6_10.trainingGrowth.frontier.value = 0.15;
+  blocks.years6_10.trainingGrowth.midtier.value = 0.30;
+  blocks.years6_10.contextLength.averageTokens = 16000;
+  blocks.years6_10.contextLength.growthRate = 0.20;
+  blocks.years6_10.intensityGrowth.value = 0.20;
+  blocks.years6_10.continualLearning.computeGrowth.value = 0.40;
+  blocks.years6_10.continualLearning.dataStorageGrowth.value = 0.35;
+  blocks.years6_10.continualLearning.networkBandwidthGrowth.value = 0.30;
 
-    inferenceGrowth: {
-      consumer: { value: 0.25, confidence: 'low', source: 'Market maturation expected' },
-      enterprise: { value: 0.35, confidence: 'low', source: 'Continued enterprise adoption' },
-      agentic: { value: 0.60, confidence: 'low', source: 'Agentic becomes mainstream' }
-    },
+  // Years 11-15
+  blocks.years11_15.inferenceGrowth.consumer.value = 0.15;
+  blocks.years11_15.inferenceGrowth.enterprise.value = 0.20;
+  blocks.years11_15.inferenceGrowth.agentic.value = 0.30;
+  blocks.years11_15.trainingGrowth.frontier.value = 0.10;
+  blocks.years11_15.trainingGrowth.midtier.value = 0.20;
+  blocks.years11_15.contextLength.averageTokens = 32000;
+  blocks.years11_15.contextLength.growthRate = 0.10;
+  blocks.years11_15.intensityGrowth.value = 0.15;
+  blocks.years11_15.continualLearning.computeGrowth.value = 0.25;
+  blocks.years11_15.continualLearning.dataStorageGrowth.value = 0.25;
+  blocks.years11_15.continualLearning.networkBandwidthGrowth.value = 0.20;
 
-    trainingGrowth: {
-      frontier: { value: 0.15, confidence: 'low', source: 'Diminishing returns possible' },
-      midtier: { value: 0.30, confidence: 'low', source: 'Steady enterprise demand' }
-    },
+  // Years 16-20
+  blocks.years16_20.inferenceGrowth.consumer.value = 0.10;
+  blocks.years16_20.inferenceGrowth.enterprise.value = 0.15;
+  blocks.years16_20.inferenceGrowth.agentic.value = 0.20;
+  blocks.years16_20.trainingGrowth.frontier.value = 0.08;
+  blocks.years16_20.trainingGrowth.midtier.value = 0.15;
+  blocks.years16_20.contextLength.averageTokens = 64000;
+  blocks.years16_20.contextLength.growthRate = 0.05;
+  blocks.years16_20.intensityGrowth.value = 0.10;
+  blocks.years16_20.continualLearning.computeGrowth.value = 0.15;
+  blocks.years16_20.continualLearning.dataStorageGrowth.value = 0.15;
+  blocks.years16_20.continualLearning.networkBandwidthGrowth.value = 0.12;
 
-    contextLength: {
-      averageTokens: 16000,
-      growthRate: 0.20,
-      confidence: 'low'
-    },
-
-    intensityGrowth: {
-      value: 0.20,  // Moderating intensity growth
-      confidence: 'low'
-    },
-
-    continualLearning: {
-      computeGrowth: { value: 0.40, confidence: 'low' },
-      dataStorageGrowth: { value: 0.35, confidence: 'low' },
-      networkBandwidthGrowth: { value: 0.30, confidence: 'low' }
-    }
-  },
-
-  years11_15: {
-    label: SEGMENT_LABELS.years11_15,
-
-    inferenceGrowth: {
-      consumer: { value: 0.15, confidence: 'low', source: 'Market saturation' },
-      enterprise: { value: 0.20, confidence: 'low', source: 'Matured market' },
-      agentic: { value: 0.30, confidence: 'low', source: 'Agentic normalized' }
-    },
-
-    trainingGrowth: {
-      frontier: { value: 0.10, confidence: 'low', source: 'New paradigms unclear' },
-      midtier: { value: 0.20, confidence: 'low', source: 'Steady state' }
-    },
-
-    contextLength: {
-      averageTokens: 32000,
-      growthRate: 0.10,
-      confidence: 'low'
-    },
-
-    intensityGrowth: {
-      value: 0.15,  // Slowing intensity growth
-      confidence: 'low'
-    },
-
-    continualLearning: {
-      computeGrowth: { value: 0.25, confidence: 'low' },
-      dataStorageGrowth: { value: 0.25, confidence: 'low' },
-      networkBandwidthGrowth: { value: 0.20, confidence: 'low' }
-    }
-  },
-
-  years16_20: {
-    label: SEGMENT_LABELS.years16_20,
-
-    inferenceGrowth: {
-      consumer: { value: 0.10, confidence: 'low', source: 'Highly uncertain' },
-      enterprise: { value: 0.15, confidence: 'low', source: 'Highly uncertain' },
-      agentic: { value: 0.20, confidence: 'low', source: 'Highly uncertain' }
-    },
-
-    trainingGrowth: {
-      frontier: { value: 0.08, confidence: 'low', source: 'Highly uncertain' },
-      midtier: { value: 0.15, confidence: 'low', source: 'Highly uncertain' }
-    },
-
-    contextLength: {
-      averageTokens: 64000,
-      growthRate: 0.05,
-      confidence: 'low'
-    },
-
-    intensityGrowth: {
-      value: 0.10,  // Minimal intensity growth in far future
-      confidence: 'low'
-    },
-
-    continualLearning: {
-      computeGrowth: { value: 0.15, confidence: 'low' },
-      dataStorageGrowth: { value: 0.15, confidence: 'low' },
-      networkBandwidthGrowth: { value: 0.12, confidence: 'low' }
-    }
-  }
+  return blocks;
 };
 
+export const DEMAND_ASSUMPTIONS_BASE = buildDemandBlocks();
+
 // ============================================
-// EFFICIENCY ASSUMPTIONS BY 5-YEAR BLOCK
+// EFFICIENCY ASSUMPTIONS
 // ============================================
-const EFFICIENCY_YEAR1 = {
+
+const EFFICIENCY_TEMPLATE_YEAR1 = {
   label: SEGMENT_LABELS.year1,
 
-  // Model efficiency (compute per token declines)
-  // NOTE: These are DEPLOYED efficiency rates, not theoretical peaks.
-  // Updated to reflect token efficiency research and real-world propagation lags.
   modelEfficiency: {
-    m_inference: {
-      value: 0.18,  // 18% annual reduction (deployed systems lag theoretical gains)
-      confidence: 'medium',
-      source: 'Deployed model efficiency; rollout lag from frontier research',
-      historicalRange: [0.10, 0.30]
-    },
-    m_training: {
-      value: 0.10,  // 10% annual reduction in compute per capability
-      confidence: 'low',
-      source: 'Scaling law efficiency + optimizer improvements',
-      historicalRange: [0.05, 0.20]
-    }
+    m_inference: { value: 0.18, confidence: 'medium', source: 'Deployed model efficiency (rollout lag)', historicalRange: [0.10, 0.30] },
+    m_training: { value: 0.10, confidence: 'low', source: 'Optimizer + architecture improvements', historicalRange: [0.05, 0.20] }
   },
 
-  // Systems/software throughput improvements
   systemsEfficiency: {
-    s_inference: {
-      value: 0.10,  // 10% annual throughput gain (deployment-lagged)
-      confidence: 'medium',
-      source: 'Batching + scheduling + compiler gains (deployed)',
-      historicalRange: [0.06, 0.18]
-    },
-    s_training: {
-      value: 0.08,  // 8% annual improvement
-      confidence: 'medium',
-      source: 'Distributed training optimizations',
-      historicalRange: [0.05, 0.15]
-    }
+    s_inference: { value: 0.10, confidence: 'medium', source: 'Batching/scheduling/compiler gains', historicalRange: [0.06, 0.18] },
+    s_training: { value: 0.08, confidence: 'medium', source: 'Distributed training optimizations', historicalRange: [0.05, 0.15] }
   },
 
-  // Hardware throughput improvements (perf/$)
-  // H applies to NEW purchases only conceptually, but the model uses it
-  // on all demand. 15% is more realistic for blended fleet improvement.
   hardwareEfficiency: {
-    h: {
-      value: 0.15,  // 15% annual perf/$ improvement (blended fleet)
-      confidence: 'high',
-      source: 'NVIDIA gen-over-gen; blended fleet effect',
-      historicalRange: [0.10, 0.25]
-    },
-    h_memory: {
-      value: 0.12,  // 12% memory bandwidth improvement
-      confidence: 'medium',
-      source: 'HBM generation improvements',
-      historicalRange: [0.08, 0.20]
-    }
+    h: { value: 0.15, confidence: 'high', source: 'Blended fleet gen-over-gen', historicalRange: [0.10, 0.25] },
+    h_memory: { value: 0.12, confidence: 'medium', source: 'HBM generation improvements', historicalRange: [0.08, 0.20] }
   }
 };
 
-const EFFICIENCY_YEARLY_BLOCKS = FIRST_FIVE_YEAR_KEYS.reduce((acc, key, index) => {
-  const segment = ASSUMPTION_SEGMENTS[index];
-  acc[key] = {
-    ...cloneBlock(EFFICIENCY_YEAR1),
-    label: `${segment.label} (${segment.years})`
-  };
-  return acc;
-}, {});
+const buildEfficiencyBlocks = () => {
+  const blocks = {};
+  ASSUMPTION_SEGMENTS.forEach((seg) => {
+    blocks[seg.key] = applyBlockLabel(cloneBlock(EFFICIENCY_TEMPLATE_YEAR1), seg.key, false);
+  });
 
-export const EFFICIENCY_ASSUMPTIONS_BASE = {
-  /**
-   * CORRECTED FORMULAS:
-   *
-   * M_t (model efficiency - compute per token):
-   * M_t = (1-m)^(t/12) where m = annual improvement rate
-   * This DECREASES over time (good - less compute needed)
-   * Goes in NUMERATOR of demand calculation
-   *
-   * S_t (systems/software throughput):
-   * S_t = (1+s)^(t/12) where s = annual improvement rate
-   * This INCREASES over time (good - more throughput)
-   * Goes in DENOMINATOR of demand calculation
-   *
-   * H_t (hardware throughput):
-   * H_t = (1+h)^(t/12) where h = annual improvement rate
-   * This INCREASES over time (good - faster chips)
-   * Goes in DENOMINATOR of demand calculation
-   */
+  // Diminishing returns as horizon extends
+  blocks.years6_10.modelEfficiency.m_inference.value = 0.14;
+  blocks.years6_10.modelEfficiency.m_training.value = 0.08;
+  blocks.years6_10.systemsEfficiency.s_inference.value = 0.08;
+  blocks.years6_10.systemsEfficiency.s_training.value = 0.06;
+  blocks.years6_10.hardwareEfficiency.h.value = 0.12;
+  blocks.years6_10.hardwareEfficiency.h_memory.value = 0.10;
 
-  ...EFFICIENCY_YEARLY_BLOCKS,
+  blocks.years11_15.modelEfficiency.m_inference.value = 0.10;
+  blocks.years11_15.modelEfficiency.m_training.value = 0.06;
+  blocks.years11_15.systemsEfficiency.s_inference.value = 0.06;
+  blocks.years11_15.systemsEfficiency.s_training.value = 0.05;
+  blocks.years11_15.hardwareEfficiency.h.value = 0.08;
+  blocks.years11_15.hardwareEfficiency.h_memory.value = 0.07;
 
-  years6_10: {
-    label: SEGMENT_LABELS.years6_10,
+  blocks.years16_20.modelEfficiency.m_inference.value = 0.08;
+  blocks.years16_20.modelEfficiency.m_training.value = 0.05;
+  blocks.years16_20.systemsEfficiency.s_inference.value = 0.05;
+  blocks.years16_20.systemsEfficiency.s_training.value = 0.04;
+  blocks.years16_20.hardwareEfficiency.h.value = 0.06;
+  blocks.years16_20.hardwareEfficiency.h_memory.value = 0.05;
 
-    modelEfficiency: {
-      m_inference: { value: 0.14, confidence: 'low', source: 'Diminishing returns expected' },
-      m_training: { value: 0.08, confidence: 'low', source: 'Architecture maturation' }
-    },
-
-    systemsEfficiency: {
-      s_inference: { value: 0.08, confidence: 'low', source: 'Continued optimization' },
-      s_training: { value: 0.06, confidence: 'low', source: 'Distributed training matures' }
-    },
-
-    hardwareEfficiency: {
-      h: { value: 0.12, confidence: 'low', source: 'Moore\'s law slowing' },
-      h_memory: { value: 0.10, confidence: 'low', source: 'Memory scaling challenges' }
-    }
-  },
-
-  years11_15: {
-    label: SEGMENT_LABELS.years11_15,
-
-    modelEfficiency: {
-      m_inference: { value: 0.10, confidence: 'low', source: 'Highly uncertain' },
-      m_training: { value: 0.06, confidence: 'low', source: 'Highly uncertain' }
-    },
-
-    systemsEfficiency: {
-      s_inference: { value: 0.06, confidence: 'low', source: 'Highly uncertain' },
-      s_training: { value: 0.05, confidence: 'low', source: 'Highly uncertain' }
-    },
-
-    hardwareEfficiency: {
-      h: { value: 0.08, confidence: 'low', source: 'Post-Moore era' },
-      h_memory: { value: 0.07, confidence: 'low', source: 'New memory tech unclear' }
-    }
-  },
-
-  years16_20: {
-    label: SEGMENT_LABELS.years16_20,
-
-    modelEfficiency: {
-      m_inference: { value: 0.08, confidence: 'low', source: 'Highly uncertain' },
-      m_training: { value: 0.05, confidence: 'low', source: 'Highly uncertain' }
-    },
-
-    systemsEfficiency: {
-      s_inference: { value: 0.05, confidence: 'low', source: 'Highly uncertain' },
-      s_training: { value: 0.04, confidence: 'low', source: 'Highly uncertain' }
-    },
-
-    hardwareEfficiency: {
-      h: { value: 0.06, confidence: 'low', source: 'Speculative' },
-      h_memory: { value: 0.05, confidence: 'low', source: 'Speculative' }
-    }
-  }
+  return blocks;
 };
 
+export const EFFICIENCY_ASSUMPTIONS_BASE = buildEfficiencyBlocks();
+
 // ============================================
-// SUPPLY ASSUMPTIONS BY 5-YEAR BLOCK
+// SUPPLY ASSUMPTIONS
 // ============================================
-const SUPPLY_YEAR1 = {
+
+const SUPPLY_TEMPLATE_YEAR1 = {
   label: SEGMENT_LABELS.year1,
-
-  // Capacity expansion rates by node group
   expansionRates: {
-    packaging: {
-      value: 0.35,  // 35% annual capacity growth
-      confidence: 'high',
-      source: 'TSMC CoWoS expansion plans, Amkor commitments'
-    },
-    foundry: {
-      value: 0.15,  // 15% annual advanced node growth
-      confidence: 'high',
-      source: 'TSMC fab construction schedule'
-    },
-    memory: {
-      value: 0.25,  // 25% HBM capacity growth
-      confidence: 'medium',
-      source: 'SK Hynix, Samsung expansion announcements'
-    },
-    datacenter: {
-      value: 0.20,  // 20% DC capacity growth
-      confidence: 'medium',
-      source: 'Hyperscaler capex guidance'
-    },
-    power: {
-      value: 0.08,  // 8% grid/transformer capacity growth
-      confidence: 'medium',
-      source: 'Utility capex plans, DOE reports'
-    }
+    packaging: { value: 0.35, confidence: 'high', source: 'CoWoS expansion plans + OSAT commitments' },
+    foundry: { value: 0.15, confidence: 'high', source: 'Advanced-node fab construction schedules' },
+    memory: { value: 0.25, confidence: 'medium', source: 'HBM capacity expansion announcements' },
+    datacenter: { value: 0.20, confidence: 'medium', source: 'Hyperscaler capex guidance' },
+    power: { value: 0.08, confidence: 'medium', source: 'Utility capex + transformer constraints' }
   }
 };
 
-const SUPPLY_YEARLY_BLOCKS = FIRST_FIVE_YEAR_KEYS.reduce((acc, key, index) => {
-  const segment = ASSUMPTION_SEGMENTS[index];
-  acc[key] = {
-    ...cloneBlock(SUPPLY_YEAR1),
-    label: `${segment.label} (${segment.years})`
-  };
-  return acc;
-}, {});
+const buildSupplyBlocks = () => {
+  const blocks = {};
+  ASSUMPTION_SEGMENTS.forEach((seg) => {
+    blocks[seg.key] = applyBlockLabel(cloneBlock(SUPPLY_TEMPLATE_YEAR1), seg.key, false);
+  });
 
-export const SUPPLY_ASSUMPTIONS_BASE = {
-  ...SUPPLY_YEARLY_BLOCKS,
+  blocks.years6_10.expansionRates.packaging.value = 0.20;
+  blocks.years6_10.expansionRates.foundry.value = 0.10;
+  blocks.years6_10.expansionRates.memory.value = 0.18;
+  blocks.years6_10.expansionRates.datacenter.value = 0.15;
+  blocks.years6_10.expansionRates.power.value = 0.10;
 
-  years6_10: {
-    label: SEGMENT_LABELS.years6_10,
-    expansionRates: {
-      packaging: { value: 0.20, confidence: 'low' },
-      foundry: { value: 0.10, confidence: 'low' },
-      memory: { value: 0.18, confidence: 'low' },
-      datacenter: { value: 0.15, confidence: 'low' },
-      power: { value: 0.10, confidence: 'low' }
-    }
-  },
+  blocks.years11_15.expansionRates.packaging.value = 0.12;
+  blocks.years11_15.expansionRates.foundry.value = 0.08;
+  blocks.years11_15.expansionRates.memory.value = 0.12;
+  blocks.years11_15.expansionRates.datacenter.value = 0.10;
+  blocks.years11_15.expansionRates.power.value = 0.08;
 
-  years11_15: {
-    label: SEGMENT_LABELS.years11_15,
-    expansionRates: {
-      packaging: { value: 0.12, confidence: 'low' },
-      foundry: { value: 0.08, confidence: 'low' },
-      memory: { value: 0.12, confidence: 'low' },
-      datacenter: { value: 0.10, confidence: 'low' },
-      power: { value: 0.08, confidence: 'low' }
-    }
-  },
+  blocks.years16_20.expansionRates.packaging.value = 0.08;
+  blocks.years16_20.expansionRates.foundry.value = 0.05;
+  blocks.years16_20.expansionRates.memory.value = 0.08;
+  blocks.years16_20.expansionRates.datacenter.value = 0.08;
+  blocks.years16_20.expansionRates.power.value = 0.06;
 
-  years16_20: {
-    label: SEGMENT_LABELS.years16_20,
-    expansionRates: {
-      packaging: { value: 0.08, confidence: 'low' },
-      foundry: { value: 0.05, confidence: 'low' },
-      memory: { value: 0.08, confidence: 'low' },
-      datacenter: { value: 0.08, confidence: 'low' },
-      power: { value: 0.06, confidence: 'low' }
-    }
-  }
+  return blocks;
 };
 
-export const DEMAND_ASSUMPTIONS = deepMerge(
-  DEMAND_ASSUMPTIONS_BASE,
-  assumptionOverrides?.demand
-);
+export const SUPPLY_ASSUMPTIONS_BASE = buildSupplyBlocks();
 
-export const EFFICIENCY_ASSUMPTIONS = deepMerge(
-  EFFICIENCY_ASSUMPTIONS_BASE,
-  assumptionOverrides?.efficiency
-);
+// ============================================
+// APPLY JSON OVERRIDES (with normalization)
+// ============================================
 
-export const SUPPLY_ASSUMPTIONS = deepMerge(
-  SUPPLY_ASSUMPTIONS_BASE,
-  assumptionOverrides?.supply
-);
+const DEMAND_OVERRIDES_NORM = normalizeOverridesToTemplate(DEMAND_ASSUMPTIONS_BASE.year1, assumptionOverrides?.demand || {});
+const EFF_OVERRIDES_NORM = normalizeOverridesToTemplate(EFFICIENCY_ASSUMPTIONS_BASE.year1, assumptionOverrides?.efficiency || {});
+const SUPPLY_OVERRIDES_NORM = normalizeOverridesToTemplate(SUPPLY_ASSUMPTIONS_BASE.year1, assumptionOverrides?.supply || {});
+
+export const DEMAND_ASSUMPTIONS = deepMerge(DEMAND_ASSUMPTIONS_BASE, DEMAND_OVERRIDES_NORM);
+export const EFFICIENCY_ASSUMPTIONS = deepMerge(EFFICIENCY_ASSUMPTIONS_BASE, EFF_OVERRIDES_NORM);
+export const SUPPLY_ASSUMPTIONS = deepMerge(SUPPLY_ASSUMPTIONS_BASE, SUPPLY_OVERRIDES_NORM);
 
 export const ASSUMPTION_METADATA = {
   asOfDate: DEFAULT_AS_OF_DATE,
@@ -635,137 +455,80 @@ export const ASSUMPTION_METADATA = {
 // ============================================
 // TRANSLATION INTENSITIES (Physical conversion factors)
 // ============================================
+
 export const TRANSLATION_INTENSITIES = {
   // Workloads → Accelerators
   compute: {
+    /**
+     * flopsPerToken:
+     * - Used only if the demand engine reads it (recommended).
+     * - If calculations.js uses its own constants, keep this aligned to avoid confusion.
+     */
     flopsPerToken: {
-      value: 2e9,  // 2 GFLOP per token (varies by model)
+      value: 140e9,
       confidence: 'medium',
-      source: 'Model architecture analysis',
-      historicalRange: [5e8, 1e10]
+      source: 'Reasoning-heavy inference mix; adjust as model changes',
+      historicalRange: [2e9, 2e12]
     },
     gpuUtilization: {
-      inference: 0.60,  // 60% average utilization
-      training: 0.85    // 85% for training
+      inference: 0.60,
+      training: 0.85
     },
     acceleratorHoursPerGpu: {
-      value: 720,  // Hours per month
+      value: 720,
       unit: 'hours/month'
     }
   },
 
   // Accelerators → Components
   gpuToComponents: {
-    hbmStacksPerGpu: {
-      value: 8,  // H100/H200 have 8 stacks
-      confidence: 'high',
-      source: 'NVIDIA specs'
-    },
-    cowosWaferEquivPerGpu: {
-      value: 0.3,  // ~3.3 GPUs per CoWoS wafer-equiv (package vs wafer-adjusted)
-      confidence: 'medium',
-      source: 'Die size analysis, wafer-equivalent normalization'
-    },
-    hybridBondingPerGpu: {
-      value: 0.35,  // Wafer-equiv per GPU if fully adopted (SoIC-style subset)
-      confidence: 'low',
-      source: 'Hybrid bonding roadmap estimates'
-    },
-    hybridBondingPackageShare: {
-      value: 0.2,  // Share of accelerator packages that ever require hybrid bonding
-      confidence: 'low',
-      source: 'SoIC/3D-stacking penetration assumptions'
-    },
-    hybridBondingAdoption: {
-      initial: 0.02,  // 2% of GPUs using hybrid bonding in early ramp
-      target: 0.25,    // 25% adoption at maturity
-      halflifeMonths: 36,
-      confidence: 'low',
-      source: 'Advanced packaging adoption curves'
-    },
-    advancedWafersPerGpu: {
-      value: 0.3,  // Logic die (reticle-limited, multi-die packages)
-      confidence: 'high',
-      source: 'Reticle limit analysis'
-    },
-    serverDramGbPerGpu: {
-      value: 64,  // 64GB system DRAM per GPU
-      confidence: 'medium'
-    }
+    hbmStacksPerGpu: { value: 8, confidence: 'high', source: 'H100/H200 class specs' },
+    cowosWaferEquivPerGpu: { value: 0.3, confidence: 'medium', source: 'Package wafer-equivalent normalization' },
+
+    hybridBondingPerGpu: { value: 0.35, confidence: 'low', source: 'Hybrid bonding roadmap estimates' },
+    hybridBondingPackageShare: { value: 0.2, confidence: 'low', source: '3D / SoIC penetration assumptions' },
+    hybridBondingAdoption: { initial: 0.02, target: 0.25, halflifeMonths: 36, confidence: 'low', source: 'Adoption curve' },
+
+    advancedWafersPerGpu: { value: 0.3, confidence: 'high', source: 'Reticle/multi-die normalization' },
+    serverDramGbPerGpu: { value: 64, confidence: 'medium', source: 'System DRAM per GPU' }
   },
 
   // Servers → Infrastructure
   serverToInfra: {
-    gpusPerServer: {
-      value: 8,  // DGX/HGX style
-      confidence: 'high'
-    },
-    serversPerRack: {
-      value: 4,  // Dense GPU racks
-      confidence: 'high'
-    },
-    kwPerGpu: {
-      value: 1.0,  // 1kW per GPU including overhead
-      confidence: 'medium',
-      source: 'H100 TDP + infrastructure overhead'
-    },
-    pue: {
-      value: 1.3,  // Modern efficient DC
-      confidence: 'high',
-      source: 'Hyperscaler efficiency reports'
-    }
+    gpusPerServer: { value: 8, confidence: 'high' },
+    serversPerRack: { value: 4, confidence: 'high' },
+    kwPerGpu: { value: 1.0, confidence: 'medium', source: 'GPU + overhead' },
+    pue: { value: 1.3, confidence: 'high', source: 'Hyperscaler PUE' }
   },
 
-  // Power chain
   powerChain: {
-    transformersPerMw: {
-      value: 0.02,  // 1 LPT per 50MW
-      confidence: 'medium',
-      source: 'Utility infrastructure norms'
-    },
-    redundancyFactor: {
-      value: 1.5,  // N+1 for critical power
-      confidence: 'high'
-    }
+    transformersPerMw: { value: 0.02, confidence: 'medium', source: '~1 LPT / 50 MW' },
+    redundancyFactor: { value: 1.5, confidence: 'high' }
   }
 };
 
 // ============================================
-// SCENARIO DEFINITIONS
+// SCENARIOS
 // ============================================
-/**
- * Scenario inheritance helper - deep-merges overrides into year 1 defaults
- * Ensures scenarios don't duplicate year 1 and only override what's different
- */
-function inheritYear1(overrides = {}) {
-  const b0 = DEMAND_ASSUMPTIONS[FIRST_ASSUMPTION_KEY];
-  return {
-    ...b0,
-    ...overrides,
-    workloadBase: {
-      ...b0.workloadBase,
-      ...(overrides.workloadBase || {}),
-      inferenceTokensPerMonth: {
-        ...b0.workloadBase.inferenceTokensPerMonth,
-        ...(overrides.workloadBase?.inferenceTokensPerMonth || {})
-      },
-      trainingRunsPerMonth: {
-        ...b0.workloadBase.trainingRunsPerMonth,
-        ...(overrides.workloadBase?.trainingRunsPerMonth || {})
-      },
-      continualLearningBase: {
-        ...b0.workloadBase.continualLearningBase,
-        ...(overrides.workloadBase?.continualLearningBase || {})
-      }
-    }
-  };
-}
 
-function applyOverridesToYears(overrides = {}) {
+/**
+ * Scenario helper:
+ * - Accepts sparse overrides and deep-merges into defaults.
+ * - Allows convenient numeric shorthand (normalized later).
+ */
+const applyOverridesToYears = (overrides = {}) => {
   return FIRST_FIVE_YEAR_KEYS.reduce((acc, key) => {
     acc[key] = overrides;
     return acc;
   }, {});
+};
+
+/**
+ * Inherit year1 demand block while allowing partial overrides.
+ */
+function inheritYear1Demand(overrides = {}) {
+  const b0 = DEMAND_ASSUMPTIONS_BASE[FIRST_ASSUMPTION_KEY];
+  return deepMerge(cloneBlock(b0), overrides);
 }
 
 export const SCENARIOS = {
@@ -773,7 +536,7 @@ export const SCENARIOS = {
     id: 'base',
     name: 'Base Case',
     description: 'Balanced growth with moderate efficiency gains',
-    overrides: {}  // Uses default assumptions
+    overrides: {}
   },
 
   highDemandSlowEfficiency: {
@@ -782,12 +545,12 @@ export const SCENARIOS = {
     description: 'Strong adoption but efficiency gains disappoint',
     overrides: {
       demand: applyOverridesToYears({
-          inferenceGrowth: { consumer: 0.55, enterprise: 0.70, agentic: 1.50 },
-          trainingGrowth: { frontier: 0.40, midtier: 0.70 }
+        inferenceGrowth: { consumer: 0.55, enterprise: 0.70, agentic: 1.50 },
+        trainingGrowth: { frontier: 0.40, midtier: 0.70 }
       }),
       efficiency: applyOverridesToYears({
-          modelEfficiency: { m_inference: 0.25, m_training: 0.12 },
-          hardwareEfficiency: { h: 0.20 }
+        modelEfficiency: { m_inference: 0.25, m_training: 0.12 },
+        hardwareEfficiency: { h: 0.20 }
       })
     }
   },
@@ -798,12 +561,12 @@ export const SCENARIOS = {
     description: 'Strong adoption with rapid efficiency improvements',
     overrides: {
       demand: applyOverridesToYears({
-          inferenceGrowth: { consumer: 0.55, enterprise: 0.70, agentic: 1.50 }
+        inferenceGrowth: { consumer: 0.55, enterprise: 0.70, agentic: 1.50 }
       }),
       efficiency: applyOverridesToYears({
-          modelEfficiency: { m_inference: 0.55, m_training: 0.30 },
-          systemsEfficiency: { s_inference: 0.35 },
-          hardwareEfficiency: { h: 0.40 }
+        modelEfficiency: { m_inference: 0.55, m_training: 0.30 },
+        systemsEfficiency: { s_inference: 0.35 },
+        hardwareEfficiency: { h: 0.40 }
       })
     }
   },
@@ -828,13 +591,13 @@ export const SCENARIOS = {
   geopoliticalShock: {
     id: 'geopoliticalShock',
     name: 'Geopolitical Shock',
-    description: 'Regional supply disruption (Taiwan scenario)',
+    description: 'Regional supply disruption',
     overrides: {
       supply: {
-        shockMonth: 24,  // Shock occurs at month 24
+        shockMonth: 24,
         affectedNodes: ['cowos_capacity', 'advanced_wafers', 'hbm_stacks'],
-        capacityReduction: 0.50,  // 50% reduction
-        recoveryMonths: 36        // 3 years to recover
+        capacityReduction: 0.50,
+        recoveryMonths: 36
       }
     }
   },
@@ -842,21 +605,18 @@ export const SCENARIOS = {
   tight2026: {
     id: 'tight2026',
     name: '2026 Tight Market (Backlog + Allocation)',
-    description: 'Sold-out components + large order backlogs; shortages visible immediately. ' +
-      'Reflects Jan 2026 market: HBM sold out, CoWoS at capacity, GPU backlog ~900K.',
-    demandAssumptions: inheritYear1({ asOfDate: '2026-01-01' }),
+    description: 'Sold-out components + large order backlogs; shortages visible immediately.',
+    demandAssumptions: inheritYear1Demand({ asOfDate: '2026-01-01' }),
     overrides: {
       startingState: {
-        // Force installed base to known current estimate to avoid drift
-        installedBase: 1200000, 
-        
+        installedBase: 1200000,
         backlogByNode: {
-          gpu_datacenter: 900000,   // ~900K GPU order backlog
-          hbm_stacks: 7200000,     // 900K GPUs × 8 stacks = 7.2M stacks backlog
-          cowos_capacity: 270000,  // 900K GPUs × 0.3 wafer-equiv = 270K wafer backlog
-          advanced_wafers: 270000, // 900K GPUs × 0.3 wafers = 270K wafer backlog
-          server_assembly: 112500, // 900K / 8 GPUs per server
-          datacenter_mw: 1170      // 900K GPUs × 1.3 kW = 1,170 MW
+          gpu_datacenter: 900000,
+          hbm_stacks: 7200000,
+          cowos_capacity: 270000,
+          advanced_wafers: 270000,
+          server_assembly: 112500,
+          datacenter_mw: 1170
         }
       }
     }
@@ -864,11 +624,11 @@ export const SCENARIOS = {
 };
 
 // ============================================
-// HELPER FUNCTIONS
+// EXPORTED HELPERS (used across the app)
 // ============================================
 
 /**
- * Get the block index for a given month
+ * Get the block index for a given month.
  */
 export function getBlockForMonth(month) {
   const index = ASSUMPTION_SEGMENTS.findIndex(
@@ -878,7 +638,7 @@ export function getBlockForMonth(month) {
 }
 
 /**
- * Get the block key for a given month
+ * Get the block key for a given month.
  */
 export function getBlockKeyForMonth(month) {
   const segment = ASSUMPTION_SEGMENTS[getBlockForMonth(month)];
@@ -886,53 +646,26 @@ export function getBlockKeyForMonth(month) {
 }
 
 /**
- * Interpolate assumption value for a specific month using CAGR within blocks
+ * Interpolate assumption value for a specific month using simple block lookup.
+ * If the resolved node is an object with {value}, returns .value.
  */
 export function interpolateAssumption(assumptions, month, path) {
   const blockKey = getBlockKeyForMonth(month);
   const block = assumptions[blockKey];
 
-  // Navigate the path to get the value
   let value = block;
-  for (const key of path) {
-    value = value?.[key];
-  }
+  for (const key of path) value = value?.[key];
 
-  return typeof value === 'object' ? value.value : value;
+  return (isPlainObject(value) && Object.prototype.hasOwnProperty.call(value, 'value')) ? value.value : value;
 }
 
-/**
- * Calculate efficiency multiplier M_t (model efficiency - decays)
- */
-export function calculateMt(m, monthsFromStart) {
-  return Math.pow(1 - m, monthsFromStart / 12);
-}
+// Efficiency multipliers
+export function calculateMt(m, monthsFromStart) { return Math.pow(1 - m, monthsFromStart / 12); }
+export function calculateSt(s, monthsFromStart) { return Math.pow(1 + s, monthsFromStart / 12); }
+export function calculateHt(h, monthsFromStart) { return Math.pow(1 + h, monthsFromStart / 12); }
 
-/**
- * Calculate efficiency multiplier S_t (systems throughput - grows)
- */
-export function calculateSt(s, monthsFromStart) {
-  return Math.pow(1 + s, monthsFromStart / 12);
-}
-
-/**
- * Calculate efficiency multiplier H_t (hardware throughput - grows)
- */
-export function calculateHt(h, monthsFromStart) {
-  return Math.pow(1 + h, monthsFromStart / 12);
-}
-
-/**
- * Calculate stacked yield for HBM
- * Y_stack(t) = Y_target - (Y_target - Y_initial) * 2^(-t/HL)
- */
+// Yield models
 export function calculateStackedYield(yieldInitial, yieldTarget, halflifeMonths, monthsFromStart) {
   return yieldTarget - (yieldTarget - yieldInitial) * Math.pow(2, -monthsFromStart / halflifeMonths);
 }
-
-/**
- * Calculate simple yield
- */
-export function calculateSimpleYield(yieldLoss) {
-  return 1 - yieldLoss;
-}
+export function calculateSimpleYield(yieldLoss) { return 1 - yieldLoss; }
