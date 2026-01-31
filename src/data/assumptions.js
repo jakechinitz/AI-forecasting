@@ -668,6 +668,11 @@ export const TRANSLATION_INTENSITIES = {
       confidence: 'low',
       source: 'Hybrid bonding roadmap estimates'
     },
+    hybridBondingPackageShare: {
+      value: 0.2,  // Share of accelerator packages that ever require hybrid bonding
+      confidence: 'low',
+      source: 'SoIC/3D-stacking penetration assumptions'
+    },
     hybridBondingAdoption: {
       initial: 0.02,  // 2% of GPUs using hybrid bonding in early ramp
       target: 0.25,    // 25% adoption at maturity

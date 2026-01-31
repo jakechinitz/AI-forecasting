@@ -82,6 +82,7 @@ function getGpuToComponentIntensities() {
     hbmStacksPerGpu: resolveAssumptionValue(gpuToComponents.hbmStacksPerGpu?.value, 8),
     cowosWaferEquivPerGpu: resolveAssumptionValue(gpuToComponents.cowosWaferEquivPerGpu?.value, 1.0),
     hybridBondingPerGpu: resolveAssumptionValue(gpuToComponents.hybridBondingPerGpu?.value, 0.1),
+    hybridBondingPackageShare: resolveAssumptionValue(gpuToComponents.hybridBondingPackageShare?.value, 0.2),
     hybridBondingAdoption: {
       initial: resolveAssumptionValue(gpuToComponents.hybridBondingAdoption?.initial, 0.1),
       target: resolveAssumptionValue(gpuToComponents.hybridBondingAdoption?.target, 0.5),
@@ -674,7 +675,9 @@ export function gpuToComponentDemands(gpuCount, month, effectiveHbmPerGpu = 8) {
   const hybridBondingAdoption = calculateHybridBondingAdoption(month);
   const gpusPerServer = serverInfra.gpusPerServer;
   const powerMwPerGpu = (serverInfra.kwPerGpu * serverInfra.pue) / 1000;
-  const hybridBondingIntensity = gpuToComponents.hybridBondingPerGpu * hybridBondingAdoption;
+  const hybridBondingIntensity = gpuToComponents.hybridBondingPerGpu
+    * gpuToComponents.hybridBondingPackageShare
+    * hybridBondingAdoption;
 
   return {
     // Semiconductor components
