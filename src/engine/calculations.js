@@ -926,7 +926,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     // OPTION 3: Component demand driven by production requirement
     const gpuProductionRequirement = gpuDemand + gpuState.backlog;
-    const gpuPurchasesThisMonth = gpuProductionRequirement;
+    const deploymentVelocityCap = calculateDeploymentVelocityCap(month, scenarioOverrides, nodeState);
+    const gpuPurchasesThisMonth = Math.min(gpuProductionRequirement, deploymentVelocityCap);
 
     // Calculate effective HBM per GPU (increases with continual learning adoption)
     const effectiveHbmPerGpuThisMonth = calculateEffectiveHbmPerGpu(month, demandAssumptions);
@@ -1043,7 +1044,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const maxByPower = componentSupply.datacenter_mw / MWperGPU;
 
     // GPU delivered = min of production and all gating components
-    const gpuAvailableToShip = Math.min(gpuShipmentsRaw + gpuState.inventory, gpuDemand + gpuState.backlog);
+    const gpuAvailableToShip = Math.min(
+      gpuShipmentsRaw + gpuState.inventory,
+      gpuDemand + gpuState.backlog,
+      deploymentVelocityCap
+    );
     const gpuDelivered = Math.min(gpuAvailableToShip, maxByHBM, maxByCoWoS, maxByPower);
 
     // Idle GPUs = produced/shipped but blocked by component constraints
@@ -1387,10 +1392,19 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const forecastGpuGap = Math.max(0, forecastRequiredGpuBase - forecastGpuState.installedBase);
       const forecastGpuDemand = forecastGpuGap + forecastGpuRetirements;
       const forecastGpuProductionRequirement = forecastGpuDemand + forecastGpuState.backlog;
+      const forecastDeploymentCap = calculateDeploymentVelocityCap(
+        forecastMonth,
+        scenarioOverrides,
+        nodeState
+      );
+      const cappedForecastGpuProductionRequirement = Math.min(
+        forecastGpuProductionRequirement,
+        forecastDeploymentCap
+      );
 
       const forecastEffectiveHbmPerGpu = calculateEffectiveHbmPerGpu(forecastMonth, demandAssumptions);
       const forecastComponentDemands = gpuToComponentDemands(
-        forecastGpuProductionRequirement,
+        cappedForecastGpuProductionRequirement,
         forecastMonth,
         forecastEffectiveHbmPerGpu
       );
@@ -1412,7 +1426,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
         let forecastDemand = 0;
         if (node.id === 'gpu_datacenter') {
-          forecastDemand = forecastGpuProductionRequirement;
+          forecastDemand = cappedForecastGpuProductionRequirement;
         } else if (node.id === 'gpu_inference') {
           const inferenceState = nodeState['gpu_inference'];
           const retirements = inferenceState.installedBase / inferenceState.lifetimeMonths;
