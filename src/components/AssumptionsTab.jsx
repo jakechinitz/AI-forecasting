@@ -74,7 +74,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                 onAssumptionChange(category, blockKey, path, newValue);
               }
             }}
-            style={{ width: '72px' }}
+            style={{ width: '56px' }}
           />
           <span className="input-suffix">{suffix}</span>
           {confidence && (

@@ -59,9 +59,9 @@
   --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.05);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.06);
 
-  /* Borders - thin black */
-  --border-color: rgba(0, 0, 0, 0.12);
-  --border-color-light: rgba(0, 0, 0, 0.06);
+  /* Borders - thin but visibly black */
+  --border-color: rgba(0, 0, 0, 0.22);
+  --border-color-light: rgba(0, 0, 0, 0.10);
 
   /* Transitions */
   --transition-fast: 150ms ease;
@@ -288,12 +288,12 @@ tr.selected {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.12);
+  background: rgba(0, 0, 0, 0.15);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.25);
 }
 
 /* Status badges */
