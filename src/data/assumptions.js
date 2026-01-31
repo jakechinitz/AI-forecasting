@@ -848,8 +848,9 @@ export const SCENARIOS = {
           gpu_datacenter: 900000,   // ~900K GPU order backlog
           hbm_stacks: 7200000,     // 900K GPUs × 8 stacks = 7.2M stacks backlog
           cowos_capacity: 270000,  // 900K GPUs × 0.3 wafer-equiv = 270K wafer backlog
+          advanced_wafers: 270000, // 900K GPUs × 0.3 wafers = 270K wafer backlog
           server_assembly: 112500, // 900K / 8 GPUs per server
-          datacenter_mw: 900       // 900K GPUs × 0.001 MW
+          datacenter_mw: 1170      // 900K GPUs × 1.3 kW = 1,170 MW
         }
       }
     }
