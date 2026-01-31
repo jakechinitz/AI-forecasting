@@ -1,11 +1,12 @@
 /**
  * AI Infrastructure Supply Chain - Calculation Engine
  *
- * FINAL PERFECTED VERSION (v31):
- * * DIAGNOSTICS: Unmet Demand = Plan - True Potential (Physics, not Policy).
- * * PHYSICS: Throughput nodes strictly clamped to Capacity (No teleportation).
- * * CALIBRATION: Dynamic Installed Base + Actionable Month 0 Info.
- * * SAFETY: Continuous Efficiency Trend Checks.
+ * FINAL PERFECTED VERSION (v32 - FIXED):
+ * * FIX: Training Demand now included (Frontier + Midtier).
+ * * FIX: Efficiency formulas apply S and H to denominator.
+ * * FIX: Scenario overrides for Installed Base & Backlog now active.
+ * * FIX: Component backlogs persist (no longer wipe monthly).
+ * * FIX: Intensity map links to Assumptions source of truth.
  */
 
 import { NODES } from '../data/nodes.js';
@@ -83,7 +84,9 @@ function getNodeType(nodeId) {
 const EPSILON = 1e-10;
 const CATCHUP_MONTHS = 24; 
 const DEFAULT_BUFFER_MONTHS = 2; 
-const BACKLOG_PAYDOWN_MONTHS = 24; 
+
+// FIX: Aggressive paydown to simulate shortage urgency (was 24)
+const BACKLOG_PAYDOWN_MONTHS = 6; 
 
 function deepMerge(target, source) {
   if (!source) return target;
@@ -226,16 +229,25 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
   const blockKey = getBlockKeyForMonth(month);
   const block = assumptions?.[blockKey] || EFFICIENCY_ASSUMPTIONS[blockKey];
 
+  // Model Efficiency (M) - Decreases cost (Decay)
   const m_infer_annual = resolveAssumptionValue(block?.modelEfficiency?.m_inference?.value, 0.18);
   const m_train_annual = resolveAssumptionValue(block?.modelEfficiency?.m_training?.value, 0.10);
   
+  // Systems (S) & Hardware (H) - Increases throughput (Growth)
+  const s_infer_annual = resolveAssumptionValue(block?.systemsEfficiency?.s_inference?.value, 0.10);
+  const h_annual = resolveAssumptionValue(block?.hardwareEfficiency?.h?.value, 0.15);
+
   const decay_inf = Math.pow(1 - m_infer_annual, 1/12);
   const decay_train = Math.pow(1 - m_train_annual, 1/12);
+  const growth_sys_inf = Math.pow(1 + s_infer_annual, 1/12);
+  const growth_hw = Math.pow(1 + h_annual, 1/12);
   
   const current = {
       M_inference: prev.M_inference * decay_inf,
       M_training: prev.M_training * decay_train,
-      S_inference: 1, S_training: 1, H: 1
+      S_inference: prev.S_inference * growth_sys_inf,
+      S_training: 1, // Placeholder if needed
+      H: prev.H * growth_hw
   };
   
   // SAFETY: Continuous Efficiency Trend Check
@@ -253,43 +265,61 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
 function calculateRequiredGpus(month, demandAssumptions, efficiencyAssumptions, effCache, warnings, warnedSet, installedBaseTotal) {
     const block = getDemandBlockForMonth(month, demandAssumptions);
     
-    // 1. Demand Inputs
+    // 1. Demand Inputs (Inference)
     const inferenceDemand = calculateInferenceDemand(month, block);
     const totalTokens = inferenceDemand.total;
+
+    // 2. Demand Inputs (Training) - FIX: Added Training Calculation
+    const trainingDemand = calculateTrainingDemand(month, block);
+
+    // FIX: Pull intensity from block or default (Assumption is Hours per Run)
+    const hoursFrontier = resolveAssumptionValue(block?.workloadBase?.trainingComputePerRun?.frontier, 50e6);
+    const hoursMidtier = resolveAssumptionValue(block?.workloadBase?.trainingComputePerRun?.midtier, 200000);
     
-    // 2. Physics
+    // 3. Physics Constants
     const flopsPerToken = PHYSICS_DEFAULTS.flopsPerToken;
     const flopsPerGpu = PHYSICS_DEFAULTS.flopsPerGpu;
-    const utilization = PHYSICS_DEFAULTS.utilization;
+    const utilization = PHYSICS_DEFAULTS.utilization; // 0.35
     const secondsPerMonth = PHYSICS_DEFAULTS.secondsPerMonth;
-    
-    // 3. Efficiency
+    const hoursPerMonth = 720;
+    const trainingUtilization = 0.50; // Training allows higher util than inference
+
+    // 4. Efficiency
     const eff = getEfficiencyMultipliers(month, efficiencyAssumptions, effCache, warnings, warnedSet);
     
-    // 4. Calc
+    // 5. Calc Inference GPUs
+    // Formula: (Tokens * M) / (Throughput * S * H)
+    // S and H are denominators (Good things that increase capacity)
     const effectiveFlopsPerToken = flopsPerToken * eff.M_inference; 
-    const effectiveFlopsPerGpuMonth = flopsPerGpu * utilization * secondsPerMonth;
-    
-    const required = (totalTokens * effectiveFlopsPerToken) / effectiveFlopsPerGpuMonth;
+    const rawFlopsPerGpuMonth = flopsPerGpu * utilization * secondsPerMonth;
+    // FIX: Apply S and H to denominator
+    const effectiveThroughputInference = rawFlopsPerGpuMonth * eff.S_inference * eff.H;
 
-    // 5. CALIBRATION GUARD (Dynamic Month 0)
+    const requiredInference = (totalTokens * effectiveFlopsPerToken) / effectiveThroughputInference;
+
+    // 6. Calc Training GPUs
+    // Formula: (Runs * Hours/Run * M) / (Hours/Month * Utilization * H)
+    // Note: S (Systems) usually implicit in hours/run, but H (Hardware) definitely scales it.
+    const totalTrainingHours = (trainingDemand.frontier * hoursFrontier) + (trainingDemand.midtier * hoursMidtier);
+    // FIX: Apply Hardware efficiency to training throughput
+    const requiredTraining = (totalTrainingHours * eff.M_training) / (hoursPerMonth * trainingUtilization * eff.H);
+
+    const requiredTotal = requiredInference + requiredTraining;
+
+    // 7. CALIBRATION GUARD (Dynamic Month 0)
     if (month === 0) {
-        // Log Implied Capacity for debugging
-        const impliedTokens = (installedBaseTotal * effectiveFlopsPerGpuMonth) / effectiveFlopsPerToken;
-        
-        // Push INFO (Using warnings array for visibility, prepended with INFO)
         if (!warnedSet.has('calib_info')) {
-             warnings.push(`INFO: Month 0 Installed Base (${formatNumber(installedBaseTotal)}) implies capacity for ${formatNumber(impliedTokens)} tokens/month.`);
+             warnings.push(`INFO: Month 0 Demand: ${formatNumber(requiredTotal)} GPUs (Infer: ${formatNumber(requiredInference)}, Train: ${formatNumber(requiredTraining)}). Installed: ${formatNumber(installedBaseTotal)}.`);
              warnedSet.add('calib_info');
         }
 
-        const ratio = required / Math.max(installedBaseTotal, 1);
+        const ratio = requiredTotal / Math.max(installedBaseTotal, 1);
         if (ratio < 0.1 || ratio > 2.0) {
-            warnings.push(`CALIBRATION ALARM: Demand (${formatNumber(required)}) is ${(ratio*100).toFixed(0)}% of Installed Base. Adjust Assumptions.`);
+            warnings.push(`CALIBRATION ALARM: Demand (${formatNumber(requiredTotal)}) is ${(ratio*100).toFixed(0)}% of Installed Base. Adjust Assumptions.`);
         }
     }
 
-    return required;
+    return requiredTotal;
 }
 
 // ============================================
@@ -307,13 +337,19 @@ function buildIntensityMap() {
 
     map['hbm_stacks'] = gpuToComp.hbmStacksPerGpu?.value || 8; 
     map['datacenter_mw'] = mwPerGpu; 
-    map['advanced_wafers'] = 0.5; 
-    map['abf_substrate'] = 0.02; 
     
-    map['cowos_capacity'] = gpuToComp.cowosWaferEquivPerGpu?.value || 1; 
-    map['hybrid_bonding'] = 0.1; 
-    map['server_assembly'] = 1 / (serverToInfra.gpusPerServer?.value || 8); 
+    // FIX: Linked directly to Assumptions/Nodes (No more magic numbers)
+    map['advanced_wafers'] = gpuToComp.advancedWafersPerGpu?.value || 0.3; 
+    map['abf_substrate'] = NODE_MAP.get('abf_substrate')?.inputIntensity || 0.02; 
+    
+    map['cowos_capacity'] = gpuToComp.cowosWaferEquivPerGpu?.value || 0.3; 
+    
+    // Hybrid Bonding: Intensity * Penetration Rate
+    const hbIntensity = gpuToComp.hybridBondingPerGpu?.value || 0.35;
+    const hbShare = gpuToComp.hybridBondingPackageShare?.value || 0.2;
+    map['hybrid_bonding'] = hbIntensity * hbShare; 
 
+    map['server_assembly'] = 1 / (serverToInfra.gpusPerServer?.value || 8); 
     map['grid_interconnect'] = mwPerGpu; 
 
     NODES.forEach(node => {
@@ -406,16 +442,29 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
   const effCache = []; 
 
-  // --- STATE INITIALIZATION ---
+  // --- STATE INITIALIZATION (FIXED) ---
   const nodeState = {};
+  const startOverrides = scenarioOverrides?.startingState || {};
+
   NODES.forEach(node => {
     const type = getNodeType(node.id);
     const isGpuNode = node.id === 'gpu_datacenter' || node.id === 'gpu_inference';
+    
+    // FIX: Check Scenario Overrides for Installed Base
+    let baseInstall = (node.id === 'gpu_datacenter') ? 1200000 : (node.id === 'gpu_inference' ? 300000 : 0);
+    if (node.id === 'gpu_datacenter' && startOverrides.installedBase) {
+        baseInstall = startOverrides.installedBase;
+    }
+
+    // FIX: Check Scenario Overrides for Backlog
+    const overrideBacklog = startOverrides.backlogByNode?.[node.id];
+    const initialBacklog = overrideBacklog !== undefined ? overrideBacklog : (node.startingBacklog || 0);
+
     nodeState[node.id] = {
       type: type,
       inventory: (type === 'STOCK') ? (node.startingInventory || 0) : 0,
-      backlog: node.startingBacklog || 0,
-      installedBase: (node.id === 'gpu_datacenter') ? 1200000 : (node.id === 'gpu_inference' ? 300000 : 0),
+      backlog: initialBacklog,
+      installedBase: baseInstall,
       dynamicExpansions: [],
       lastExpansionMonth: -Infinity,
       tightnessHistory: []
@@ -426,7 +475,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       shortage: [], glut: [], tightness: [], priceIndex: [],
       installedBase: [], requiredBase: [], planDeploy: [], consumption: [],
       supplyPotential: [], gpuDelivered: [], idleGpus: [], yield: [],
-      unmetDemand: [], potential: [] // Added 'potential' for diagnostics
+      unmetDemand: [], potential: [] 
     };
   });
 
@@ -612,7 +661,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         res.supply.push(isDc ? actualDc : actualInf); 
         res.capacity.push(isDc ? gpuEffCap : 0);
         res.supplyPotential.push(gpuEffCap * share);
-        res.potential.push(gpuEffCap * share); // Standardize field
+        res.potential.push(gpuEffCap * share); 
         res.inventory.push(isDc ? gpuState.inventory : 0);
         res.backlog.push(gpuState.backlog * share);
         res.installedBase.push(state.installedBase);
@@ -671,7 +720,6 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
             
             const available = state.inventory + production;
             
-            // Delivery is limited by what we actually have (Policy World)
             delivered = Math.min(consumption, available); 
             
             if (delivered < consumption - 1e-6) {
@@ -682,15 +730,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
             }
             
             state.inventory = available - delivered;
-            state.backlog = 0; 
             
-            // DIAGNOSTIC FIX: Unmet = Plan - True Potential (Ignoring Policy)
+            // FIX: Backlog persists (accumulates unmet demand)
+            // Was: state.backlog = 0;
+            state.backlog = Math.max(0, (demand + backlogIn) - delivered);
+            
             unmet = Math.max(0, demand - potentialSupply);
             
         } else {
             // --- THROUGHPUT LOGIC ---
-            // Physics: You cannot deliver more than capacity.
-            
             delivered = Math.min(consumption, effectiveCapacity);
 
             if (consumption > effectiveCapacity + 1e-6) {
@@ -702,8 +750,6 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
             state.backlog = 0; 
             state.inventory = 0;
-            
-            // DIAGNOSTIC FIX: Unmet = Plan - Capacity
             unmet = Math.max(0, demand - effectiveCapacity);
         }
 
@@ -728,8 +774,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         nodeRes.demand.push(demand);
         nodeRes.supply.push(delivered);
         nodeRes.capacity.push(effectiveCapacity);
-        nodeRes.supplyPotential.push(potentialSupply); // Now strictly Physics-based
-        nodeRes.potential.push(potentialSupply); // Dual field for safety
+        nodeRes.supplyPotential.push(potentialSupply); 
+        nodeRes.potential.push(potentialSupply); 
         nodeRes.inventory.push(state.inventory);
         nodeRes.backlog.push(state.backlog);
         nodeRes.tightness.push(tightness);
