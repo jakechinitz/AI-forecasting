@@ -10,15 +10,30 @@
  * - S_t = (1+s)^(t/12)  : Systems throughput INCREASES (in denominator)
  * - H_t = (1+h)^(t/12)  : Hardware throughput INCREASES (in denominator)
  */
+import assumptionOverrides from './assumptionOverrides.json';
 
 // ============================================
 // GLOBAL MODEL PARAMETERS
 // ============================================
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const pad2 = (value) => String(value).padStart(2, '0');
+const formatMonthYear = (date) => `${MONTH_NAMES[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+const formatAsOfDate = (year, month) => `${year}-${pad2(month)}-01`;
+const addMonths = (date, months) => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1));
+
+const NOW = new Date();
+const CURRENT_YEAR = NOW.getUTCFullYear();
+const CURRENT_MONTH = NOW.getUTCMonth() + 1;
+const START_DATE = new Date(Date.UTC(CURRENT_YEAR, CURRENT_MONTH - 1, 1));
+const DEFAULT_AS_OF_DATE = formatAsOfDate(CURRENT_YEAR, CURRENT_MONTH);
+
 export const GLOBAL_PARAMS = {
   // Simulation horizon
   horizonYears: 20,
-  startYear: 2025,
-  startMonth: 1,
+  startYear: CURRENT_YEAR,
+  startMonth: CURRENT_MONTH,
 
   // Price index shape parameters (global, not per-node)
   priceIndex: {
@@ -70,28 +85,55 @@ export const GLOBAL_PARAMS = {
 // ============================================
 // ASSUMPTION TIME SEGMENTS
 // ============================================
-export const ASSUMPTION_SEGMENTS = [
-  { key: 'year1', label: 'Year 1', years: '2025-2026', startMonth: 0, endMonth: 11 },
-  { key: 'year2', label: 'Year 2', years: '2026-2027', startMonth: 12, endMonth: 23 },
-  { key: 'year3', label: 'Year 3', years: '2027-2028', startMonth: 24, endMonth: 35 },
-  { key: 'year4', label: 'Year 4', years: '2028-2029', startMonth: 36, endMonth: 47 },
-  { key: 'year5', label: 'Year 5', years: '2029-2030', startMonth: 48, endMonth: 59 },
-  { key: 'years6_10', label: 'Years 6-10', years: '2030-2035', startMonth: 60, endMonth: 119 },
-  { key: 'years11_15', label: 'Years 11-15', years: '2035-2040', startMonth: 120, endMonth: 179 },
-  { key: 'years16_20', label: 'Years 16-20', years: '2040-2045', startMonth: 180, endMonth: 239 }
+const SEGMENT_DEFS = [
+  { key: 'year1', label: 'Year 1', startMonth: 0, endMonth: 11 },
+  { key: 'year2', label: 'Year 2', startMonth: 12, endMonth: 23 },
+  { key: 'year3', label: 'Year 3', startMonth: 24, endMonth: 35 },
+  { key: 'year4', label: 'Year 4', startMonth: 36, endMonth: 47 },
+  { key: 'year5', label: 'Year 5', startMonth: 48, endMonth: 59 },
+  { key: 'years6_10', label: 'Years 6-10', startMonth: 60, endMonth: 119 },
+  { key: 'years11_15', label: 'Years 11-15', startMonth: 120, endMonth: 179 },
+  { key: 'years16_20', label: 'Years 16-20', startMonth: 180, endMonth: 239 }
 ];
+
+export const ASSUMPTION_SEGMENTS = SEGMENT_DEFS.map((segment) => {
+  const startDate = addMonths(START_DATE, segment.startMonth);
+  const endDate = addMonths(START_DATE, segment.endMonth);
+  return {
+    ...segment,
+    years: `${formatMonthYear(startDate)}-${formatMonthYear(endDate)}`
+  };
+});
 
 export const FIRST_ASSUMPTION_KEY = ASSUMPTION_SEGMENTS[0].key;
 export const FIRST_FIVE_YEAR_KEYS = ASSUMPTION_SEGMENTS.slice(0, 5).map(segment => segment.key);
 
+const SEGMENT_LABELS = ASSUMPTION_SEGMENTS.reduce((acc, segment) => {
+  acc[segment.key] = `${segment.label} (${segment.years})`;
+  return acc;
+}, {});
+
 const cloneBlock = (block) => JSON.parse(JSON.stringify(block));
+const isPlainObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
+const deepMerge = (base, overrides) => {
+  if (!isPlainObject(overrides)) return base;
+  const merged = { ...base };
+  Object.entries(overrides).forEach(([key, value]) => {
+    if (isPlainObject(value) && isPlainObject(base?.[key])) {
+      merged[key] = deepMerge(base[key], value);
+    } else {
+      merged[key] = value;
+    }
+  });
+  return merged;
+};
 
 // ============================================
 // DEMAND ASSUMPTIONS BY 5-YEAR BLOCK
 // ============================================
 const DEMAND_YEAR1 = {
-  label: 'Year 1 (2025-2026)',
-  asOfDate: '2026-01-01',
+  label: SEGMENT_LABELS.year1,
+  asOfDate: DEFAULT_AS_OF_DATE,
 
   // Single source of truth for workload baselines
   // All base rates centralized here; calculations.js reads from this
@@ -237,11 +279,11 @@ DEMAND_YEARLY_BLOCKS.year5.inferenceGrowth.consumer.value = 0.50;
 DEMAND_YEARLY_BLOCKS.year5.inferenceGrowth.enterprise.value = 1.00;
 DEMAND_YEARLY_BLOCKS.year5.inferenceGrowth.agentic.value = 0.70;
 
-export const DEMAND_ASSUMPTIONS = {
+export const DEMAND_ASSUMPTIONS_BASE = {
   ...DEMAND_YEARLY_BLOCKS,
 
   years6_10: {
-    label: 'Years 6-10 (2030-2035)',
+    label: SEGMENT_LABELS.years6_10,
 
     inferenceGrowth: {
       consumer: { value: 0.25, confidence: 'low', source: 'Market maturation expected' },
@@ -273,7 +315,7 @@ export const DEMAND_ASSUMPTIONS = {
   },
 
   years11_15: {
-    label: 'Years 11-15 (2035-2040)',
+    label: SEGMENT_LABELS.years11_15,
 
     inferenceGrowth: {
       consumer: { value: 0.15, confidence: 'low', source: 'Market saturation' },
@@ -305,7 +347,7 @@ export const DEMAND_ASSUMPTIONS = {
   },
 
   years16_20: {
-    label: 'Years 16-20 (2040-2045)',
+    label: SEGMENT_LABELS.years16_20,
 
     inferenceGrowth: {
       consumer: { value: 0.10, confidence: 'low', source: 'Highly uncertain' },
@@ -341,7 +383,7 @@ export const DEMAND_ASSUMPTIONS = {
 // EFFICIENCY ASSUMPTIONS BY 5-YEAR BLOCK
 // ============================================
 const EFFICIENCY_YEAR1 = {
-  label: 'Year 1 (2025-2026)',
+  label: SEGMENT_LABELS.year1,
 
   // Model efficiency (compute per token declines)
   // NOTE: These are DEPLOYED efficiency rates, not theoretical peaks.
@@ -405,7 +447,7 @@ const EFFICIENCY_YEARLY_BLOCKS = FIRST_FIVE_YEAR_KEYS.reduce((acc, key, index) =
   return acc;
 }, {});
 
-export const EFFICIENCY_ASSUMPTIONS = {
+export const EFFICIENCY_ASSUMPTIONS_BASE = {
   /**
    * CORRECTED FORMULAS:
    *
@@ -428,7 +470,7 @@ export const EFFICIENCY_ASSUMPTIONS = {
   ...EFFICIENCY_YEARLY_BLOCKS,
 
   years6_10: {
-    label: 'Years 6-10 (2030-2035)',
+    label: SEGMENT_LABELS.years6_10,
 
     modelEfficiency: {
       m_inference: { value: 0.14, confidence: 'low', source: 'Diminishing returns expected' },
@@ -447,7 +489,7 @@ export const EFFICIENCY_ASSUMPTIONS = {
   },
 
   years11_15: {
-    label: 'Years 11-15 (2035-2040)',
+    label: SEGMENT_LABELS.years11_15,
 
     modelEfficiency: {
       m_inference: { value: 0.10, confidence: 'low', source: 'Highly uncertain' },
@@ -466,7 +508,7 @@ export const EFFICIENCY_ASSUMPTIONS = {
   },
 
   years16_20: {
-    label: 'Years 16-20 (2040-2045)',
+    label: SEGMENT_LABELS.years16_20,
 
     modelEfficiency: {
       m_inference: { value: 0.08, confidence: 'low', source: 'Highly uncertain' },
@@ -489,7 +531,7 @@ export const EFFICIENCY_ASSUMPTIONS = {
 // SUPPLY ASSUMPTIONS BY 5-YEAR BLOCK
 // ============================================
 const SUPPLY_YEAR1 = {
-  label: 'Year 1 (2025-2026)',
+  label: SEGMENT_LABELS.year1,
 
   // Capacity expansion rates by node group
   expansionRates: {
@@ -530,11 +572,11 @@ const SUPPLY_YEARLY_BLOCKS = FIRST_FIVE_YEAR_KEYS.reduce((acc, key, index) => {
   return acc;
 }, {});
 
-export const SUPPLY_ASSUMPTIONS = {
+export const SUPPLY_ASSUMPTIONS_BASE = {
   ...SUPPLY_YEARLY_BLOCKS,
 
   years6_10: {
-    label: 'Years 6-10 (2030-2035)',
+    label: SEGMENT_LABELS.years6_10,
     expansionRates: {
       packaging: { value: 0.20, confidence: 'low' },
       foundry: { value: 0.10, confidence: 'low' },
@@ -545,7 +587,7 @@ export const SUPPLY_ASSUMPTIONS = {
   },
 
   years11_15: {
-    label: 'Years 11-15 (2035-2040)',
+    label: SEGMENT_LABELS.years11_15,
     expansionRates: {
       packaging: { value: 0.12, confidence: 'low' },
       foundry: { value: 0.08, confidence: 'low' },
@@ -556,7 +598,7 @@ export const SUPPLY_ASSUMPTIONS = {
   },
 
   years16_20: {
-    label: 'Years 16-20 (2040-2045)',
+    label: SEGMENT_LABELS.years16_20,
     expansionRates: {
       packaging: { value: 0.08, confidence: 'low' },
       foundry: { value: 0.05, confidence: 'low' },
@@ -565,6 +607,26 @@ export const SUPPLY_ASSUMPTIONS = {
       power: { value: 0.06, confidence: 'low' }
     }
   }
+};
+
+export const DEMAND_ASSUMPTIONS = deepMerge(
+  DEMAND_ASSUMPTIONS_BASE,
+  assumptionOverrides?.demand
+);
+
+export const EFFICIENCY_ASSUMPTIONS = deepMerge(
+  EFFICIENCY_ASSUMPTIONS_BASE,
+  assumptionOverrides?.efficiency
+);
+
+export const SUPPLY_ASSUMPTIONS = deepMerge(
+  SUPPLY_ASSUMPTIONS_BASE,
+  assumptionOverrides?.supply
+);
+
+export const ASSUMPTION_METADATA = {
+  asOfDate: DEFAULT_AS_OF_DATE,
+  ...(assumptionOverrides?.metadata || {})
 };
 
 // ============================================
