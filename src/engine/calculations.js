@@ -1,11 +1,11 @@
 /**
  * AI Infrastructure Supply Chain - Calculation Engine
  *
- * FINAL POLISHED ARCHITECTURE (v22):
- * * LOGIC FIX: Backlog Paydown is now implicit (New = Old + Baseline - Actual).
- * * LOGIC FIX: Expansion triggers off Flow (Plan), not Stock (Backlog).
- * * SAFETY: Smart Warnings (First occurrence per node).
- * * SAFETY: Loud Constraint Guards.
+ * FINAL PRODUCTION VERSION (v23):
+ * * ARCHITECTURE: Generic Gating + Single-Source Consumption + Availability-Based Stocks.
+ * * REPORTING: GPU Tightness explicitly recorded. Analysis uses 'shortage' flag as truth.
+ * * SAFETY: Persistent "No Constraints" warning.
+ * * VALIDATION: Runtime Unit Consistency Checks.
  */
 
 import { NODES, getNode } from '../data/nodes.js';
@@ -156,37 +156,60 @@ function calculateInferenceDemand(month, assumptions) {
 }
 
 // ============================================
-// 4. INTENSITY MAPPING (The Generic Linker)
+// 4. INTENSITY MAPPING & UNIT VALIDATION
 // ============================================
 
-function buildIntensityMap() {
+function buildIntensityMap(warningsArray) {
     const map = {};
     const gpuToComp = TRANSLATION_INTENSITIES.gpuToComponents;
     const serverToInfra = TRANSLATION_INTENSITIES.serverToInfra;
 
-    // Power Calc (with PUE)
+    // VALIDATION: Expected Units for known keys
+    const EXPECTED_UNITS = {
+        'hbm_stacks': 'Stacks',
+        'datacenter_mw': 'MW',
+        'advanced_wafers': 'Wafers',
+        'abf_substrate': 'Units',
+        'cowos_capacity': 'Wafers/Month',
+        'server_assembly': 'Servers/Month', // Critical check: Is capacity GPUs or Servers?
+        'grid_interconnect': 'MW'
+    };
+
     const kwPerGpu = serverToInfra.kwPerGpu?.value || 1.0;
     const pue = serverToInfra.pue?.value || 1.3;
     const mwPerGpu = (kwPerGpu * pue) / 1000;
 
-    // -- STOCK NODES --
+    // Define intensities
     map['hbm_stacks'] = gpuToComp.hbmStacksPerGpu?.value || 8; 
     map['datacenter_mw'] = mwPerGpu; 
     map['advanced_wafers'] = 0.5; 
     map['abf_substrate'] = 0.02; 
-    
-    // -- THROUGHPUT NODES --
     map['cowos_capacity'] = gpuToComp.cowosWaferEquivPerGpu?.value || 1; 
     map['hybrid_bonding'] = 0.1; 
     map['server_assembly'] = 1 / (serverToInfra.gpusPerServer?.value || 8); 
-
-    // -- QUEUE NODES --
     map['grid_interconnect'] = mwPerGpu; 
 
-    // Add explicit inputIntensity overrides
+    // Runtime Check: Verify Units
+    const checkedNodes = new Set();
+    
+    // Add explicitly defined overrides and validate
     NODES.forEach(node => {
+        // 1. Add override if present
         if (node.inputIntensity && !map[node.id]) {
             map[node.id] = node.inputIntensity;
+        }
+
+        // 2. Unit Mismatch Check (High Leverage Fix)
+        if (map[node.id] && EXPECTED_UNITS[node.id]) {
+            // Check if 'unit' exists on node (assuming users add it to nodes.js)
+            // Even if not strictly typed, this catches "Servers" vs "GPUs"
+            if (node.unit && node.unit !== EXPECTED_UNITS[node.id]) {
+               // Only warn once
+               if (!checkedNodes.has(node.id)) {
+                   warningsArray.push(`Unit Mismatch Config: ${node.id}. Expected ${EXPECTED_UNITS[node.id]}, found ${node.unit}`);
+                   checkedNodes.add(node.id);
+               }
+            }
         }
     });
     
@@ -200,7 +223,6 @@ function buildIntensityMap() {
 export function runSimulation(assumptions, scenarioOverrides = {}) {
   clearGrowthCache();
   const months = GLOBAL_PARAMS.horizonYears * 12;
-  const nodeIntensityMap = buildIntensityMap();
   
   const results = {
     months: [],
@@ -209,9 +231,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     warnings: [] 
   };
   
+  // Build map with validation
+  const nodeIntensityMap = buildIntensityMap(results.warnings);
+
   // Track warnings to avoid spam
   const warnedNodes = new Set();
-
   const demandAssumptions = deepMerge(assumptions?.demand || DEMAND_ASSUMPTIONS, scenarioOverrides?.demand);
 
   // --- STATE INITIALIZATION ---
@@ -255,16 +279,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const dcRetirements = gpuState.installedBase / 48;
     const infRetirements = infState.installedBase / 48;
 
-    // Smoothed Paydown
     const backlogPaydown = gpuState.backlog / BACKLOG_PAYDOWN_MONTHS;
-
     const planDeployDc = (dcGap / CATCHUP_MONTHS) + dcRetirements;
     const planDeployInf = (infGap / CATCHUP_MONTHS) + infRetirements;
     
     // Master Scalar (Includes Paydown)
     const planDeployTotal = planDeployDc + planDeployInf + backlogPaydown;
     
-    // Baseline Plan (No Paydown) - used for clean backlog update
+    // Baseline Plan (New Demand Only)
     const baselinePlan = planDeployDc + planDeployInf;
 
     // =======================================================
@@ -298,7 +320,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuEffCap = gpuCap * 0.95 * calculateNodeYield(gpuNode, month);
     const gpuAvailable = gpuState.inventory + gpuEffCap;
     
-    // Capture Pre-Update GPU State for expansion logic
+    // Capture Pre-Update GPU State
     const preUpdateGpuInventory = gpuState.inventory;
 
     // 2. Generic Component Constraints
@@ -316,9 +338,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         }
     });
 
-    // SAFETY: Loud Warning if no constraints found
+    // SAFETY: Persistent Loud Warning if no constraints found
     if (constraintCount === 0) {
-        if (month < 12) results.warnings.push(`Warning (Month ${month}): No active component constraints found. Check Intensity Map.`);
+        results.warnings.push(`Warning (Month ${month}): No active component constraints found. System running unconstrained.`);
         maxSupported = Infinity; 
     }
 
@@ -339,7 +361,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     
     gpuState.inventory = (gpuState.inventory + gpuProduced) - actualDeployTotal;
     
-    // SAFETY: Inventory Clamp
+    // SAFETY: Inventory Clamp (First-time warning)
     if (gpuState.inventory < -1e-6) {
         if (!warnedNodes.has('gpu_datacenter')) {
              results.warnings.push(`Clamp: Negative GPU Inventory detected at month ${month}`);
@@ -348,8 +370,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         gpuState.inventory = 0;
     }
 
-    // LOGIC FIX: Clean Backlog Math
-    // NewBacklog = OldBacklog + NewDemand(Baseline) - Actual
+    // LOGIC FIX: Clean Backlog Math (No Double Paydown)
     gpuState.backlog = Math.max(0, oldGpuBacklog + baselinePlan - actualDeployTotal);
     
     // Installed Base Update
@@ -361,9 +382,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     gpuState.installedBase = Math.max(0, gpuState.installedBase + actualDc - dcRetirements);
     infState.installedBase = Math.max(0, infState.installedBase + actualInf - infRetirements);
 
-    // --- SAFETY: GPU FAB EXPANSION LOGIC ---
-    // LOGIC FIX: Trigger off Flow (Plan), not Stock (Backlog)
-    // We want to expand if the PLAN exceeds Capacity consistently
+    // --- GPU EXPANSION LOGIC ---
+    // Trigger off Flow (Plan), not Stock (Backlog)
     const gpuTotalLoad = planDeployTotal; 
     const gpuPotential = preUpdateGpuInventory + gpuEffCap;
     const gpuTightness = gpuTotalLoad / Math.max(gpuPotential, EPSILON);
@@ -393,6 +413,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         res.backlog.push(gpuState.backlog * share);
         res.installedBase.push(state.installedBase);
         res.consumption.push(actualDeployTotal * share);
+        // REPORTING FIX: Explicitly push tightness
+        res.tightness.push(gpuTightness);
         res.shortage.push(gpuState.backlog > 0 ? 1 : 0);
     });
 
@@ -490,8 +512,12 @@ function analyzeResults(results) {
     if (!node || node.group === 'A') return;
 
     let shortageStart = null, peakTightness = 0, shortageDuration = 0, consecShort = 0;
-    data.tightness.forEach((t, month) => {
-      if (t > 1.05) {
+    
+    // ANALYSIS FIX: Use 'shortage' flag as the single source of truth
+    data.shortage.forEach((isShort, month) => {
+      const t = data.tightness[month] || 0; // Use tightness for severity ranking
+      
+      if (isShort === 1) {
         consecShort++;
         if (consecShort >= shortagePersistence) {
           if (shortageStart === null) shortageStart = month - shortagePersistence + 1;
