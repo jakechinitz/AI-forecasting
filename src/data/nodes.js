@@ -7,6 +7,34 @@
  *
  * Historical base rates are documented with sources where applicable.
  */
+import nodesOverrides from './nodesOverrides.json';
+
+const pad2 = (value) => String(value).padStart(2, '0');
+const NOW = new Date();
+const CURRENT_AS_OF_MONTH = `${NOW.getUTCFullYear()}-${pad2(NOW.getUTCMonth() + 1)}`;
+
+const isPlainObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
+const deepMerge = (base, overrides) => {
+  if (!isPlainObject(overrides)) return base;
+  const merged = { ...base };
+  Object.entries(overrides).forEach(([key, value]) => {
+    if (isPlainObject(value) && isPlainObject(base?.[key])) {
+      merged[key] = deepMerge(base[key], value);
+    } else {
+      merged[key] = value;
+    }
+  });
+  return merged;
+};
+
+const applyNodeOverrides = (nodes, overrides) => {
+  const perNode = overrides?.nodes || {};
+  return nodes.map((node) => {
+    const nodeOverride = perNode[node.id];
+    if (!nodeOverride) return node;
+    return deepMerge(node, nodeOverride);
+  });
+};
 
 // Node Groups
 export const NODE_GROUPS = {
@@ -34,7 +62,7 @@ export const NODE_GROUPS = {
  * - Yield model: simple or stacked (for HBM)
  * - Scenario hooks: geo risk, export controls
  */
-export const NODES = [
+const BASE_NODES = [
   // ========================================
   // GROUP A: AI WORKLOADS
   // ========================================
@@ -1404,6 +1432,16 @@ export const NODES = [
     }
   }
 ];
+
+export const NODES = applyNodeOverrides(BASE_NODES, nodesOverrides);
+
+// ========================================
+// ASSUMPTION UPDATE LOG
+// ========================================
+export const ASSUMPTION_UPDATE_LOG = nodesOverrides?.updateLog || [];
+export const NODE_METADATA = {
+  asOfMonth: CURRENT_AS_OF_MONTH
+};
 
 // Get node by ID
 export function getNode(nodeId) {
