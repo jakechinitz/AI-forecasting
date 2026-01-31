@@ -1117,6 +1117,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     gpuResults.shortage.push(gpuIsShortage ? 1 : 0);
     gpuResults.glut.push(gpuIsGlut ? 1 : 0);
 
+    // Remaining component supply after datacenter GPU deliveries (for inference accelerator gating)
+    const remainingHBM = Math.max(0, componentSupply.hbm_stacks - gpuDelivered * effectiveStacksPerGPU);
+    const remainingCoWoS = Math.max(0, componentSupply.cowos_capacity - gpuDelivered * cowosUnitsPerGPU);
+    const remainingPower = Math.max(0, componentSupply.datacenter_mw - gpuDelivered * MWperGPU);
+
     // Process all other nodes (skip already processed: gpu_datacenter, hbm_stacks, cowos_capacity, datacenter_mw)
     const processedNodes = ['gpu_datacenter', 'hbm_stacks', 'cowos_capacity', 'grid_interconnect', 'datacenter_mw'];
     NODES.filter(n => !processedNodes.includes(n.id)).forEach(node => {
@@ -1171,11 +1176,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const powerDemands = dcMwToPowerDemands(componentDemands.powerMw);
       let inferenceRetirements = 0;
       let isInferenceNode = false;
+      let inferenceRequiredBase = 0;
 
       if (node.id === 'gpu_inference') {
         // Similar to datacenter but smaller scale
         inferenceRetirements = state.installedBase / state.lifetimeMonths;
-        const inferenceRequiredBase = requiredGpuBase * 0.3;  // 30% of workload
+        inferenceRequiredBase = requiredGpuBase * 0.3;  // 30% of workload
         const gap = Math.max(0, inferenceRequiredBase - state.installedBase);
         demand = gap + inferenceRetirements;
         isInferenceNode = true;
@@ -1305,7 +1311,16 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         demand *= (1 - state.subShare);
       }
 
-      const fulfilled = Math.min(availableSupply, demand + backlogIn);
+      let fulfilled = Math.min(availableSupply, demand + backlogIn);
+
+      // Inference accelerators: gate deliveries by remaining components (HBM, CoWoS, power)
+      if (isInferenceNode) {
+        const maxByRemainingHBM = remainingHBM / effectiveStacksPerGPU;
+        const maxByRemainingCoWoS = remainingCoWoS / cowosUnitsPerGPU;
+        const maxByRemainingPower = remainingPower / MWperGPU;
+        fulfilled = Math.min(fulfilled, maxByRemainingHBM, maxByRemainingCoWoS, maxByRemainingPower);
+      }
+
       const inventoryOut = Math.max(0, availableSupply - fulfilled);
       const backlogOut = Math.max(0, demand + backlogIn - fulfilled);
       const tightness = (demand + backlogIn) / Math.max(fulfilled, EPSILON);
@@ -1324,16 +1339,16 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       nodeResults.demand.push(demand);
       nodeResults.supply.push(fulfilled);                 // What actually shipped (cleared)
       nodeResults.supplyPotential.push(shipments);        // Max producible capacity
-      nodeResults.gpuDelivered.push(0);                   // N/A for non-GPU nodes
-      nodeResults.idleGpus.push(0);                       // N/A for non-GPU nodes
+      nodeResults.gpuDelivered.push(isInferenceNode ? fulfilled : 0);
+      nodeResults.idleGpus.push(isInferenceNode ? Math.max(0, availableSupply - fulfilled) : 0);
       nodeResults.capacity.push(capacity);
       nodeResults.yield.push(nodeYield);
       nodeResults.tightness.push(tightness);
       nodeResults.priceIndex.push(state.priceHistory[state.priceHistory.length - 1]);
       nodeResults.inventory.push(state.inventory);
       nodeResults.backlog.push(state.backlog);
-      nodeResults.requiredBase.push(0);
-      nodeResults.gpuPurchases.push(0);
+      nodeResults.requiredBase.push(isInferenceNode ? inferenceRequiredBase : 0);
+      nodeResults.gpuPurchases.push(isInferenceNode ? demand : 0);
 
       // Track tightness history for persistence-based detection
       state.tightnessHistory.push(tightness);
