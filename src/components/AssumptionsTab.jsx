@@ -1,8 +1,9 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { ASSUMPTION_SEGMENTS } from '../data/assumptions.js';
 
 function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSimulating }) {
   const timeBlocks = ASSUMPTION_SEGMENTS;
+  const [selection, setSelection] = useState(null);
 
   const getValue = (category, blockKey, path) => {
     let value = assumptions?.[category]?.[blockKey];
@@ -12,19 +13,53 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     return value;
   };
 
-  const renderInputCell = (category, blockKey, path, suffix) => {
+  const renderInputCell = (category, blockKey, path, suffix, columnKey, rowIndex) => {
     const value = getValue(category, blockKey, path);
     const numValue = typeof value === 'object' ? value?.value : value;
     const confidence = typeof value === 'object' ? value?.confidence : null;
     const source = typeof value === 'object' ? value?.source : '';
+    const isSelected = selection
+      && selection.columnKey === columnKey
+      && rowIndex >= Math.min(selection.start, selection.end)
+      && rowIndex <= Math.max(selection.start, selection.end);
+
+    const handleRangeSelect = (event) => {
+      if (event.shiftKey && selection?.columnKey === columnKey) {
+        setSelection({ columnKey, start: selection.start, end: rowIndex });
+        return;
+      }
+      setSelection({ columnKey, start: rowIndex, end: rowIndex });
+    };
+
+    const handleFillDown = (event) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (event.key.toLowerCase() !== 'd') return;
+      event.preventDefault();
+      if (!selection || selection.columnKey !== columnKey) return;
+      const startIndex = Math.min(selection.start, selection.end);
+      const endIndex = Math.max(selection.start, selection.end);
+      if (startIndex === endIndex) return;
+      const sourceBlockKey = timeBlocks[startIndex]?.key;
+      if (!sourceBlockKey) return;
+      const sourceValue = getValue(category, sourceBlockKey, path);
+      const sourceNumValue = typeof sourceValue === 'object' ? sourceValue?.value : sourceValue;
+      if (sourceNumValue === undefined || Number.isNaN(sourceNumValue)) return;
+      for (let idx = startIndex + 1; idx <= endIndex; idx += 1) {
+        const targetBlockKey = timeBlocks[idx]?.key;
+        if (!targetBlockKey) continue;
+        onAssumptionChange(category, targetBlockKey, path, sourceNumValue);
+      }
+    };
 
     return (
-      <div className="assumption-cell">
+      <div className={`assumption-cell${isSelected ? ' is-selected' : ''}`}>
         <div className="input-row">
           <input
             type="number"
             step="0.01"
             value={numValue !== undefined ? (numValue * 100).toFixed(0) : ''}
+            onMouseDown={handleRangeSelect}
+            onKeyDown={handleFillDown}
             onChange={(e) => {
               const newValue = parseFloat(e.target.value) / 100;
               if (!Number.isNaN(newValue)) {
@@ -47,23 +82,33 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     );
   };
 
-  const renderYearRow = (block, columns) => (
+  const renderYearRow = (block, columns, rowIndex) => (
     <tr key={block.key}>
       <td className="assumptions-label-cell assumptions-year-cell">
         <div className="assumptions-row-title">{block.label}</div>
         <div className="assumptions-row-help">{block.years}</div>
       </td>
-      {columns.map((column) => (
-        <td key={`${block.key}-${column.label}`} className="assumptions-input-cell">
+      {columns.map((column) => {
+        const columnKey = `${column.category ?? column.type}:${column.path?.join('.') ?? column.valueKey}`;
+        const isSelected = selection
+          && selection.columnKey === columnKey
+          && rowIndex >= Math.min(selection.start, selection.end)
+          && rowIndex <= Math.max(selection.start, selection.end);
+        return (
+        <td
+          key={`${block.key}-${column.label}`}
+          className={`assumptions-input-cell${isSelected ? ' is-selected' : ''}`}
+        >
           {column.type === 'metric'
             ? (
               <span className="assumptions-metric">
                 {column.format(efficiencySummary[block.key][column.valueKey])}
               </span>
             )
-            : renderInputCell(column.category, block.key, column.path, column.suffix)}
+            : renderInputCell(column.category, block.key, column.path, column.suffix, columnKey, rowIndex)}
         </td>
-      ))}
+        );
+      })}
     </tr>
   );
 
@@ -151,7 +196,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               <table className="assumptions-table">
                 <thead>{renderHeaderRow(columns)}</thead>
                 <tbody>
-                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
                 </tbody>
               </table>
             </div>
@@ -171,7 +216,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               <table className="assumptions-table">
                 <thead>{renderHeaderRow(columns)}</thead>
                 <tbody>
-                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
                 </tbody>
               </table>
             </div>
@@ -192,7 +237,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               <table className="assumptions-table">
                 <thead>{renderHeaderRow(columns)}</thead>
                 <tbody>
-                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
                 </tbody>
               </table>
             </div>
@@ -217,7 +262,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               <table className="assumptions-table">
                 <thead>{renderHeaderRow(columns)}</thead>
                 <tbody>
-                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
                 </tbody>
               </table>
             </div>
@@ -244,7 +289,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               <table className="assumptions-table">
                 <thead>{renderHeaderRow(columns)}</thead>
                 <tbody>
-                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
                 </tbody>
               </table>
             </div>
@@ -276,7 +321,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               <table className="assumptions-table">
                 <thead>{renderHeaderRow(columns)}</thead>
                 <tbody>
-                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
                 </tbody>
               </table>
             </div>
@@ -296,7 +341,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               <table className="assumptions-table">
                 <thead>{renderHeaderRow(columns)}</thead>
                 <tbody>
-                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
                 </tbody>
               </table>
             </div>
@@ -325,7 +370,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               <table className="assumptions-table assumptions-table--metrics">
                 <thead>{renderHeaderRow(columns)}</thead>
                 <tbody>
-                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
                 </tbody>
               </table>
             </div>
