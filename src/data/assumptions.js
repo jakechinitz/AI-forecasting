@@ -147,10 +147,13 @@ const DEMAND_YEAR1 = {
       frontier: 1.2,     // ~10-15 frontier runs/year globally
       midtier: 150       // ~100-200 significant runs/month
     },
+    
+    // FIX: Updated Magnitudes for Realism (v32)
     trainingComputePerRun: {
-      frontier: 1e6,     // 1M accel-hours per frontier run
-      midtier: 5000      // 5K accel-hours per mid-tier run
+      frontier: 50e6,    // 50M accel-hours (~25k GPUs * 3 months) - Was 1M
+      midtier: 200000    // 200K accel-hours (Fine-tuning runs) - Was 5K
     },
+    
     continualLearningBase: {
       accelHoursPerMonth: 150000,  // 150K accel-hours/month for fine-tuning/RLHF
       dataTB: 1500,                // 1500 TB base storage
@@ -452,19 +455,19 @@ export const EFFICIENCY_ASSUMPTIONS_BASE = {
    * CORRECTED FORMULAS:
    *
    * M_t (model efficiency - compute per token):
-   *   M_t = (1-m)^(t/12) where m = annual improvement rate
-   *   This DECREASES over time (good - less compute needed)
-   *   Goes in NUMERATOR of demand calculation
+   * M_t = (1-m)^(t/12) where m = annual improvement rate
+   * This DECREASES over time (good - less compute needed)
+   * Goes in NUMERATOR of demand calculation
    *
    * S_t (systems/software throughput):
-   *   S_t = (1+s)^(t/12) where s = annual improvement rate
-   *   This INCREASES over time (good - more throughput)
-   *   Goes in DENOMINATOR of demand calculation
+   * S_t = (1+s)^(t/12) where s = annual improvement rate
+   * This INCREASES over time (good - more throughput)
+   * Goes in DENOMINATOR of demand calculation
    *
    * H_t (hardware throughput):
-   *   H_t = (1+h)^(t/12) where h = annual improvement rate
-   *   This INCREASES over time (good - faster chips)
-   *   Goes in DENOMINATOR of demand calculation
+   * H_t = (1+h)^(t/12) where h = annual improvement rate
+   * This INCREASES over time (good - faster chips)
+   * Goes in DENOMINATOR of demand calculation
    */
 
   ...EFFICIENCY_YEARLY_BLOCKS,
@@ -844,6 +847,9 @@ export const SCENARIOS = {
     demandAssumptions: inheritYear1({ asOfDate: '2026-01-01' }),
     overrides: {
       startingState: {
+        // Force installed base to known current estimate to avoid drift
+        installedBase: 1200000, 
+        
         backlogByNode: {
           gpu_datacenter: 900000,   // ~900K GPU order backlog
           hbm_stacks: 7200000,     // 900K GPUs × 8 stacks = 7.2M stacks backlog
