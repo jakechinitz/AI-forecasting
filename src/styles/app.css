@@ -390,6 +390,11 @@
 .assumptions-table {
   width: 100%;
   border-collapse: collapse;
+  user-select: none;
+}
+
+.assumptions-table input {
+  user-select: text;
 }
 
 .assumptions-table th,
@@ -436,6 +441,7 @@
 
 .assumptions-input-cell {
   background: var(--bg-primary);
+  cursor: cell;
 }
 
 .assumptions-input-cell.is-selected {

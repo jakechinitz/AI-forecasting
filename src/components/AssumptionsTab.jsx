@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useRef, useCallback } from 'react';
+import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import { ASSUMPTION_SEGMENTS } from '../data/assumptions.js';
 
 /* ── Table definitions: id → { category, columns[] } ── */
@@ -81,6 +81,15 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
 
   /* Internal clipboard (raw decimal value, e.g. 0.35 for 35%) */
   const clipboardRef = useRef(null);
+
+  /* Mouse drag state */
+  const draggingRef = useRef(false);
+
+  useEffect(() => {
+    const handleMouseUp = () => { draggingRef.current = false; };
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => document.removeEventListener('mouseup', handleMouseUp);
+  }, []);
 
   /* ── Value read/write helpers ── */
 
@@ -282,9 +291,15 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     }
   }, [numRows, getRawValue, setRawValue, focusCell]);
 
-  /* ── Mouse handler for cell selection ── */
+  /* ── Mouse handlers for cell selection + drag ── */
 
   const handleCellMouseDown = useCallback((e, t, r, c) => {
+    /* Prevent text-selection on the page during drag, but let direct input clicks through */
+    if (e.target.tagName !== 'INPUT') {
+      e.preventDefault();
+    }
+    draggingRef.current = true;
+
     if (e.shiftKey) {
       const s = selRef.current;
       if (s && s.t === t) {
@@ -294,6 +309,15 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
       }
     } else {
       setSel({ t, r0: r, c0: c, r1: r, c1: c });
+    }
+    focusCell(t, r, c);
+  }, [focusCell]);
+
+  const handleCellMouseEnter = useCallback((t, r, c) => {
+    if (!draggingRef.current) return;
+    const s = selRef.current;
+    if (s && s.t === t) {
+      setSel({ ...s, r1: r, c1: c });
     }
   }, []);
 
@@ -381,7 +405,12 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                   ].filter(Boolean).join(' ');
 
                   return (
-                    <td key={col.label} className={cellClasses}>
+                    <td
+                      key={col.label}
+                      className={cellClasses}
+                      onMouseDown={(e) => handleCellMouseDown(e, tableId, rowIdx, colIdx)}
+                      onMouseEnter={() => handleCellMouseEnter(tableId, rowIdx, colIdx)}
+                    >
                       <div className="input-row">
                         <input
                           type="number"
@@ -394,7 +423,6 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                               ? ''
                               : (numValue * 100).toFixed(0)
                           }
-                          onMouseDown={(e) => handleCellMouseDown(e, tableId, rowIdx, colIdx)}
                           onFocus={(e) => e.target.select()}
                           onKeyDown={handleKeyDown}
                           onChange={(e) => {
