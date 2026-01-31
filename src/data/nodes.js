@@ -588,10 +588,10 @@ const BASE_NODES = [
     inputIntensity: 1.0,  // Adoption curve applied in demand translation
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 5000,
+    startingCapacity: 1500,
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 5000, type: 'committed' },
-      { date: '2026-06', capacityAdd: 10000, type: 'optional' }
+      { date: '2026-06', capacityAdd: 1500, type: 'committed' },
+      { date: '2027-06', capacityAdd: 2000, type: 'optional' }
     ],
     leadTimeDebottleneck: 12,
     leadTimeNewBuild: 30,
@@ -618,10 +618,10 @@ const BASE_NODES = [
     exportControlSensitivity: 'critical',
 
     baseRate: {
-      value: 5000,
+      value: 1500,
       confidence: 'low',
       source: 'Emerging technology, limited data',
-      historicalRange: [2000, 10000]
+      historicalRange: [1000, 4000]
     }
   },
   {
@@ -766,19 +766,18 @@ const BASE_NODES = [
     name: 'EUV Lithography Tools',
     group: 'E',
     unit: 'tools',
-    description: 'ASML EUV scanners (installed base)',
+    description: 'ASML EUV scanners (new tools/month)',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.00001,  // Tiny - tools process many wafers
+    inputIntensity: 0.00002,  // Tools per wafer-start (calibrated to ~4/month demand)
     parentNodeIds: ['advanced_wafers'],
 
-    // Base rate: ~200 EUV tools installed globally, ~50/year production
-    startingCapacity: 200,  // Installed base
+    // Base rate: ~44-48 EUV tools shipped annually (~3.7-4.0/month)
+    startingCapacity: 4,  // New tools per month (shipment rate)
     committedExpansions: [
-      { date: '2025-03', capacityAdd: 12, type: 'committed' },
-      { date: '2025-06', capacityAdd: 12, type: 'committed' },
-      { date: '2025-09', capacityAdd: 12, type: 'committed' },
-      { date: '2025-12', capacityAdd: 12, type: 'committed' }
+      { date: '2026-06', capacityAdd: 0.5, type: 'committed' },
+      { date: '2027-06', capacityAdd: 0.5, type: 'committed' },
+      { date: '2028-06', capacityAdd: 0.5, type: 'optional' }
     ],
     leadTimeDebottleneck: 0,  // Can't debottleneck
     leadTimeNewBuild: 24,     // 2 year lead time from order
@@ -793,7 +792,7 @@ const BASE_NODES = [
 
     contractingRegime: 'LTAs',
     inventoryBufferTarget: 0,
-    maxCapacityUtilization: 0.85,  // Uptime limited
+    maxCapacityUtilization: 0.95,  // Uptime limited
 
     yieldModel: 'simple',
     yieldSimpleLoss: 0,  // Tools don't have yield loss
@@ -802,10 +801,10 @@ const BASE_NODES = [
     exportControlSensitivity: 'critical',
 
     baseRate: {
-      value: 200,
-      confidence: 'high',
-      source: 'ASML annual reports',
-      historicalRange: [180, 250]
+      value: 4,
+      confidence: 'medium',
+      source: 'ASML annual reports (shipments per year / 12)',
+      historicalRange: [3, 5]
     }
   },
 
