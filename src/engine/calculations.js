@@ -1057,12 +1057,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const maxByCoWoS = componentSupply.cowos_capacity / cowosUnitsPerGPU;
     const maxByPower = componentSupply.datacenter_mw / MWperGPU;
 
-    const gpuBacklogIn = gpuState.backlog;
-    const gpuInventoryIn = gpuState.inventory;
-    const gpuAvailableSupply = gpuShipmentsRaw + gpuInventoryIn;
+    // GPU delivered = min of production and all gating components
     const gpuAvailableToShip = Math.min(
-      gpuAvailableSupply,
-      gpuDemand + gpuBacklogIn,
+      gpuShipmentsRaw + gpuState.inventory,
+      gpuDemand + gpuState.backlog,
       deploymentVelocityCap
     );
     const gpuDelivered = Math.min(gpuAvailableToShip, maxByHBM, maxByCoWoS, maxByPower);
