@@ -109,12 +109,62 @@ function sma(values, window) {
   return values.slice(-window).reduce((a, b) => a + b, 0) / window;
 }
 
+function calculatePriceIndex(tightness) {
+  const { a, b, minPrice, maxPrice } = GLOBAL_PARAMS.priceIndex;
+  if (!Number.isFinite(tightness)) return 1;
+  if (tightness >= 1) {
+    return Math.min(maxPrice, 1 + a * Math.pow(tightness - 1, b));
+  }
+  return Math.max(minPrice, 1 - a * Math.pow(1 - tightness, b));
+}
+
 // ============================================
 // 3. CALCULATION HELPERS
 // ============================================
 
 export function clearGrowthCache() {
   // No-op (Run-scoped cache used)
+}
+
+function getDemandBlockForMonth(month, assumptions) {
+  const blockKey = getBlockKeyForMonth(month);
+  return assumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
+}
+
+function calculateInferenceDemand(month, demandBlock) {
+  const segments = ['consumer', 'enterprise', 'agentic'];
+  const demand = { total: 0 };
+  segments.forEach((segment) => {
+    const base = resolveAssumptionValue(
+      demandBlock?.workloadBase?.inferenceTokensPerMonth?.[segment],
+      0
+    );
+    const growthRate = resolveAssumptionValue(
+      demandBlock?.inferenceGrowth?.[segment]?.value,
+      0
+    );
+    const value = base * Math.pow(1 + growthRate, month / 12);
+    demand[segment] = value;
+    demand.total += value;
+  });
+  return demand;
+}
+
+function calculateTrainingDemand(month, demandBlock) {
+  const segments = ['frontier', 'midtier'];
+  const demand = {};
+  segments.forEach((segment) => {
+    const base = resolveAssumptionValue(
+      demandBlock?.workloadBase?.trainingRunsPerMonth?.[segment],
+      0
+    );
+    const growthRate = resolveAssumptionValue(
+      demandBlock?.trainingGrowth?.[segment]?.value,
+      0
+    );
+    demand[segment] = base * Math.pow(1 + growthRate, month / 12);
+  });
+  return demand;
 }
 
 export function calculateCapacity(node, month, scenarioOverrides = {}, dynamicExpansions = []) {
@@ -201,14 +251,11 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
 }
 
 function calculateRequiredGpus(month, demandAssumptions, efficiencyAssumptions, effCache, warnings, warnedSet, installedBaseTotal) {
-    const blockKey = getBlockKeyForMonth(month);
-    const block = demandAssumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
+    const block = getDemandBlockForMonth(month, demandAssumptions);
     
     // 1. Demand Inputs
-    const baseInf = resolveAssumptionValue(block?.workloadBase?.inferenceTokensPerMonth?.total, 100e9); 
-    const growthRate = resolveAssumptionValue(block?.inferenceGrowth?.consumer?.value, 0.50); 
-    const growthInf = Math.pow(1 + growthRate, month / 12);
-    const totalTokens = baseInf * growthInf;
+    const inferenceDemand = calculateInferenceDemand(month, block);
+    const totalTokens = inferenceDemand.total;
     
     // 2. Physics
     const flopsPerToken = PHYSICS_DEFAULTS.flopsPerToken;
@@ -363,6 +410,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const nodeState = {};
   NODES.forEach(node => {
     const type = getNodeType(node.id);
+    const isGpuNode = node.id === 'gpu_datacenter' || node.id === 'gpu_inference';
     nodeState[node.id] = {
       type: type,
       inventory: (type === 'STOCK') ? (node.startingInventory || 0) : 0,
@@ -375,8 +423,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     
     results.nodes[node.id] = {
       demand: [], supply: [], capacity: [], inventory: [], backlog: [], 
-      shortage: [], glut: [], tightness: [], priceIndex: [], 
+      shortage: [], glut: [], tightness: [], priceIndex: [],
       installedBase: [], requiredBase: [], planDeploy: [], consumption: [],
+      supplyPotential: [], gpuDelivered: [], idleGpus: [], yield: [],
+      gpuPurchases: isGpuNode ? [] : null,
       unmetDemand: [] // DIAGNOSTIC METRIC
     };
   });
@@ -386,11 +436,46 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     results.months.push(month);
 
     // 1. LIVE DEMAND DRIVERS (Dynamic Calibration)
+    const demandBlock = getDemandBlockForMonth(month, demandAssumptions);
+    const inferenceDemand = calculateInferenceDemand(month, demandBlock);
+    const trainingDemand = calculateTrainingDemand(month, demandBlock);
     const currentInstalledBase = nodeState['gpu_datacenter'].installedBase + nodeState['gpu_inference'].installedBase;
     const requiredGpuBase = calculateRequiredGpus(month, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedNodes, currentInstalledBase);
     
     const requiredDcBase = requiredGpuBase * 0.7; 
     const requiredInfBase = requiredGpuBase * 0.3; 
+
+    const pushWorkloadMetrics = (nodeId, demandValue) => {
+      const nodeRes = results.nodes[nodeId];
+      if (!nodeRes) return;
+      nodeRes.demand.push(demandValue);
+      nodeRes.supply.push(null);
+      nodeRes.capacity.push(null);
+      nodeRes.inventory.push(null);
+      nodeRes.backlog.push(null);
+      nodeRes.shortage.push(null);
+      nodeRes.glut.push(null);
+      nodeRes.tightness.push(null);
+      nodeRes.priceIndex.push(null);
+      nodeRes.installedBase.push(null);
+      nodeRes.requiredBase.push(null);
+      nodeRes.planDeploy.push(null);
+      nodeRes.consumption.push(null);
+      nodeRes.supplyPotential.push(null);
+      nodeRes.gpuDelivered.push(null);
+      nodeRes.idleGpus.push(null);
+      nodeRes.yield.push(null);
+      if (nodeRes.gpuPurchases) {
+        nodeRes.gpuPurchases.push(null);
+      }
+      nodeRes.unmetDemand.push(null);
+    };
+
+    pushWorkloadMetrics('training_frontier', trainingDemand.frontier);
+    pushWorkloadMetrics('training_midtier', trainingDemand.midtier);
+    pushWorkloadMetrics('inference_consumer', inferenceDemand.consumer);
+    pushWorkloadMetrics('inference_enterprise', inferenceDemand.enterprise);
+    pushWorkloadMetrics('inference_agentic', inferenceDemand.agentic);
 
     // =======================================================
     // STEP 0: THE PLAN
@@ -466,6 +551,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // 3. Final Gating
     const demandCeiling = planDeployTotal; 
     const actualDeployTotal = Math.min(demandCeiling, gpuAvailable, maxSupported);
+    const blockedByComponents = Math.max(0, Math.min(demandCeiling, gpuAvailable) - actualDeployTotal);
 
     // =======================================================
     // STEP 3: CONSUMPTION & UPDATES
@@ -493,6 +579,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const shareDc = baselinePlan > EPSILON ? (planDeployDc / baselinePlan) : 0.7;
     const actualDc = actualDeployTotal * shareDc;
     const actualInf = actualDeployTotal * (1 - shareDc);
+    const blockedDc = blockedByComponents * shareDc;
+    const blockedInf = blockedByComponents * (1 - shareDc);
 
     gpuState.installedBase = Math.max(0, gpuState.installedBase + actualDc - dcRetirements);
     infState.installedBase = Math.max(0, infState.installedBase + actualInf - infRetirements);
@@ -501,6 +589,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuTotalLoad = baselinePlan; 
     const gpuPotential = preUpdateGpuInventory + gpuEffCap;
     const gpuTightness = gpuTotalLoad / Math.max(gpuPotential, EPSILON);
+    const gpuPriceIndex = calculatePriceIndex(gpuTightness);
+    const gpuYield = calculateNodeYield(gpuNode, month);
     
     gpuState.tightnessHistory.push(gpuTightness);
     
@@ -522,11 +612,21 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         res.demand.push(planDeployTotal * share); 
         res.supply.push(isDc ? actualDc : actualInf); 
         res.capacity.push(isDc ? gpuEffCap : 0);
+        res.supplyPotential.push(gpuEffCap * share);
         res.inventory.push(isDc ? gpuState.inventory : 0);
         res.backlog.push(gpuState.backlog * share);
         res.installedBase.push(state.installedBase);
+        res.requiredBase.push(isDc ? requiredDcBase : requiredInfBase);
+        res.planDeploy.push(planDeployTotal * share);
         res.consumption.push(actualDeployTotal * share);
+        res.gpuDelivered.push(isDc ? actualDc : actualInf);
+        res.idleGpus.push(isDc ? blockedDc : blockedInf);
+        if (res.gpuPurchases) {
+            res.gpuPurchases.push(planDeployTotal * share);
+        }
         res.tightness.push(gpuTightness); 
+        res.priceIndex.push(gpuPriceIndex);
+        res.yield.push(gpuYield);
         res.shortage.push(gpuState.backlog > 0 ? 1 : 0);
         res.unmetDemand.push(Math.max(0, planDeployTotal * share - (isDc ? actualDc : actualInf)));
     });
@@ -599,6 +699,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         const potentialSupply = (state.type === 'STOCK') ? (inventoryIn + effectiveCapacity) : effectiveCapacity;
         
         const tightness = totalLoad / Math.max(potentialSupply, EPSILON);
+        const priceIndex = calculatePriceIndex(tightness);
         state.tightnessHistory.push(tightness);
         
         if (sma(state.tightnessHistory, 6) > 1.10 && (month - state.lastExpansionMonth > 12)) {
@@ -615,13 +716,19 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         nodeRes.demand.push(demand);
         nodeRes.supply.push(delivered);
         nodeRes.capacity.push(effectiveCapacity);
+        nodeRes.supplyPotential.push(effectiveCapacity);
         nodeRes.inventory.push(state.inventory);
         nodeRes.backlog.push(state.backlog);
         nodeRes.tightness.push(tightness);
+        nodeRes.priceIndex.push(priceIndex);
+        nodeRes.yield.push(yieldRate);
         nodeRes.unmetDemand.push(unmet); // New Metric
         
         const isShort = tightness > 1.05;
         nodeRes.shortage.push(isShort ? 1 : 0);
+        nodeRes.requiredBase.push(0);
+        nodeRes.gpuDelivered.push(0);
+        nodeRes.idleGpus.push(0);
     });
 
   } // End Month Loop
