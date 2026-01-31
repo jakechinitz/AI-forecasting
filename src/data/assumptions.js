@@ -141,16 +141,16 @@ const DEMAND_YEAR1 = {
   // Training demand growth
   trainingGrowth: {
     frontier: {
-      value: 0.25,  // 25% more frontier runs per year
+      value: 3.00,  // 300% more frontier runs per year
       confidence: 'medium',
-      source: 'Scaling law research, lab announcements',
-      historicalRange: [0.10, 0.50]
+      source: 'Supply-constrained training demand; increased runs once capacity expands',
+      historicalRange: [0.10, 3.00]
     },
     midtier: {
-      value: 0.50,  // 50% growth in mid-tier training
+      value: 3.00,  // 300% growth in mid-tier training
       confidence: 'low',
-      source: 'Fine-tuning demand, enterprise custom models',
-      historicalRange: [0.30, 0.80]
+      source: 'Supply-constrained training demand; increased runs once capacity expands',
+      historicalRange: [0.30, 3.00]
     }
   },
 
@@ -220,10 +220,14 @@ const DEMAND_YEARLY_BLOCKS = FIRST_FIVE_YEAR_KEYS.reduce((acc, key, index) => {
 DEMAND_YEARLY_BLOCKS.year2.inferenceGrowth.consumer.value = 2.00;
 DEMAND_YEARLY_BLOCKS.year2.inferenceGrowth.enterprise.value = 3.00;
 DEMAND_YEARLY_BLOCKS.year2.inferenceGrowth.agentic.value = 2.00;
+DEMAND_YEARLY_BLOCKS.year2.trainingGrowth.frontier.value = 2.00;
+DEMAND_YEARLY_BLOCKS.year2.trainingGrowth.midtier.value = 2.00;
 
 DEMAND_YEARLY_BLOCKS.year3.inferenceGrowth.consumer.value = 1.00;
 DEMAND_YEARLY_BLOCKS.year3.inferenceGrowth.enterprise.value = 3.00;
 DEMAND_YEARLY_BLOCKS.year3.inferenceGrowth.agentic.value = 1.50;
+DEMAND_YEARLY_BLOCKS.year3.trainingGrowth.frontier.value = 1.00;
+DEMAND_YEARLY_BLOCKS.year3.trainingGrowth.midtier.value = 1.00;
 
 DEMAND_YEARLY_BLOCKS.year4.inferenceGrowth.consumer.value = 0.60;
 DEMAND_YEARLY_BLOCKS.year4.inferenceGrowth.enterprise.value = 1.00;
