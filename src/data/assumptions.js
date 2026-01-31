@@ -663,6 +663,18 @@ export const TRANSLATION_INTENSITIES = {
       confidence: 'high',
       source: 'Die size analysis'
     },
+    hybridBondingPerGpu: {
+      value: 1.0,  // Wafer-equiv per GPU if fully adopted
+      confidence: 'low',
+      source: 'Hybrid bonding roadmap estimates'
+    },
+    hybridBondingAdoption: {
+      initial: 0.05,  // 5% of GPUs using hybrid bonding in early ramp
+      target: 0.6,    // 60% adoption at maturity
+      halflifeMonths: 30,
+      confidence: 'low',
+      source: 'Advanced packaging adoption curves'
+    },
     advancedWafersPerGpu: {
       value: 0.5,  // Logic die
       confidence: 'high',
