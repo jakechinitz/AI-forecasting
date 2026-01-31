@@ -1,11 +1,11 @@
 /**
  * AI Infrastructure Supply Chain - Calculation Engine
  *
- * FINAL CALIBRATED VERSION (v25):
- * * SEMANTICS: Throughput/Queue nodes do not accumulate ghost backlog.
- * * PHYSICALITY: Stock nodes enforce Delivered <= Available (Trap for unmapped constraints).
- * * LOGIC: Split follows Plan. Expansion follows Baseline.
- * * OPTIMIZATION: O(1) Node Lookups.
+ * FINAL CALIBRATED VERSION (v28):
+ * * PHYSICS: Iterative Efficiency Math (Time-Consistent).
+ * * CALIBRATION: Loud warning if Demand vs Installed Base is wildly off.
+ * * SEMANTICS: Magnitude checks respect Stock vs Flow.
+ * * SAFETY: Traps "Zero-Start" constraints that would kill the sim.
  */
 
 import { NODES } from '../data/nodes.js';
@@ -23,7 +23,6 @@ import {
 // 1. ONTOLOGY & OPTIMIZATION
 // ============================================
 
-// O(1) Lookup
 const NODE_MAP = new Map(NODES.map(n => [n.id, n]));
 
 const STOCK_NODES = new Set([
@@ -94,6 +93,10 @@ function deepMerge(target, source) {
   return result;
 }
 
+function resolveAssumptionValue(value, fallback) {
+  return value ?? fallback ?? 0;
+}
+
 function sma(values, window) {
   if (values.length === 0) return 0;
   if (values.length < window) return values.reduce((a, b) => a + b, 0) / values.length;
@@ -101,13 +104,11 @@ function sma(values, window) {
 }
 
 // ============================================
-// 3. CALCULATION HELPERS
+// 3. CALCULATION HELPERS (PHYSICS & CALIBRATION)
 // ============================================
 
-const growthCache = new Map();
-
 export function clearGrowthCache() {
-  growthCache.clear();
+  // Cache is now run-scoped (passed in), no global clear needed
 }
 
 export function calculateCapacity(node, month, scenarioOverrides = {}, dynamicExpansions = []) {
@@ -155,6 +156,80 @@ function calculateNodeYield(node, month) {
    return calculateSimpleYield(node.yieldSimpleLoss || 0.03);
 }
 
+// --- PHYSICS ENGINE ---
+
+function getEfficiencyMultipliers(month, assumptions, cache) {
+  // Iterative Calculation (Time-Consistent)
+  // M[t] = M[t-1] * (1 - annual_rate)^(1/12)
+  
+  if (cache[month]) return cache[month];
+  
+  if (month === 0) {
+      cache[0] = { M_inference: 1, M_training: 1, S_inference: 1, S_training: 1, H: 1 };
+      return cache[0];
+  }
+
+  const prev = getEfficiencyMultipliers(month - 1, assumptions, cache);
+  const blockKey = getBlockKeyForMonth(month);
+  const block = assumptions?.[blockKey] || EFFICIENCY_ASSUMPTIONS[blockKey];
+
+  const m_infer_annual = resolveAssumptionValue(block?.modelEfficiency?.m_inference?.value, 0.18);
+  const m_train_annual = resolveAssumptionValue(block?.modelEfficiency?.m_training?.value, 0.10);
+  
+  const decay_inf = Math.pow(1 - m_infer_annual, 1/12);
+  const decay_train = Math.pow(1 - m_train_annual, 1/12);
+  
+  const current = {
+      M_inference: prev.M_inference * decay_inf,
+      M_training: prev.M_training * decay_train,
+      S_inference: 1, 
+      S_training: 1, 
+      H: 1
+  };
+  
+  cache[month] = current;
+  return current;
+}
+
+function calculateRequiredGpus(month, demandAssumptions, efficiencyAssumptions, effCache, calibrationWarnings) {
+    const blockKey = getBlockKeyForMonth(month);
+    const block = demandAssumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
+    
+    // 1. Demand Inputs (Tokens)
+    const baseInf = resolveAssumptionValue(block?.workloadBase?.inferenceTokensPerMonth?.total, 100e9); 
+    const growthRate = resolveAssumptionValue(block?.inferenceGrowth?.consumer?.value, 0.50); 
+    const growthInf = Math.pow(1 + growthRate, month / 12);
+    const totalTokens = baseInf * growthInf;
+    
+    // 2. Physics Constants (Move to assumptions.js in real prod)
+    const flopsPerToken = 140e9; // ~70B param * 2
+    const flopsPerGpu = 2e15; // H100 FP8 Peak
+    const utilization = 0.35; // Cluster efficiency
+    const secondsPerMonth = 2.6e6;
+    
+    // 3. Efficiency
+    const eff = getEfficiencyMultipliers(month, efficiencyAssumptions, effCache);
+    
+    // 4. Calc
+    // GPUs = (Tokens * FLOPs/Token * EffMultiplier) / (FLOPs/GPU * Util * Sec/Month)
+    // Note: M_inference < 1 means FEWER FLOPs needed per token over time
+    const effectiveFlopsPerToken = flopsPerToken * eff.M_inference; 
+    const effectiveFlopsPerGpuMonth = flopsPerGpu * utilization * secondsPerMonth;
+    
+    const required = (totalTokens * effectiveFlopsPerToken) / effectiveFlopsPerGpuMonth;
+
+    // 5. Calibration Guard (Month 0 only)
+    if (month === 0) {
+        const installed = 1.2e6 + 300000; // Hardcoded start from nodes
+        const ratio = required / installed;
+        if (ratio < 0.1 || ratio > 2.0) {
+            calibrationWarnings.push(`CALIBRATION ALARM: Month 0 Required GPUs (${required.toFixed(0)}) is ${(ratio*100).toFixed(0)}% of Installed Base. Adjust Base Tokens or FLOPs.`);
+        }
+    }
+
+    return required;
+}
+
 // ============================================
 // 4. INTENSITY MAPPING & PREFLIGHT
 // ============================================
@@ -195,7 +270,30 @@ function buildIntensityMap() {
 function runPreflightDiagnostics(map, warnings) {
     let errCount = 0;
     
-    // 1. Check for Dead Links & Group A conflicts
+    // Get GPU Node for magnitude checks
+    const gpuNode = NODE_MAP.get('gpu_datacenter');
+    const gpuStartCap = gpuNode?.startingCapacity || 1; 
+
+    // 1. Ghost Node Detection
+    NODES.forEach(node => {
+        const isEligible = node.group !== 'A' && !['gpu_datacenter', 'gpu_inference'].includes(node.id);
+        const isMapped = !!map[node.id];
+        
+        // Zero-Start Trap
+        if (isMapped && node.startingCapacity === 0 && node.startingInventory === 0 && (!node.committedExpansions || node.committedExpansions.length === 0)) {
+             warnings.push(`PREFLIGHT ERROR: Node '${node.id}' starts at 0 Capacity/Inventory and has no Expansions. It will clamp simulation to 0.`);
+             errCount++;
+        }
+
+        if (isEligible && !isMapped) {
+             const type = getNodeType(node.id);
+             if (type !== 'QUEUE') { 
+                 warnings.push(`PREFLIGHT WARNING: Endogenous Node '${node.id}' has NO intensity mapping. It will not constrain.`);
+             }
+        }
+    });
+    
+    // 2. Map Validation
     Object.keys(map).forEach(key => {
         const node = NODE_MAP.get(key);
         
@@ -204,22 +302,36 @@ function runPreflightDiagnostics(map, warnings) {
             errCount++;
         } else {
             if (node.group === 'A') {
-                warnings.push(`PREFLIGHT WARNING: Node '${key}' is mapped for intensity but is Group A (Exogenous). It will not constrain.`);
+                warnings.push(`PREFLIGHT WARNING: Node '${key}' is mapped but Group A. It will not generate potential.`);
             }
             
-            // 2. Unit Validation (Strict)
+            // Unit Check
             if (EXPECTED_UNITS[key]) {
                 if (!node.unit) {
-                    warnings.push(`PREFLIGHT WARNING: Node '${key}' missing 'unit'. Expected '${EXPECTED_UNITS[key]}'. Check nodes.js.`);
+                    warnings.push(`PREFLIGHT ERROR: Critical Node '${key}' missing 'unit'. Expected '${EXPECTED_UNITS[key]}'.`);
+                    errCount++;
                 } else if (node.unit !== EXPECTED_UNITS[key]) {
-                    warnings.push(`PREFLIGHT WARNING: Unit Mismatch for '${key}'. Config has '${node.unit}', engine expected '${EXPECTED_UNITS[key]}'.`);
+                    warnings.push(`PREFLIGHT WARNING: Unit Mismatch for '${key}'. Config '${node.unit}' vs Expected '${EXPECTED_UNITS[key]}'.`);
+                }
+            }
+
+            // MAGNITUDE SANITY CHECK (Throughput Only)
+            // Prevents comparing MW (Stock) to GPUs/Month (Flow)
+            const type = getNodeType(key);
+            if (type === 'THROUGHPUT' && node.startingCapacity > 0 && gpuStartCap > 0) {
+                const impliedGpuSupport = node.startingCapacity / map[key];
+                const ratio = impliedGpuSupport / gpuStartCap;
+                
+                // If capacity supports < 1% or > 100x the GPU fab, something is likely wrong with units
+                if (ratio < 0.01 || ratio > 100) {
+                     warnings.push(`PREFLIGHT WARNING: Magnitude Mismatch '${key}'. Implied Support ${impliedGpuSupport.toFixed(0)} GPUs vs GPU Cap ${gpuStartCap}. Check Units/Intensity.`);
                 }
             }
         }
     });
 
     if (errCount > 0) {
-        warnings.push(`PREFLIGHT: Found ${errCount} configuration errors. Simulation may behave unpredictably.`);
+        warnings.push(`PREFLIGHT: Found ${errCount} configuration errors.`);
     }
 }
 
@@ -228,7 +340,6 @@ function runPreflightDiagnostics(map, warnings) {
 // ============================================
 
 export function runSimulation(assumptions, scenarioOverrides = {}) {
-  clearGrowthCache();
   const months = GLOBAL_PARAMS.horizonYears * 12;
   
   const results = {
@@ -238,12 +349,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     warnings: [] 
   };
   
-  // Build and Validate
   const nodeIntensityMap = buildIntensityMap();
   runPreflightDiagnostics(nodeIntensityMap, results.warnings);
 
   const warnedNodes = new Set();
   const demandAssumptions = deepMerge(assumptions?.demand || DEMAND_ASSUMPTIONS, scenarioOverrides?.demand);
+  const efficiencyAssumptions = deepMerge(assumptions?.efficiency || EFFICIENCY_ASSUMPTIONS, scenarioOverrides?.efficiency);
+
+  // Run-scoped caches
+  const effCache = []; // Array-based cache for iterative efficiency
 
   // --- STATE INITIALIZATION ---
   const nodeState = {};
@@ -270,7 +384,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   for (let month = 0; month < months; month++) {
     results.months.push(month);
 
-    const requiredGpuBase = 2000000 * Math.pow(1.03, month); 
+    // 1. LIVE DEMAND DRIVERS (Physics Based + Calibrated)
+    const requiredGpuBase = calculateRequiredGpus(month, demandAssumptions, efficiencyAssumptions, effCache, results.warnings);
+    
     const requiredDcBase = requiredGpuBase * 0.7; 
     const requiredInfBase = requiredGpuBase * 0.3; 
 
@@ -289,7 +405,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const planDeployDc = (dcGap / CATCHUP_MONTHS) + dcRetirements;
     const planDeployInf = (infGap / CATCHUP_MONTHS) + infRetirements;
     
-    // Master Scalar (Includes Paydown)
+    // Master Scalar
     const planDeployTotal = planDeployDc + planDeployInf + backlogPaydown;
     
     // Baseline Plan (Structural Demand)
@@ -317,10 +433,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     });
 
     // =======================================================
-    // STEP 2: GATING (Generic)
+    // STEP 2: GATING
     // =======================================================
     
-    // 1. GPU Fab Constraint
+    // 1. GPU Fab
     const gpuNode = NODE_MAP.get('gpu_datacenter');
     const gpuCap = calculateCapacity(gpuNode, month, scenarioOverrides, gpuState.dynamicExpansions);
     const gpuEffCap = gpuCap * 0.95 * calculateNodeYield(gpuNode, month);
@@ -328,7 +444,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     
     const preUpdateGpuInventory = gpuState.inventory;
 
-    // 2. Generic Component Constraints
+    // 2. Components
     let maxSupported = Infinity;
     let constraintCount = 0; 
     
@@ -343,9 +459,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         }
     });
 
-    // SAFETY: Throttled Warning (Annual)
     if (constraintCount === 0 && (month === 0 || month % 12 === 0)) {
-        results.warnings.push(`Warning (Month ${month}): No active component constraints found. System running unconstrained.`);
+        results.warnings.push(`Warning (Month ${month}): No active component constraints found.`);
         maxSupported = Infinity; 
     }
 
@@ -357,16 +472,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // STEP 3: CONSUMPTION & UPDATES
     // =======================================================
     
-    // A. GPU State Update
+    // A. GPU Update
     const gpuBufferTarget = planDeployTotal * DEFAULT_BUFFER_MONTHS;
     const gpuProdTarget = actualDeployTotal + Math.max(0, gpuBufferTarget - gpuState.inventory);
     const gpuProduced = Math.min(gpuEffCap, gpuProdTarget);
     
     const oldGpuBacklog = gpuState.backlog;
-    
     gpuState.inventory = (gpuState.inventory + gpuProduced) - actualDeployTotal;
     
-    // SAFETY: Inventory Clamp
     if (gpuState.inventory < -1e-6) {
         if (!warnedNodes.has('gpu_datacenter')) {
              results.warnings.push(`Clamp: Negative GPU Inventory detected at month ${month}`);
@@ -375,19 +488,18 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         gpuState.inventory = 0;
     }
 
-    // CLEAN BACKLOG: New = Old + Baseline - Actual (Implicit paydown)
+    // Clean Backlog Update (No Double Paydown)
     gpuState.backlog = Math.max(0, oldGpuBacklog + baselinePlan - actualDeployTotal);
     
-    // Installed Base Update (LOGIC FIX: Split by Plan, not RequiredBase)
-    const shareDc = planDeployTotal > EPSILON ? (planDeployDc / planDeployTotal) : 0.7;
+    // Split: Derived from Baseline Plan (Stable Ratio)
+    const shareDc = baselinePlan > EPSILON ? (planDeployDc / baselinePlan) : 0.7;
     const actualDc = actualDeployTotal * shareDc;
     const actualInf = actualDeployTotal * (1 - shareDc);
 
     gpuState.installedBase = Math.max(0, gpuState.installedBase + actualDc - dcRetirements);
     infState.installedBase = Math.max(0, infState.installedBase + actualInf - infRetirements);
 
-    // --- GPU EXPANSION LOGIC ---
-    // LOGIC FIX: Trigger off Baseline Plan (Steady State Demand)
+    // GPU Expansion: Trigger off Baseline Plan (Steady State)
     const gpuTotalLoad = baselinePlan; 
     const gpuPotential = preUpdateGpuInventory + gpuEffCap;
     const gpuTightness = gpuTotalLoad / Math.max(gpuPotential, EPSILON);
@@ -404,7 +516,6 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         gpuState.lastExpansionMonth = month;
     }
 
-    // Save GPU Results
     [gpuState, infState].forEach((state, idx) => {
         const isDc = idx === 0;
         const res = results.nodes[isDc ? 'gpu_datacenter' : 'gpu_inference'];
@@ -449,10 +560,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
             
             const available = state.inventory + production;
             
-            // PHYSICALITY CHECK: Delivered cannot exceed Available
+            // PHYSICALITY: Delivered <= Available
             delivered = Math.min(consumption, available); 
             
-            // Trap Unmapped Constraints
             if (delivered < consumption - 1e-6) {
                  if (!warnedNodes.has(node.id)) {
                     results.warnings.push(`Logic Error: Unmapped Constraint in ${node.id}. Consumption > Available.`);
@@ -464,9 +574,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
             state.backlog = 0; 
             
         } else {
-            // THROUGHPUT: No Ghost Backlog
+            // THROUGHPUT
             delivered = consumption;
-            state.backlog = 0; // SEMANTIC FIX: Throughput nodes don't accumulate plan backlog
+            state.backlog = 0; 
             state.inventory = 0;
         }
 
@@ -495,7 +605,6 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         nodeRes.backlog.push(state.backlog);
         nodeRes.tightness.push(tightness);
         
-        // Shortage Flag: Unified Metric
         const isShort = tightness > 1.05;
         nodeRes.shortage.push(isShort ? 1 : 0);
     });
