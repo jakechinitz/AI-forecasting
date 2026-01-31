@@ -80,16 +80,6 @@ function isNonInventoriable(node) {
   return node?.inventoryPolicy === 'queue' || node?.inventoryPolicy === 'non_storable';
 }
 
-function calculateTrainingThrottle(month, results) {
-  if (month === 0) return 1;
-  const dcResults = results?.nodes?.datacenter_mw;
-  if (!dcResults) return 1;
-  const demand = dcResults.demand[month - 1] ?? 0;
-  const supply = dcResults.supply[month - 1] ?? 0;
-  if (demand <= 0) return 1;
-  return Math.min(1, supply / (demand + EPSILON));
-}
-
 function getGpuToComponentIntensities() {
   const gpuToComponents = TRANSLATION_INTENSITIES?.gpuToComponents || {};
   return {
@@ -953,7 +943,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const approvalCap = nodeId === 'datacenter_mw'
         ? componentSupply.grid_interconnect
         : Infinity;
-      const inventoryAvailable = isNonInventoriable(node) ? 0 : state.inventory;
+      const inventoryAvailable = nodeId === 'grid_interconnect' ? 0 : state.inventory;
       const actualSupply = Math.min(
         maxProducible + inventoryAvailable,
         demand + state.backlog,
@@ -973,7 +963,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
       // Update state
       state.priceHistory.push(calculatePriceIndex(tightness));
-      state.inventory = isNonInventoriable(node)
+      state.inventory = nodeId === 'grid_interconnect'
         ? 0
         : calculateInventory(state.inventory, maxProducible, actualSupply);
       state.backlog = calculateBacklog(state.backlog, demand, actualSupply);
