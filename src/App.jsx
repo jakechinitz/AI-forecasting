@@ -20,6 +20,7 @@ import MarketClearingTab from './components/MarketClearingTab.jsx';
 import AnalysisTab from './components/AnalysisTab.jsx';
 import ChartsTab from './components/ChartsTab.jsx';
 import ScenarioTab from './components/ScenarioTab.jsx';
+import PrintoutTab from './components/PrintoutTab.jsx';
 
 import './styles/app.css';
 
@@ -31,7 +32,8 @@ const TABS = [
   { id: 'market', label: 'Market Clearing', icon: '⚖️' },
   { id: 'analysis', label: 'Shortage/Glut', icon: '🔍' },
   { id: 'charts', label: 'Charts', icon: '📊' },
-  { id: 'scenarios', label: 'Scenarios', icon: '🎭' }
+  { id: 'scenarios', label: 'Scenarios', icon: '🎭' },
+  { id: 'printout', label: 'Printout', icon: '🧾' }
 ];
 
 function App() {
@@ -185,6 +187,13 @@ function App() {
             selectedScenario={selectedScenario}
             onSelectScenario={setSelectedScenario}
             results={simulationResults}
+          />
+        );
+      case 'printout':
+        return (
+          <PrintoutTab
+            results={simulationResults}
+            scenario={SCENARIOS[selectedScenario]}
           />
         );
 
