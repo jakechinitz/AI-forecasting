@@ -1093,17 +1093,17 @@ const BASE_NODES = [
     inputIntensity: 0.001,  // 1 kW per GPU average
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    // Base rate: ~15 GW/year global AI DC bring-up capacity (2025)
+    // Base rate: ~12 GW/year global AI DC bring-up capacity (2025)
     // AI data centers from 10GW base 2025 to ~20-30GW incremental by 2026
     // Grid strain limits bring-up; AI to 27% of data center power
     // Source: NERC reports, S&P Global data center analysis. As of 2026-01.
-    startingCapacity: 1250,  // MW/month (~15GW/yr)
+    startingCapacity: 1000,  // MW/month (~12GW/yr)
     committedExpansions: [
       { date: '2026-01', capacityAdd: 300, type: 'committed' },
       { date: '2027-01', capacityAdd: 300, type: 'optional' }
     ],
-    leadTimeDebottleneck: 6,
-    leadTimeNewBuild: 36,  // 3 years for new campus
+    leadTimeDebottleneck: 12,
+    leadTimeNewBuild: 48,  // 4 years for new campus
     rampProfile: 's-curve',
 
     elasticityShort: 0.1,
@@ -1124,7 +1124,7 @@ const BASE_NODES = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 1250,
+      value: 1000,
       confidence: 'medium',
       source: 'NERC reports, S&P Global data center analysis. As of 2026-01.',
       historicalRange: [1000, 2000]
@@ -1188,10 +1188,10 @@ const BASE_NODES = [
 
     // Base rate: Grid queues severely backlogged
     // Only ~20% of queued capacity gets built
-    startingCapacity: 5000,  // MW/month approvals
+    startingCapacity: 2500,  // MW/month approvals
     committedExpansions: [],
-    leadTimeDebottleneck: 12,
-    leadTimeNewBuild: 48,
+    leadTimeDebottleneck: 24,
+    leadTimeNewBuild: 60,
     rampProfile: 'linear',
 
     elasticityShort: 0.02,
@@ -1212,7 +1212,7 @@ const BASE_NODES = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 5000,
+      value: 2500,
       confidence: 'medium',
       source: 'Utility commission data, LBNL queue reports',
       historicalRange: [3000, 8000]
