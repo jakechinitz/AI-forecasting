@@ -109,6 +109,15 @@ function sma(values, window) {
   return values.slice(-window).reduce((a, b) => a + b, 0) / window;
 }
 
+function calculatePriceIndex(tightness) {
+  const { a, b, minPrice, maxPrice } = GLOBAL_PARAMS.priceIndex;
+  if (!Number.isFinite(tightness)) return 1;
+  if (tightness >= 1) {
+    return Math.min(maxPrice, 1 + a * Math.pow(tightness - 1, b));
+  }
+  return Math.max(minPrice, 1 - a * Math.pow(1 - tightness, b));
+}
+
 // ============================================
 // 3. CALCULATION HELPERS
 // ============================================
@@ -375,8 +384,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     
     results.nodes[node.id] = {
       demand: [], supply: [], capacity: [], inventory: [], backlog: [], 
-      shortage: [], glut: [], tightness: [], priceIndex: [], 
+      shortage: [], glut: [], tightness: [], priceIndex: [],
       installedBase: [], requiredBase: [], planDeploy: [], consumption: [],
+      supplyPotential: [], gpuDelivered: [], idleGpus: [], yield: [],
       unmetDemand: [] // DIAGNOSTIC METRIC
     };
   });
@@ -466,6 +476,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // 3. Final Gating
     const demandCeiling = planDeployTotal; 
     const actualDeployTotal = Math.min(demandCeiling, gpuAvailable, maxSupported);
+    const blockedByComponents = Math.max(0, Math.min(demandCeiling, gpuAvailable) - actualDeployTotal);
 
     // =======================================================
     // STEP 3: CONSUMPTION & UPDATES
@@ -493,6 +504,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const shareDc = baselinePlan > EPSILON ? (planDeployDc / baselinePlan) : 0.7;
     const actualDc = actualDeployTotal * shareDc;
     const actualInf = actualDeployTotal * (1 - shareDc);
+    const blockedDc = blockedByComponents * shareDc;
+    const blockedInf = blockedByComponents * (1 - shareDc);
 
     gpuState.installedBase = Math.max(0, gpuState.installedBase + actualDc - dcRetirements);
     infState.installedBase = Math.max(0, infState.installedBase + actualInf - infRetirements);
@@ -501,6 +514,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuTotalLoad = baselinePlan; 
     const gpuPotential = preUpdateGpuInventory + gpuEffCap;
     const gpuTightness = gpuTotalLoad / Math.max(gpuPotential, EPSILON);
+    const gpuPriceIndex = calculatePriceIndex(gpuTightness);
+    const gpuYield = calculateNodeYield(gpuNode, month);
     
     gpuState.tightnessHistory.push(gpuTightness);
     
@@ -522,11 +537,17 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         res.demand.push(planDeployTotal * share); 
         res.supply.push(isDc ? actualDc : actualInf); 
         res.capacity.push(isDc ? gpuEffCap : 0);
+        res.supplyPotential.push(gpuEffCap * share);
         res.inventory.push(isDc ? gpuState.inventory : 0);
         res.backlog.push(gpuState.backlog * share);
         res.installedBase.push(state.installedBase);
+        res.requiredBase.push(isDc ? requiredDcBase : requiredInfBase);
         res.consumption.push(actualDeployTotal * share);
+        res.gpuDelivered.push(isDc ? actualDc : actualInf);
+        res.idleGpus.push(isDc ? blockedDc : blockedInf);
         res.tightness.push(gpuTightness); 
+        res.priceIndex.push(gpuPriceIndex);
+        res.yield.push(gpuYield);
         res.shortage.push(gpuState.backlog > 0 ? 1 : 0);
         res.unmetDemand.push(Math.max(0, planDeployTotal * share - (isDc ? actualDc : actualInf)));
     });
@@ -599,6 +620,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         const potentialSupply = (state.type === 'STOCK') ? (inventoryIn + effectiveCapacity) : effectiveCapacity;
         
         const tightness = totalLoad / Math.max(potentialSupply, EPSILON);
+        const priceIndex = calculatePriceIndex(tightness);
         state.tightnessHistory.push(tightness);
         
         if (sma(state.tightnessHistory, 6) > 1.10 && (month - state.lastExpansionMonth > 12)) {
@@ -615,13 +637,19 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         nodeRes.demand.push(demand);
         nodeRes.supply.push(delivered);
         nodeRes.capacity.push(effectiveCapacity);
+        nodeRes.supplyPotential.push(effectiveCapacity);
         nodeRes.inventory.push(state.inventory);
         nodeRes.backlog.push(state.backlog);
         nodeRes.tightness.push(tightness);
+        nodeRes.priceIndex.push(priceIndex);
+        nodeRes.yield.push(yieldRate);
         nodeRes.unmetDemand.push(unmet); // New Metric
         
         const isShort = tightness > 1.05;
         nodeRes.shortage.push(isShort ? 1 : 0);
+        nodeRes.requiredBase.push(0);
+        nodeRes.gpuDelivered.push(0);
+        nodeRes.idleGpus.push(0);
     });
 
   } // End Month Loop
