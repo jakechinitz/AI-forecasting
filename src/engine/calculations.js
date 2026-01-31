@@ -31,6 +31,7 @@ import {
   GLOBAL_PARAMS,
   DEMAND_ASSUMPTIONS,
   EFFICIENCY_ASSUMPTIONS,
+  TRANSLATION_INTENSITIES,
   FIRST_ASSUMPTION_KEY,
   getBlockKeyForMonth,
   calculateMt,
@@ -73,6 +74,37 @@ function deepMerge(target, source) {
 function resolveAssumptionValue(value, fallback) {
   if (value === null) return 0;
   return value ?? fallback;
+}
+
+function getGpuToComponentIntensities() {
+  const gpuToComponents = TRANSLATION_INTENSITIES?.gpuToComponents || {};
+  return {
+    hbmStacksPerGpu: resolveAssumptionValue(gpuToComponents.hbmStacksPerGpu?.value, 8),
+    cowosWaferEquivPerGpu: resolveAssumptionValue(gpuToComponents.cowosWaferEquivPerGpu?.value, 1.0),
+    hybridBondingPerGpu: resolveAssumptionValue(gpuToComponents.hybridBondingPerGpu?.value, 0.1),
+    hybridBondingAdoption: {
+      initial: resolveAssumptionValue(gpuToComponents.hybridBondingAdoption?.initial, 0.1),
+      target: resolveAssumptionValue(gpuToComponents.hybridBondingAdoption?.target, 0.5),
+      halflifeMonths: resolveAssumptionValue(gpuToComponents.hybridBondingAdoption?.halflifeMonths, 24)
+    },
+    advancedWafersPerGpu: resolveAssumptionValue(gpuToComponents.advancedWafersPerGpu?.value, 0.5),
+    serverDramGbPerGpu: resolveAssumptionValue(gpuToComponents.serverDramGbPerGpu?.value, 64)
+  };
+}
+
+function getServerInfraIntensities() {
+  const serverToInfra = TRANSLATION_INTENSITIES?.serverToInfra || {};
+  return {
+    gpusPerServer: resolveAssumptionValue(serverToInfra.gpusPerServer?.value, 8),
+    serversPerRack: resolveAssumptionValue(serverToInfra.serversPerRack?.value, 4),
+    kwPerGpu: resolveAssumptionValue(serverToInfra.kwPerGpu?.value, 1.0),
+    pue: resolveAssumptionValue(serverToInfra.pue?.value, 1.3)
+  };
+}
+
+function calculateHybridBondingAdoption(month) {
+  const { initial, target, halflifeMonths } = getGpuToComponentIntensities().hybridBondingAdoption;
+  return target - (target - initial) * Math.pow(2, -month / Math.max(1, halflifeMonths));
 }
 
 // ============================================
@@ -585,7 +617,8 @@ export function calculateContinualLearningDemand(month, demandAssumptions) {
  * Formula: effectiveStacks = baseStacks * (1 + adoption(t) * (memoryMultiplierAtFull - 1))
  */
 export function calculateEffectiveHbmPerGpu(month, demandAssumptions) {
-  const baseStacksPerGPU = 8;
+  const { hbmStacksPerGpu } = getGpuToComponentIntensities();
+  const baseStacksPerGPU = hbmStacksPerGpu;
 
   // Read memory multiplier from assumptions (single source of truth)
   const blockKey = getBlockKeyForMonth(month);
@@ -629,18 +662,26 @@ export function accelHoursToRequiredGpuBase(accelHours, utilization = 0.70) {
 /**
  * Translate GPU demand to component demands
  * @param gpuCount - Number of GPUs
- * @param effectiveHbmPerGpu - Effective HBM stacks per GPU (default 8, increases with continual learning)
+ * @param month - Simulation month (for adoption curves)
+ * @param effectiveHbmPerGpu - Effective HBM stacks per GPU (increases with continual learning)
  */
-export function gpuToComponentDemands(gpuCount, effectiveHbmPerGpu = 8) {
+export function gpuToComponentDemands(gpuCount, month, effectiveHbmPerGpu = 8) {
+  const gpuToComponents = getGpuToComponentIntensities();
+  const serverInfra = getServerInfraIntensities();
+  const hybridBondingAdoption = calculateHybridBondingAdoption(month);
+  const gpusPerServer = serverInfra.gpusPerServer;
+  const powerMwPerGpu = (serverInfra.kwPerGpu * serverInfra.pue) / 1000;
+  const hybridBondingIntensity = gpuToComponents.hybridBondingPerGpu * hybridBondingAdoption;
+
   return {
     // Semiconductor components
     hbmStacks: gpuCount * effectiveHbmPerGpu,  // HBM stacks per GPU (increases with continual learning)
-    cowosWaferEquiv: gpuCount * 1.0,           // 1 CoWoS wafer-equiv per GPU (H100/B100 class)
-    advancedWafers: gpuCount * 0.5,            // Logic die wafers
-    hybridBonding: gpuCount * 0.1,             // 3D stacking for next-gen (fraction of GPUs)
+    cowosWaferEquiv: gpuCount * gpuToComponents.cowosWaferEquivPerGpu,
+    advancedWafers: gpuCount * gpuToComponents.advancedWafersPerGpu,
+    hybridBonding: gpuCount * hybridBondingIntensity,
 
     // Memory & storage (per GPU, not per server)
-    serverDramGb: gpuCount * 64,               // 64 GB DRAM per GPU (512 GB / 8-GPU server)
+    serverDramGb: gpuCount * gpuToComponents.serverDramGbPerGpu,
     ssdTb: gpuCount * 1,                       // 1 TB SSD per GPU (8 TB / 8-GPU server)
 
     // Compute & networking
@@ -655,9 +696,9 @@ export function gpuToComponentDemands(gpuCount, effectiveHbmPerGpu = 8) {
     osatUnits: gpuCount * 1,                   // 1 OSAT test per GPU
 
     // Server & infrastructure
-    servers: gpuCount / 8,                     // 8 GPUs per server
+    servers: gpuCount / gpusPerServer,
     cdus: gpuCount * 0.05,                     // 1 CDU per 20 GPUs
-    powerMw: gpuCount * 0.001                  // 1 kW per GPU
+    powerMw: gpuCount * powerMwPerGpu
   };
 }
 
@@ -839,7 +880,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const effectiveHbmPerGpuThisMonth = calculateEffectiveHbmPerGpu(month, demandAssumptions);
 
     // Compute component demands from GPU production requirement
-    const componentDemands = gpuToComponentDemands(gpuPurchasesThisMonth, effectiveHbmPerGpuThisMonth);
+    const componentDemands = gpuToComponentDemands(
+      gpuPurchasesThisMonth,
+      month,
+      effectiveHbmPerGpuThisMonth
+    );
 
     // ============================================
     // PHASE 2: Process component nodes to get their supply
@@ -917,8 +962,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Calculate max deliverable GPUs by each component
     // Continual learning increases HBM demand per GPU
     const effectiveStacksPerGPU = calculateEffectiveHbmPerGpu(month, demandAssumptions);
-    const cowosUnitsPerGPU = 1.0;  // Each H100/B100 needs 1 CoWoS wafer-equiv
-    const MWperGPU = 0.001;
+    const { cowosWaferEquivPerGpu } = getGpuToComponentIntensities();
+    const { kwPerGpu, pue } = getServerInfraIntensities();
+    const cowosUnitsPerGPU = cowosWaferEquivPerGpu;
+    const MWperGPU = (kwPerGpu * pue) / 1000;
 
     const maxByHBM = componentSupply.hbm_stacks / effectiveStacksPerGPU;
     const maxByCoWoS = componentSupply.cowos_capacity / cowosUnitsPerGPU;
@@ -1090,8 +1137,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         demand = componentDemands.servers;
         nodeResults.installedBase.push(0);
       } else if (node.id === 'rack_pdu') {
-        // 1 rack per 40 servers; servers = GPUs/8, so racks = GPUs/320
-        demand = componentDemands.servers * 0.25;  // 1 rack per 4 servers
+        const { serversPerRack } = getServerInfraIntensities();
+        demand = componentDemands.servers / Math.max(1, serversPerRack);
         nodeResults.installedBase.push(0);
       } else if (node.id === 'liquid_cooling') {
         demand = componentDemands.cdus;
@@ -1267,6 +1314,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const forecastEffectiveHbmPerGpu = calculateEffectiveHbmPerGpu(forecastMonth, demandAssumptions);
       const forecastComponentDemands = gpuToComponentDemands(
         forecastGpuProductionRequirement,
+        forecastMonth,
         forecastEffectiveHbmPerGpu
       );
       const forecastPowerDemands = dcMwToPowerDemands(forecastComponentDemands.powerMw);
