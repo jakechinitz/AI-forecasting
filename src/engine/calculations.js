@@ -937,6 +937,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuNode = NODES.find(n => n.id === 'gpu_datacenter');
     const gpuState = nodeState['gpu_datacenter'];
     const gpuResults = results.nodes['gpu_datacenter'];
+    let gpuBacklogIn = 0;
+    let gpuInventoryIn = 0;
 
     // Calculate GPU capacity and raw shipments (before gating)
     const gpuCapacity = calculateCapacity(gpuNode, month, scenarioOverrides, gpuState.dynamicExpansions);
