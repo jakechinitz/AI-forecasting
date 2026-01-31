@@ -609,6 +609,7 @@ const BASE_NODES = [
     supplierConcentration: 5,
 
     contractingRegime: 'LTAs',
+    inventoryPolicy: 'non_storable',
     inventoryBufferTarget: 0,
     maxCapacityUtilization: 0.95,
 
@@ -783,8 +784,8 @@ const BASE_NODES = [
       { date: '2027-06', capacityAdd: 0.5, type: 'committed' },
       { date: '2028-06', capacityAdd: 0.5, type: 'optional' }
     ],
-    leadTimeDebottleneck: 0,  // Can't debottleneck
-    leadTimeNewBuild: 24,     // 2 year lead time from order
+    leadTimeDebottleneck: 18,
+    leadTimeNewBuild: 36,     // 3 year lead time from order
     rampProfile: 'step',
 
     elasticityShort: 0.0,   // Completely inelastic
@@ -795,6 +796,7 @@ const BASE_NODES = [
     supplierConcentration: 5,    // ASML monopoly
 
     contractingRegime: 'LTAs',
+    inventoryPolicy: 'non_storable',
     inventoryBufferTarget: 0,
     maxCapacityUtilization: 0.95,  // Uptime limited
 
@@ -1045,13 +1047,13 @@ const BASE_NODES = [
     parentNodeIds: ['gpu_datacenter'],
 
     // Base rate: Liquid cooling adoption growing rapidly
-    startingCapacity: 20000,
+    startingCapacity: 15000,
     committedExpansions: [
       { date: '2025-06', capacityAdd: 10000, type: 'committed' },
       { date: '2026-01', capacityAdd: 20000, type: 'optional' }
     ],
-    leadTimeDebottleneck: 4,
-    leadTimeNewBuild: 10,
+    leadTimeDebottleneck: 10,
+    leadTimeNewBuild: 18,
     rampProfile: 's-curve',
 
     elasticityShort: 0.3,
@@ -1062,8 +1064,8 @@ const BASE_NODES = [
     supplierConcentration: 3,
 
     contractingRegime: 'mixed',
-    inventoryBufferTarget: 6,
-    maxCapacityUtilization: 0.90,
+    inventoryBufferTarget: 4,
+    maxCapacityUtilization: 0.85,
 
     yieldModel: 'simple',
     yieldSimpleLoss: 0.02,
@@ -1072,7 +1074,7 @@ const BASE_NODES = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 20000,
+      value: 15000,
       confidence: 'medium',
       source: 'Cooling industry analysis',
       historicalRange: [10000, 40000]
@@ -1093,17 +1095,17 @@ const BASE_NODES = [
     inputIntensity: 0.001,  // 1 kW per GPU average
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    // Base rate: ~15 GW/year global AI DC bring-up capacity (2025)
+    // Base rate: ~12 GW/year global AI DC bring-up capacity (2025)
     // AI data centers from 10GW base 2025 to ~20-30GW incremental by 2026
     // Grid strain limits bring-up; AI to 27% of data center power
     // Source: NERC reports, S&P Global data center analysis. As of 2026-01.
-    startingCapacity: 1250,  // MW/month (~15GW/yr)
+    startingCapacity: 1000,  // MW/month (~12GW/yr)
     committedExpansions: [
       { date: '2026-01', capacityAdd: 300, type: 'committed' },
       { date: '2027-01', capacityAdd: 300, type: 'optional' }
     ],
-    leadTimeDebottleneck: 6,
-    leadTimeNewBuild: 36,  // 3 years for new campus
+    leadTimeDebottleneck: 12,
+    leadTimeNewBuild: 48,  // 4 years for new campus
     rampProfile: 's-curve',
 
     elasticityShort: 0.1,
@@ -1124,7 +1126,7 @@ const BASE_NODES = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 1250,
+      value: 1000,
       confidence: 'medium',
       source: 'NERC reports, S&P Global data center analysis. As of 2026-01.',
       historicalRange: [1000, 2000]
@@ -1143,8 +1145,8 @@ const BASE_NODES = [
 
     startingCapacity: 5000000,
     committedExpansions: [],
-    leadTimeDebottleneck: 6,
-    leadTimeNewBuild: 24,
+    leadTimeDebottleneck: 18,
+    leadTimeNewBuild: 36,
     rampProfile: 'linear',
 
     elasticityShort: 0.2,
@@ -1155,8 +1157,9 @@ const BASE_NODES = [
     supplierConcentration: 1,
 
     contractingRegime: 'spot',
+    inventoryPolicy: 'non_storable',
     inventoryBufferTarget: 0,
-    maxCapacityUtilization: 0.90,
+    maxCapacityUtilization: 0.80,
 
     yieldModel: 'simple',
     yieldSimpleLoss: 0,
@@ -1188,10 +1191,10 @@ const BASE_NODES = [
 
     // Base rate: Grid queues severely backlogged
     // Only ~20% of queued capacity gets built
-    startingCapacity: 5000,  // MW/month approvals
+    startingCapacity: 2500,  // MW/month approvals
     committedExpansions: [],
-    leadTimeDebottleneck: 12,
-    leadTimeNewBuild: 48,
+    leadTimeDebottleneck: 24,
+    leadTimeNewBuild: 60,
     rampProfile: 'linear',
 
     elasticityShort: 0.02,
@@ -1202,6 +1205,7 @@ const BASE_NODES = [
     supplierConcentration: 2,
 
     contractingRegime: 'regulated',
+    inventoryPolicy: 'queue',
     inventoryBufferTarget: 0,
     maxCapacityUtilization: 0.80,
 
@@ -1212,7 +1216,7 @@ const BASE_NODES = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 5000,
+      value: 2500,
       confidence: 'medium',
       source: 'Utility commission data, LBNL queue reports',
       historicalRange: [3000, 8000]

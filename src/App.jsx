@@ -45,6 +45,7 @@ function App() {
   const [selectedNode, setSelectedNode] = useState('gpu_datacenter');
   const [isSimulating, setIsSimulating] = useState(false);
   const [simulationResults, setSimulationResults] = useState(null);
+  const [simulationError, setSimulationError] = useState(null);
 
   // Custom assumptions (start with defaults)
   const [customAssumptions, setCustomAssumptions] = useState({
@@ -56,6 +57,14 @@ function App() {
   // Run simulation when assumptions or scenario change
   const runSim = useCallback(() => {
     setIsSimulating(true);
+    setSimulationError(null);
+
+    if (import.meta.env.DEV && window.location.search.includes('forceSimError')) {
+      setSimulationResults(null);
+      setSimulationError('Forced simulation error (dev preview).');
+      setIsSimulating(false);
+      return;
+    }
 
     // Small delay to allow UI to update
     setTimeout(() => {
@@ -65,6 +74,8 @@ function App() {
         setSimulationResults(results);
       } catch (error) {
         console.error('Simulation error:', error);
+        setSimulationResults(null);
+        setSimulationError(error instanceof Error ? error.message : 'Unknown simulation error.');
       } finally {
         setIsSimulating(false);
       }
@@ -105,6 +116,16 @@ function App() {
 
   // Render active tab content
   const renderTabContent = () => {
+    if (simulationError && !isSimulating) {
+      return (
+        <div className="loading-state">
+          <div className="spinner" />
+          <p>Simulation failed to run.</p>
+          <p className="text-muted">{simulationError}</p>
+        </div>
+      );
+    }
+
     if (!simulationResults) {
       return (
         <div className="loading-state">

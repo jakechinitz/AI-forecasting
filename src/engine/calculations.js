@@ -76,6 +76,20 @@ function resolveAssumptionValue(value, fallback) {
   return value ?? fallback;
 }
 
+function isNonInventoriable(node) {
+  return node?.inventoryPolicy === 'queue' || node?.inventoryPolicy === 'non_storable';
+}
+
+function calculateTrainingThrottle(month, results) {
+  if (month === 0) return 1;
+  const dcResults = results?.nodes?.datacenter_mw;
+  if (!dcResults) return 1;
+  const demand = dcResults.demand[month - 1] ?? 0;
+  const supply = dcResults.supply[month - 1] ?? 0;
+  if (demand <= 0) return 1;
+  return Math.min(1, supply / (demand + EPSILON));
+}
+
 function getGpuToComponentIntensities() {
   const gpuToComponents = TRANSLATION_INTENSITIES?.gpuToComponents || {};
   return {
@@ -280,11 +294,13 @@ export function calculateDemandGrowth(category, segment, month, assumptions) {
 export function calculateCapacity(node, month, scenarioOverrides = {}, dynamicExpansions = []) {
   let capacity = node.startingCapacity || 0;
 
-  // Add committed expansions
+  // Add committed expansions (respect node lead times)
   (node.committedExpansions || []).forEach(expansion => {
     const expansionMonth = dateToMonth(expansion.date);
-    if (month >= expansionMonth) {
-      const monthsSinceExpansion = month - expansionMonth;
+    const leadTimeMonths = expansion.leadTimeMonths ?? node.leadTimeNewBuild ?? 0;
+    const onlineMonth = expansionMonth + leadTimeMonths;
+    if (month >= onlineMonth) {
+      const monthsSinceExpansion = month - onlineMonth;
       const rampedCapacity = applyRampProfile(
         expansion.capacityAdd,
         monthsSinceExpansion,
@@ -846,7 +862,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     // Calculate workload demands using runtime assumptions
     const inferenceDemand = calculateInferenceDemand(month, demandAssumptions);
-    const trainingDemand = calculateTrainingDemand(month, demandAssumptions, efficiencyAssumptions);
+    const trainingThrottle = calculateTrainingThrottle(month, results);
+    const trainingDemandBase = calculateTrainingDemand(month, demandAssumptions, efficiencyAssumptions);
+    const trainingDemand = {
+      ...trainingDemandBase,
+      frontierRuns: trainingDemandBase.frontierRuns * trainingThrottle,
+      midtierRuns: trainingDemandBase.midtierRuns * trainingThrottle,
+      frontierAccelHours: trainingDemandBase.frontierAccelHours * trainingThrottle,
+      midtierAccelHours: trainingDemandBase.midtierAccelHours * trainingThrottle
+    };
     const continualLearningDemand = calculateContinualLearningDemand(month, demandAssumptions);
 
     // Calculate total accelerator hours with calibration (now includes intensity growth + continual learning)
@@ -899,11 +923,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const componentSupply = {
       hbm_stacks: 0,
       cowos_capacity: 0,
+      grid_interconnect: 0,
       datacenter_mw: 0
     };
 
+    const powerDemands = dcMwToPowerDemands(componentDemands.powerMw);
+
     // Process gating component nodes first
-    ['hbm_stacks', 'cowos_capacity', 'datacenter_mw'].forEach(nodeId => {
+    ['hbm_stacks', 'cowos_capacity', 'grid_interconnect', 'datacenter_mw'].forEach(nodeId => {
       const node = NODES.find(n => n.id === nodeId);
       if (!node) return;
 
@@ -919,20 +946,36 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       let demand = 0;
       if (nodeId === 'hbm_stacks') demand = componentDemands.hbmStacks;
       else if (nodeId === 'cowos_capacity') demand = componentDemands.cowosWaferEquiv;
+      else if (nodeId === 'grid_interconnect') demand = powerDemands.gridApprovals;
       else if (nodeId === 'datacenter_mw') demand = componentDemands.powerMw;
 
       // Calculate actual supply (what can ship given demand and inventory)
-      const actualSupply = Math.min(maxProducible + state.inventory, demand + state.backlog);
+      const approvalCap = nodeId === 'datacenter_mw'
+        ? componentSupply.grid_interconnect
+        : Infinity;
+      const inventoryAvailable = isNonInventoriable(node) ? 0 : state.inventory;
+      const actualSupply = Math.min(
+        maxProducible + inventoryAvailable,
+        demand + state.backlog,
+        approvalCap
+      );
 
       // Store supply for gating calculation
       componentSupply[nodeId] = actualSupply;
 
       // Calculate tightness
-      const tightness = calculateTightness(demand, state.backlog, maxProducible, state.inventory);
+      const tightness = calculateTightness(
+        demand,
+        state.backlog,
+        maxProducible,
+        inventoryAvailable
+      );
 
       // Update state
       state.priceHistory.push(calculatePriceIndex(tightness));
-      state.inventory = calculateInventory(state.inventory, maxProducible, actualSupply);
+      state.inventory = isNonInventoriable(node)
+        ? 0
+        : calculateInventory(state.inventory, maxProducible, actualSupply);
       state.backlog = calculateBacklog(state.backlog, demand, actualSupply);
       state.tightnessHistory.push(tightness);
 
@@ -1039,7 +1082,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     gpuResults.glut.push(gpuIsGlut ? 1 : 0);
 
     // Process all other nodes (skip already processed: gpu_datacenter, hbm_stacks, cowos_capacity, datacenter_mw)
-    const processedNodes = ['gpu_datacenter', 'hbm_stacks', 'cowos_capacity', 'datacenter_mw'];
+    const processedNodes = ['gpu_datacenter', 'hbm_stacks', 'cowos_capacity', 'grid_interconnect', 'datacenter_mw'];
     NODES.filter(n => !processedNodes.includes(n.id)).forEach(node => {
       const state = nodeState[node.id];
       const nodeResults = results.nodes[node.id];
@@ -1057,6 +1100,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
           month,
           demandAssumptions
         );
+        if (node.id === 'training_frontier' || node.id === 'training_midtier') {
+          workloadDemand *= trainingThrottle;
+        }
 
         // Store workload demand but use neutral values for market metrics
         nodeResults.demand.push(workloadDemand);
@@ -1221,8 +1267,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       }
 
       // Update inventory and backlog
-      const actualShipments = Math.min(shipments + state.inventory, demand + state.backlog);
-      state.inventory = calculateInventory(state.inventory, shipments, actualShipments);
+      const inventoryAvailable = isNonInventoriable(node) ? 0 : state.inventory;
+      const actualShipments = Math.min(shipments + inventoryAvailable, demand + state.backlog);
+      state.inventory = isNonInventoriable(node)
+        ? 0
+        : calculateInventory(state.inventory, shipments, actualShipments);
       state.backlog = calculateBacklog(state.backlog, demand, actualShipments);
 
       // Store results
