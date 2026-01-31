@@ -935,7 +935,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const approvalCap = nodeId === 'datacenter_mw'
         ? componentSupply.grid_interconnect
         : Infinity;
-      const inventoryAvailable = isNonInventoriable(node) ? 0 : state.inventory;
+      const inventoryAvailable = nodeId === 'grid_interconnect' ? 0 : state.inventory;
       const actualSupply = Math.min(
         maxProducible + inventoryAvailable,
         demand + state.backlog,
@@ -955,7 +955,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
       // Update state
       state.priceHistory.push(calculatePriceIndex(tightness));
-      state.inventory = isNonInventoriable(node)
+      state.inventory = nodeId === 'grid_interconnect'
         ? 0
         : calculateInventory(state.inventory, maxProducible, actualSupply);
       state.backlog = calculateBacklog(state.backlog, demand, actualSupply);
