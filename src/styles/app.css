@@ -723,6 +723,58 @@
   font-family: var(--font-sans);
 }
 
+.yoy-table-wrapper {
+  overflow: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--bg-tertiary);
+  background: var(--bg-elevated);
+}
+
+.yoy-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.yoy-table th,
+.yoy-table td {
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--bg-tertiary);
+  text-align: center;
+  white-space: nowrap;
+  background-color: var(--bg-elevated);
+  position: relative;
+  z-index: 0;
+}
+
+.yoy-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
+  z-index: 2;
+}
+
+.yoy-table tbody tr:nth-child(even) td {
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.yoy-table tbody tr:nth-child(even) .sticky-col {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.yoy-table .sticky-col {
+  position: sticky;
+  left: 0;
+  background: var(--bg-elevated);
+  text-align: left;
+  z-index: 5;
+  box-shadow: 1px 0 0 var(--bg-tertiary);
+}
+
+.yoy-table thead .sticky-col {
+  z-index: 3;
+}
+
 .tightness-cell {
   display: flex;
   align-items: center;
