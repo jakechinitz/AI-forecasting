@@ -1002,34 +1002,27 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         ? componentSupply.grid_interconnect
         : Infinity;
       const inventoryAvailable = nodeId === 'grid_interconnect' ? 0 : state.inventory;
-      const actualSupply = Math.min(
-        maxProducible + inventoryAvailable,
-        demand + state.backlog,
-        approvalCap
-      );
+      const backlogIn = state.backlog;
+      const availableSupply = maxProducible + inventoryAvailable;
+      const fulfilled = Math.min(availableSupply, demand + backlogIn, approvalCap);
+      const inventoryOut = Math.max(0, availableSupply - fulfilled);
+      const backlogOut = Math.max(0, demand + backlogIn - fulfilled);
 
       // Store supply for gating calculation
-      componentSupply[nodeId] = actualSupply;
+      componentSupply[nodeId] = fulfilled;
 
       // Calculate tightness
-      const tightness = calculateTightness(
-        demand,
-        state.backlog,
-        maxProducible,
-        inventoryAvailable
-      );
+      const tightness = (demand + backlogIn) / Math.max(fulfilled, EPSILON);
 
       // Update state
       state.priceHistory.push(calculatePriceIndex(tightness));
-      state.inventory = nodeId === 'grid_interconnect'
-        ? 0
-        : calculateInventory(state.inventory, maxProducible, actualSupply);
-      state.backlog = calculateBacklog(state.backlog, demand, actualSupply);
+      state.inventory = nodeId === 'grid_interconnect' ? 0 : inventoryOut;
+      state.backlog = backlogOut;
       state.tightnessHistory.push(tightness);
 
       // Store results
       nodeResults.demand.push(demand);
-      nodeResults.supply.push(actualSupply);
+      nodeResults.supply.push(fulfilled);
       nodeResults.supplyPotential.push(maxProducible);
       nodeResults.gpuDelivered.push(0);
       nodeResults.idleGpus.push(0);
@@ -1043,13 +1036,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       nodeResults.requiredBase.push(0);
       nodeResults.gpuPurchases.push(0);
 
-      // Persistence-based shortage/glut detection
-      const persistenceRequired = GLOBAL_PARAMS.glutThresholds.persistenceMonthsSoft;
-      const recentTightness = state.tightnessHistory.slice(-persistenceRequired);
-      const isShortage = recentTightness.length >= persistenceRequired &&
-                         recentTightness.every(t => t > 1.05);
-      const isGlut = recentTightness.length >= persistenceRequired &&
-                     recentTightness.every(t => t < GLOBAL_PARAMS.glutThresholds.soft);
+      const isShortage = backlogOut > 0 || tightness > 1.05;
+      const isGlut = inventoryOut > 0 && tightness < 0.95;
       nodeResults.shortage.push(isShortage ? 1 : 0);
       nodeResults.glut.push(isGlut ? 1 : 0);
     });
@@ -1083,8 +1071,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // ============================================
     // PHASE 4: Finalize GPU node results
     // ============================================
-    // Calculate tightness based on delivered GPUs
-    const gpuTightness = calculateTightness(gpuDemand, gpuState.backlog, gpuDelivered, gpuState.inventory);
+    // Calculate tightness based on fulfilled GPUs
+    const gpuTightness = (gpuDemand + gpuBacklogIn) / Math.max(gpuDelivered, EPSILON);
 
     // Update installed base with DELIVERED GPUs (not raw shipments)
     gpuState.installedBase = Math.max(0, gpuState.installedBase + gpuDelivered - gpuRetirements);
@@ -1094,9 +1082,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     // Update inventory (deliverable inventory only; idle tracked separately)
     // Backlog is demand not met
-    const gpuActualShipments = Math.min(gpuShipmentsRaw, gpuDemand + gpuState.backlog);
-    gpuState.inventory = calculateInventory(gpuState.inventory, gpuShipmentsRaw, gpuActualShipments);
-    gpuState.backlog = calculateBacklog(gpuState.backlog, gpuDemand, gpuDelivered);
+    const gpuInventoryOut = Math.max(0, gpuAvailableSupply - gpuDelivered);
+    const gpuBacklogOut = Math.max(0, gpuDemand + gpuBacklogIn - gpuDelivered);
+    gpuState.inventory = gpuInventoryOut;
+    gpuState.backlog = gpuBacklogOut;
 
     // Cap backlog to current shortfall — prevents unbounded backlog growth
     // that would cause installed base to overshoot required base when cleared.
@@ -1106,7 +1095,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     // Store GPU results
     gpuResults.demand.push(gpuDemand);
-    gpuResults.supply.push(gpuActualShipments);           // Raw GPU shipments that cleared
+    gpuResults.supply.push(gpuDelivered);                 // Fulfilled GPU deliveries
     gpuResults.supplyPotential.push(gpuShipmentsRaw);     // Max producible
     gpuResults.gpuDelivered.push(gpuDelivered);           // Actually usable after gating
     gpuResults.idleGpus.push(idleGpus);                   // Blocked by components
@@ -1124,12 +1113,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     gpuState.tightnessHistory.push(gpuTightness);
 
     // Persistence-based shortage/glut detection
-    const gpuPersistenceRequired = GLOBAL_PARAMS.glutThresholds.persistenceMonthsSoft;
-    const gpuRecentTightness = gpuState.tightnessHistory.slice(-gpuPersistenceRequired);
-    const gpuIsShortage = gpuRecentTightness.length >= gpuPersistenceRequired &&
-                         gpuRecentTightness.every(t => t > 1.05);
-    const gpuIsGlut = gpuRecentTightness.length >= gpuPersistenceRequired &&
-                     gpuRecentTightness.every(t => t < GLOBAL_PARAMS.glutThresholds.soft);
+    const gpuIsShortage = gpuBacklogOut > 0 || gpuTightness > 1.05;
+    const gpuIsGlut = gpuInventoryOut > 0 && gpuTightness < 0.95;
     gpuResults.shortage.push(gpuIsShortage ? 1 : 0);
     gpuResults.glut.push(gpuIsGlut ? 1 : 0);
 
@@ -1185,16 +1170,16 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // No generic parent-based fallthrough for supply chain nodes
       let demand = 0;
       const powerDemands = dcMwToPowerDemands(componentDemands.powerMw);
+      let inferenceRetirements = 0;
+      let isInferenceNode = false;
 
       if (node.id === 'gpu_inference') {
         // Similar to datacenter but smaller scale
-        const retirements = state.installedBase / state.lifetimeMonths;
+        inferenceRetirements = state.installedBase / state.lifetimeMonths;
         const inferenceRequiredBase = requiredGpuBase * 0.3;  // 30% of workload
         const gap = Math.max(0, inferenceRequiredBase - state.installedBase);
-        demand = gap + retirements;
-        const actualShipments = Math.min(shipments + state.inventory, demand + state.backlog);
-        state.installedBase = Math.max(0, state.installedBase + actualShipments - retirements);
-        nodeResults.installedBase.push(state.installedBase);
+        demand = gap + inferenceRetirements;
+        isInferenceNode = true;
 
       // --- Semiconductor components (derived from GPU production requirement) ---
       } else if (node.id === 'advanced_wafers') {
@@ -1297,15 +1282,18 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         nodeResults.installedBase.push(0);
       }
 
-      // Calculate tightness
-      const tightness = calculateTightness(demand, state.backlog, shipments, state.inventory);
+      const backlogIn = state.backlog;
+      const inventoryIn = isNonInventoriable(node) ? 0 : state.inventory;
+      const availableSupply = shipments + inventoryIn;
+      const provisionalFulfilled = Math.min(availableSupply, demand + backlogIn);
+      const provisionalTightness = (demand + backlogIn) / Math.max(provisionalFulfilled, EPSILON);
 
       // Update price history and calculate SMA for substitution
-      state.priceHistory.push(calculatePriceIndex(tightness));
+      state.priceHistory.push(calculatePriceIndex(provisionalTightness));
       const priceSignalSma = sma(state.priceHistory, GLOBAL_PARAMS.substitution.priceSignalSmaMonths);
 
       // Calculate substitution if applicable
-      if (node.substitutabilityScore > 0 && tightness > 1) {
+      if (node.substitutabilityScore > 0 && provisionalTightness > 1) {
         const subK = 0.2;  // Substitution sensitivity
         state.subShare = calculateSubstitutionShare(
           state.subShare,
@@ -1318,18 +1306,24 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         demand *= (1 - state.subShare);
       }
 
+      const fulfilled = Math.min(availableSupply, demand + backlogIn);
+      const inventoryOut = Math.max(0, availableSupply - fulfilled);
+      const backlogOut = Math.max(0, demand + backlogIn - fulfilled);
+      const tightness = (demand + backlogIn) / Math.max(fulfilled, EPSILON);
+
       // Update inventory and backlog
-      const inventoryAvailable = isNonInventoriable(node) ? 0 : state.inventory;
-      const actualShipments = Math.min(shipments + inventoryAvailable, demand + state.backlog);
-      state.inventory = isNonInventoriable(node)
-        ? 0
-        : calculateInventory(state.inventory, shipments, actualShipments);
-      state.backlog = calculateBacklog(state.backlog, demand, actualShipments);
+      state.inventory = isNonInventoriable(node) ? 0 : inventoryOut;
+      state.backlog = backlogOut;
+
+      if (isInferenceNode) {
+        state.installedBase = Math.max(0, state.installedBase + fulfilled - inferenceRetirements);
+        nodeResults.installedBase.push(state.installedBase);
+      }
 
       // Store results
       // FIX: supply = actualShipments (cleared), supplyPotential = max producible
       nodeResults.demand.push(demand);
-      nodeResults.supply.push(actualShipments);           // What actually shipped (cleared)
+      nodeResults.supply.push(fulfilled);                 // What actually shipped (cleared)
       nodeResults.supplyPotential.push(shipments);        // Max producible capacity
       nodeResults.gpuDelivered.push(0);                   // N/A for non-GPU nodes
       nodeResults.idleGpus.push(0);                       // N/A for non-GPU nodes
@@ -1345,13 +1339,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // Track tightness history for persistence-based detection
       state.tightnessHistory.push(tightness);
 
-      // Persistence-based shortage/glut detection
-      const persistenceRequired = GLOBAL_PARAMS.glutThresholds.persistenceMonthsSoft;
-      const recentTightness = state.tightnessHistory.slice(-persistenceRequired);
-      const isShortage = recentTightness.length >= persistenceRequired &&
-                         recentTightness.every(t => t > 1.05);
-      const isGlut = recentTightness.length >= persistenceRequired &&
-                     recentTightness.every(t => t < GLOBAL_PARAMS.glutThresholds.soft);
+      const isShortage = backlogOut > 0 || tightness > 1.05;
+      const isGlut = inventoryOut > 0 && tightness < 0.95;
       nodeResults.shortage.push(isShortage ? 1 : 0);
       nodeResults.glut.push(isGlut ? 1 : 0);
     });
