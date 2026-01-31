@@ -1,9 +1,11 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea } from 'recharts';
 import { NODES, NODE_GROUPS, getNode } from '../data/nodes.js';
 import { formatMonth, formatNumber } from '../engine/calculations.js';
 
 function MarketClearingTab({ results, selectedNode, onSelectNode }) {
+  const [timeRange, setTimeRange] = useState('all');  // '5y', '10y', 'all'
+
   const nodeData = useMemo(() => {
     if (!results || !selectedNode) return null;
     return results.nodes[selectedNode];
@@ -15,8 +17,12 @@ function MarketClearingTab({ results, selectedNode, onSelectNode }) {
   const chartData = useMemo(() => {
     if (!nodeData) return [];
 
+    let maxMonth = results.months.length;
+    if (timeRange === '5y') maxMonth = 60;
+    else if (timeRange === '10y') maxMonth = 120;
+
     const data = [];
-    for (let i = 0; i < results.months.length; i += 3) {
+    for (let i = 0; i < Math.min(results.months.length, maxMonth); i += 3) {
       data.push({
         month: results.months[i],
         label: formatMonth(results.months[i]),
@@ -29,7 +35,7 @@ function MarketClearingTab({ results, selectedNode, onSelectNode }) {
       });
     }
     return data;
-  }, [nodeData, results]);
+  }, [nodeData, results, timeRange]);
 
   // Get tightness status
   const getTightnessStatus = (value) => {
@@ -103,6 +109,23 @@ function MarketClearingTab({ results, selectedNode, onSelectNode }) {
             Computes tightness ratios, price indices, and inventory levels. Tightness {'>'} 1 indicates
             shortage; {'<'} 1 indicates oversupply. Price index reflects market stress.
           </p>
+        </div>
+        <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
+          <div className="tabs">
+            {[
+              { id: '5y', label: '5 Years' },
+              { id: '10y', label: '10 Years' },
+              { id: 'all', label: 'Full Horizon' }
+            ].map(range => (
+              <button
+                key={range.id}
+                className={`tab ${timeRange === range.id ? 'active' : ''}`}
+                onClick={() => setTimeRange(range.id)}
+              >
+                {range.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

@@ -82,6 +82,7 @@ function getGpuToComponentIntensities() {
     hbmStacksPerGpu: resolveAssumptionValue(gpuToComponents.hbmStacksPerGpu?.value, 8),
     cowosWaferEquivPerGpu: resolveAssumptionValue(gpuToComponents.cowosWaferEquivPerGpu?.value, 1.0),
     hybridBondingPerGpu: resolveAssumptionValue(gpuToComponents.hybridBondingPerGpu?.value, 0.1),
+    hybridBondingPackageShare: resolveAssumptionValue(gpuToComponents.hybridBondingPackageShare?.value, 0.2),
     hybridBondingAdoption: {
       initial: resolveAssumptionValue(gpuToComponents.hybridBondingAdoption?.initial, 0.1),
       target: resolveAssumptionValue(gpuToComponents.hybridBondingAdoption?.target, 0.5),
@@ -674,7 +675,9 @@ export function gpuToComponentDemands(gpuCount, month, effectiveHbmPerGpu = 8) {
   const hybridBondingAdoption = calculateHybridBondingAdoption(month);
   const gpusPerServer = serverInfra.gpusPerServer;
   const powerMwPerGpu = (serverInfra.kwPerGpu * serverInfra.pue) / 1000;
-  const hybridBondingIntensity = gpuToComponents.hybridBondingPerGpu * hybridBondingAdoption;
+  const hybridBondingIntensity = gpuToComponents.hybridBondingPerGpu
+    * gpuToComponents.hybridBondingPackageShare
+    * hybridBondingAdoption;
 
   return {
     // Semiconductor components
@@ -792,6 +795,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     nodeState[node.id] = {
       inventory: (scenarioOverrides?.startingState?.inventoryByNode?.[node.id] ??
+        node.startingInventory ??
         ((node.inventoryBufferTarget || 0) * (node.startingCapacity || 0) / 4)),
       backlog: (scenarioOverrides?.startingState?.backlogByNode?.[node.id] ??
         node.startingBacklog ?? 0),
@@ -993,10 +997,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Update price history
     gpuState.priceHistory.push(calculatePriceIndex(gpuTightness));
 
-    // Update inventory (produced but not delivered becomes idle inventory)
+    // Update inventory (deliverable inventory only; idle tracked separately)
     // Backlog is demand not met
     const gpuActualShipments = Math.min(gpuShipmentsRaw, gpuDemand + gpuState.backlog);
-    gpuState.inventory = calculateInventory(gpuState.inventory, gpuShipmentsRaw, gpuActualShipments) + idleGpus;
+    gpuState.inventory = calculateInventory(gpuState.inventory, gpuShipmentsRaw, gpuActualShipments);
     gpuState.backlog = calculateBacklog(gpuState.backlog, gpuDemand, gpuDelivered);
 
     // Cap backlog to current shortfall — prevents unbounded backlog growth
@@ -1172,7 +1176,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // --- Foundry equipment ---
       } else if (node.id === 'euv_tools') {
         // EUV demand: very low intensity per wafer (tools process thousands of wafers)
-        demand = componentDemands.advancedWafers * 0.00001;
+        demand = componentDemands.advancedWafers * (node.inputIntensity || 0.00001);
         nodeResults.installedBase.push(0);
 
       // --- Human capital ---

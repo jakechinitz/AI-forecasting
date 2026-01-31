@@ -1,14 +1,20 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { formatMonth, formatNumber } from '../engine/calculations.js';
 
 function DemandEngineTab({ results, assumptions }) {
+  const [timeRange, setTimeRange] = useState('all');  // '5y', '10y', 'all'
+
   // Prepare chart data - sample every 3 months for readability
   const chartData = useMemo(() => {
     if (!results) return [];
 
+    let maxMonth = results.months.length;
+    if (timeRange === '5y') maxMonth = 60;
+    else if (timeRange === '10y') maxMonth = 120;
+
     const data = [];
-    for (let i = 0; i < results.months.length; i += 3) {
+    for (let i = 0; i < Math.min(results.months.length, maxMonth); i += 3) {
       const month = results.months[i];
 
       // Get inference node data
@@ -36,7 +42,7 @@ function DemandEngineTab({ results, assumptions }) {
       });
     }
     return data;
-  }, [results]);
+  }, [results, timeRange]);
 
   // Summary metrics
   const summaryMetrics = useMemo(() => {
@@ -88,6 +94,23 @@ function DemandEngineTab({ results, assumptions }) {
             inference tokens (consumer, enterprise, agentic). Applies efficiency multipliers
             to translate tokens to accelerator-hours.
           </p>
+        </div>
+        <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
+          <div className="tabs">
+            {[
+              { id: '5y', label: '5 Years' },
+              { id: '10y', label: '10 Years' },
+              { id: 'all', label: 'Full Horizon' }
+            ].map(range => (
+              <button
+                key={range.id}
+                className={`tab ${timeRange === range.id ? 'active' : ''}`}
+                onClick={() => setTimeRange(range.id)}
+              >
+                {range.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

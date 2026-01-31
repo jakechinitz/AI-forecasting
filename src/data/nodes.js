@@ -440,11 +440,13 @@ const BASE_NODES = [
     inputIntensity: 64,  // 64GB per GPU (512GB per 8-GPU server / 8)
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    // AI-allocated server DRAM capacity
+    // AI-allocated server DRAM capacity (allocation-constrained in 2026)
     // Global DRAM: ~120B GB/year; server DRAM ~30%; AI portion growing
     // HBM production consumes DRAM wafers, creating tightness
     // At 64 GB/GPU and ~500K GPU demand, need ~32M GB/month
-    startingCapacity: 40000000,  // 40M GB/month AI-allocated
+    startingCapacity: 34000000,  // 34M GB/month allocation to AI servers
+    startingInventory: 8500000,  // ~0.25 months of coverage
+    startingBacklog: 6500000,    // ~0.2 months queued
     committedExpansions: [
       { date: '2026-01', capacityAdd: 5000000, type: 'committed' },
       { date: '2026-09', capacityAdd: 8000000, type: 'optional' }
@@ -471,10 +473,10 @@ const BASE_NODES = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 40000000,
+      value: 34000000,
       confidence: 'medium',
       source: 'AI-allocated server DRAM; HBM wafer competition tightens supply. As of 2026-01.',
-      historicalRange: [30000000, 60000000]
+      historicalRange: [25000000, 50000000]
     }
   },
   {
@@ -488,10 +490,12 @@ const BASE_NODES = [
     inputIntensity: 1,  // 1 TB per GPU (8 TB per 8-GPU server / 8)
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    // AI-allocated enterprise SSD capacity
+    // AI-allocated enterprise SSD capacity (allocation-constrained in 2026)
     // At 1 TB/GPU and ~500K GPU demand = ~500K TB/month
     // Enterprise SSD market: ~80M TB/year total; AI portion ~10%
-    startingCapacity: 800000,  // 800K TB/month AI-allocated
+    startingCapacity: 540000,  // ~450K TB/month effective after utilization/yield
+    startingInventory: 150000, // ~0.28 months of coverage
+    startingBacklog: 110000,   // ~0.2 months queued
     committedExpansions: [
       { date: '2026-06', capacityAdd: 200000, type: 'committed' }
     ],
@@ -517,10 +521,10 @@ const BASE_NODES = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 800000,
+      value: 540000,
       confidence: 'medium',
       source: 'Enterprise SSD market, AI-allocated portion. As of 2026-01.',
-      historicalRange: [500000, 1200000]
+      historicalRange: [400000, 900000]
     }
   },
 
@@ -588,10 +592,10 @@ const BASE_NODES = [
     inputIntensity: 1.0,  // Adoption curve applied in demand translation
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 5000,
+    startingCapacity: 1500,
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 5000, type: 'committed' },
-      { date: '2026-06', capacityAdd: 10000, type: 'optional' }
+      { date: '2026-06', capacityAdd: 1500, type: 'committed' },
+      { date: '2027-06', capacityAdd: 2000, type: 'optional' }
     ],
     leadTimeDebottleneck: 12,
     leadTimeNewBuild: 30,
@@ -618,10 +622,10 @@ const BASE_NODES = [
     exportControlSensitivity: 'critical',
 
     baseRate: {
-      value: 5000,
+      value: 1500,
       confidence: 'low',
       source: 'Emerging technology, limited data',
-      historicalRange: [2000, 10000]
+      historicalRange: [1000, 4000]
     }
   },
   {
@@ -766,19 +770,18 @@ const BASE_NODES = [
     name: 'EUV Lithography Tools',
     group: 'E',
     unit: 'tools',
-    description: 'ASML EUV scanners (installed base)',
+    description: 'ASML EUV scanners (new tools/month)',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.00001,  // Tiny - tools process many wafers
+    inputIntensity: 0.00002,  // Tools per wafer-start (calibrated to ~4/month demand)
     parentNodeIds: ['advanced_wafers'],
 
-    // Base rate: ~200 EUV tools installed globally, ~50/year production
-    startingCapacity: 200,  // Installed base
+    // Base rate: ~44-48 EUV tools shipped annually (~3.7-4.0/month)
+    startingCapacity: 4,  // New tools per month (shipment rate)
     committedExpansions: [
-      { date: '2025-03', capacityAdd: 12, type: 'committed' },
-      { date: '2025-06', capacityAdd: 12, type: 'committed' },
-      { date: '2025-09', capacityAdd: 12, type: 'committed' },
-      { date: '2025-12', capacityAdd: 12, type: 'committed' }
+      { date: '2026-06', capacityAdd: 0.5, type: 'committed' },
+      { date: '2027-06', capacityAdd: 0.5, type: 'committed' },
+      { date: '2028-06', capacityAdd: 0.5, type: 'optional' }
     ],
     leadTimeDebottleneck: 0,  // Can't debottleneck
     leadTimeNewBuild: 24,     // 2 year lead time from order
@@ -793,7 +796,7 @@ const BASE_NODES = [
 
     contractingRegime: 'LTAs',
     inventoryBufferTarget: 0,
-    maxCapacityUtilization: 0.85,  // Uptime limited
+    maxCapacityUtilization: 0.95,  // Uptime limited
 
     yieldModel: 'simple',
     yieldSimpleLoss: 0,  // Tools don't have yield loss
@@ -802,10 +805,10 @@ const BASE_NODES = [
     exportControlSensitivity: 'critical',
 
     baseRate: {
-      value: 200,
-      confidence: 'high',
-      source: 'ASML annual reports',
-      historicalRange: [180, 250]
+      value: 4,
+      confidence: 'medium',
+      source: 'ASML annual reports (shipments per year / 12)',
+      historicalRange: [3, 5]
     }
   },
 
