@@ -1076,7 +1076,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // PHASE 3: Hard-gate deliveries from shared GPU pool
     //          Gate once by all bottlenecks, then allocate
     // ============================================
-    const effectiveStacksPerGPU = calculateEffectiveHbmPerGpu(month, demandAssumptions);
+    const effectiveStacksPerGPU = effectiveHbmPerGpuThisMonth;  // reuse Phase 1 value
     const { cowosWaferEquivPerGpu } = getGpuToComponentIntensities();
     const { kwPerGpu, pue } = getServerInfraIntensities();
     const cowosUnitsPerGPU = cowosWaferEquivPerGpu;
@@ -1195,6 +1195,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         nodeResults.demand.push(workloadDemand);
         nodeResults.supply.push(workloadDemand);          // Supply = demand (no constraint)
         nodeResults.supplyPotential.push(workloadDemand); // Same for workloads
+        nodeResults.gpuDelivered.push(0);
+        nodeResults.idleGpus.push(0);
         nodeResults.capacity.push(workloadDemand);
         nodeResults.yield.push(1);
         nodeResults.tightness.push(1);  // Neutral - not a market
@@ -1219,7 +1221,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // ALL nodes explicitly wired via componentDemands or dcMwToPowerDemands
       // No generic parent-based fallthrough for supply chain nodes
       let demand = 0;
-      const powerDemands = dcMwToPowerDemands(componentDemands.powerMw);
+      // powerDemands computed in Phase 2 scope, accessible here
 
       // --- Semiconductor components (derived from GPU production requirement) ---
       if (node.id === 'advanced_wafers') {
@@ -1277,9 +1279,6 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // --- Power chain (derived from datacenter MW demand) ---
       } else if (node.id === 'transformers_lpt') {
         demand = powerDemands.transformers;
-        nodeResults.installedBase.push(0);
-      } else if (node.id === 'grid_interconnect') {
-        demand = powerDemands.gridApprovals;
         nodeResults.installedBase.push(0);
       } else if (node.id === 'power_generation') {
         demand = powerDemands.ppas;
@@ -1523,7 +1522,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         } else if (node.id === 'server_assembly') {
           forecastDemand = forecastComponentDemands.servers;
         } else if (node.id === 'rack_pdu') {
-          forecastDemand = forecastComponentDemands.servers * 0.25;
+          const { serversPerRack } = getServerInfraIntensities();
+          forecastDemand = forecastComponentDemands.servers / Math.max(1, serversPerRack);
         } else if (node.id === 'liquid_cooling') {
           forecastDemand = forecastComponentDemands.cdus;
         } else if (node.id === 'transformers_lpt') {
