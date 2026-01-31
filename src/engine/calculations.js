@@ -513,6 +513,37 @@ export function calculateTrainingDemand(month, demandAssumptions, efficiencyAssu
   };
 }
 
+/**
+ * Throttle training demand based on recent GPU market tightness.
+ * Uses prior month tightness to avoid circular dependencies.
+ */
+function calculateTrainingThrottle(month, results) {
+  if (month <= 0) {
+    return 1;
+  }
+
+  const gpuResults = results?.nodes?.gpu_datacenter;
+  const tightnessHistory = gpuResults?.tightness || [];
+
+  if (tightnessHistory.length === 0) {
+    return 1;
+  }
+
+  const lastIndex = Math.min(month - 1, tightnessHistory.length - 1);
+  const lastTightness = tightnessHistory[lastIndex];
+
+  if (!Number.isFinite(lastTightness)) {
+    return 1;
+  }
+
+  if (lastTightness <= 1) {
+    return 1;
+  }
+
+  const throttle = 1 / lastTightness;
+  return Math.max(0, Math.min(1, throttle));
+}
+
 // ============================================
 // INTENSITY CACHE - For compute intensity growth
 // ============================================
