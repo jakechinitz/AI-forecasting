@@ -1,11 +1,11 @@
 /**
  * AI Infrastructure Supply Chain - Calculation Engine
  *
- * FINAL POLISH:
- * 1. PREDICTIVE SUPPLY: Now Inventory/Backlog aware (Net Need) to prevent over-expansion.
- * 2. REPORTING: Added distinct series for Fab (Procurement) vs Deployment (Integration).
- * 3. CHARTING: "Demand" now represents Total Fab Pressure (Orders + Backlog) to avoid visual drops.
- * 4. LOGIC: Closed-loop order policy + Split Backlogs + Fundamental Allocation.
+ * FINAL STABLE VERSION (v14):
+ * 1. STRICT GATING: Component supply = fulfilled (actual allocation), not capacity.
+ * 2. STABLE ORDERING: Order = Target - (Inventory + Backlog). Prevents double-ordering.
+ * 3. CLEAN START: GPU inventory forced to 0 (ignoring node defaults) to prevent phantom stock.
+ * 4. ARCHITECTURE: Closed Loop + Split Backlogs + Inventory Aware Forecast.
  */
 
 import { NODES, getNode, getChildNodes } from '../data/nodes.js';
@@ -28,6 +28,7 @@ import {
 // ============================================
 const EPSILON = 1e-10;
 const CATCHUP_MONTHS = 24; // Smooths the "Gap" into a monthly flow
+const DEFAULT_BUFFER_MONTHS = 2; // Target months of supply to maintain
 
 const ELASTIC_NODES = new Set([
   'hbm_stacks', 'cowos_capacity', 'grid_interconnect', 'datacenter_mw',
@@ -488,8 +489,21 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     if (node.id === 'gpu_datacenter') startingInstalledBase = CALIBRATION.startingInstalledBaseGpuDc;
     else if (node.id === 'gpu_inference') startingInstalledBase = CALIBRATION.startingInstalledBaseGpuInference;
 
+    // FIX: PHANTOM INVENTORY REMOVAL
+    // We explicitly zero out GPU inventory unless overridden by SCENARIO (ignoring nodes.js defaults).
+    // This prevents the "Warehouse of GPUs" bug from suppressing initial orders.
+    let initialInventory = 0;
+    const isGpu = node.id === 'gpu_datacenter' || node.id === 'gpu_inference';
+    
+    if (isGpu) {
+        // Only use scenario override, otherwise 0. Ignore node.startingInventory.
+        initialInventory = scenarioOverrides?.startingState?.inventoryByNode?.[node.id] ?? 0;
+    } else {
+        initialInventory = scenarioOverrides?.startingState?.inventoryByNode?.[node.id] ?? node.startingInventory ?? ((node.inventoryBufferTarget || 0) * (node.startingCapacity || 0) / 4);
+    }
+
     nodeState[node.id] = {
-      inventory: (scenarioOverrides?.startingState?.inventoryByNode?.[node.id] ?? node.startingInventory ?? ((node.inventoryBufferTarget || 0) * (node.startingCapacity || 0) / 4)),
+      inventory: initialInventory,
       
       // Split backlogs
       fabBacklog: 0, 
@@ -510,7 +524,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     };
     results.nodes[node.id] = {
       demand: [], supply: [], supplyPotential: [], gpuDelivered: [], idleGpus: [],
-      fabOutput: [], fabNeed: [], deployNeed: [], // NEW REPORTING ARRAYS
+      fabOutput: [], fabNeed: [], deployNeed: [],
       tightness: [], poolTightness: [],
       priceIndex: [], inventory: [], backlog: [], capacity: [], yield: [],
       shortage: [], glut: [], installedBase: [], requiredBase: [], gpuPurchases: []
@@ -564,10 +578,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // 2. Integration Need (for Component demand)
     const deployNeedTotal = deployNeedFlow + gpuState.deployBacklog;
 
-    // 3. Fab Order Policy: Order = Total Need - Current Inventory
-    // If we have idle inventory, we stop ordering.
-    const targetAvailableToDeploy = deployNeedTotal;
-    const fabOrderFlow = Math.max(0, targetAvailableToDeploy - gpuState.inventory);
+    // 3. Fab Order Policy: Order = (Need + Buffer) - (Inventory + OnOrder)
+    // FIX: Using Inventory Position (Inventory + Backlog) to prevents Double Ordering overshoot.
+    const targetBufferAmount = deployNeedFlow * DEFAULT_BUFFER_MONTHS;
+    const targetAvailableToDeploy = deployNeedTotal + targetBufferAmount;
+    
+    // "inventoryPosition" = what we have + what is already coming down the pipe
+    const inventoryPosition = gpuState.inventory + gpuState.fabBacklog;
+    const fabOrderFlow = Math.max(0, targetAvailableToDeploy - inventoryPosition);
 
     // 4. Fab Execution Need (Orders + Fab Backlog)
     const fabNeed = fabOrderFlow + gpuState.fabBacklog;
@@ -624,13 +642,17 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
       const approvalCap = nodeId === 'datacenter_mw' ? componentSupply.grid_interconnect : Infinity;
       const inventoryAvailable = nodeId === 'grid_interconnect' ? 0 : state.inventory;
+      
       const availableSupply = maxProducible + inventoryAvailable;
       
       const fulfilled = Math.min(availableSupply, demand + state.backlog, approvalCap);
       const inventoryOut = Math.max(0, availableSupply - fulfilled);
       const backlogOut = Math.max(0, demand + state.backlog - fulfilled);
 
-      componentSupply[nodeId] = fulfilled;
+      // FIX: Use FULFILLED for gating. Using availableSupply breaks logic (ignores demand constraints).
+      // Downstream nodes should only see what was actually allocated/delivered.
+      componentSupply[nodeId] = fulfilled; 
+      
       const tightness = (demand + state.backlog) / Math.max(fulfilled, EPSILON);
 
       state.priceHistory.push(calculatePriceIndex(tightness));
@@ -689,12 +711,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     gpuState.poolTightnessHistory.push(poolTightness);
     gpuState.tightnessHistory.push(poolTightness);
 
-    // NEW REPORTING SERIES
+    // REPORTING SERIES
     gpuResults.fabOutput.push(fabFulfilled);
     gpuResults.fabNeed.push(fabNeed);
     gpuResults.deployNeed.push(deployNeedTotal);
 
-    // CHART FIX: Demand = Fab Need (Total Pressure) to avoid visual drops
+    // CHART FIX: Demand = Fab Need (Total Pressure)
     gpuResults.demand.push(fabNeed * needShareDc);
     
     gpuResults.supply.push(dcDelivered);
@@ -719,6 +741,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     infState.priceHistory.push(calculatePriceIndex(poolTightness));
     infState.inventory = 0;
     infState.backlog = gpuState.deployBacklog * needShareInf;
+
+    // FIX 3: Inference Parity
+    infResults.fabOutput.push(fabFulfilled);
+    infResults.fabNeed.push(fabNeed);
+    infResults.deployNeed.push(deployNeedTotal);
 
     // CHART FIX: Demand = Fab Need
     infResults.demand.push(fabNeed * needShareInf);
@@ -880,10 +907,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const forecastDcDemandFlow = forecastDcCatchup + (forecastGpuState.installedBase / forecastGpuState.lifetimeMonths);
       const forecastInfDemandFlow = forecastInfCatchup + (forecastInfState.installedBase / forecastInfState.lifetimeMonths);
 
-      // Forecast Deployment Need (New Flow + Current Deploy Backlog)
+      // Forecast Deployment Need
       const forecastDeployNeedTotal = forecastDcDemandFlow + forecastInfDemandFlow + forecastGpuState.deployBacklog;
       
-      // Drive Component Forecast from Deployment Need
       const forecastComponentDemands = gpuToComponentDemands(forecastDeployNeedTotal, forecastMonth, calculateEffectiveHbmPerGpu(forecastMonth, demandAssumptions));
       const forecastPowerDemands = dcMwToPowerDemands(forecastComponentDemands.powerMw);
 
@@ -928,14 +954,20 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
              forecastDemand = nodeResults?.demand?.[nodeResults.demand.length - 1] || 0;
         }
 
-        // FIX: Trigger expands based on Net Need (Demand + Backlog - Inventory)
-        const inv = isNonInventoriable(node) ? 0 : (state.inventory || 0);
-        const bl = state.backlog || 0;
-        const netForecastNeed = Math.max(0, forecastDemand + bl - inv);
+        // FIX 1: Forecast State Approximation (Roll forward current state)
+        const grossShort = forecastDemand - forecastSupplyPotential;
+        const currentBl = state.backlog || 0;
+        const currentInv = isNonInventoriable(node) ? 0 : (state.inventory || 0);
+        
+        // Roll forward heuristic: if short, backlog grows; if long, inventory grows
+        const blF = Math.max(0, currentBl + Math.max(0, grossShort));
+        const invF = Math.max(0, currentInv + Math.max(0, -grossShort));
+        
+        const netForecastNeed = Math.max(0, forecastDemand + blF - invF);
 
         const demandRatio = netForecastNeed / (forecastSupplyPotential + EPSILON);
         
-        // Trigger if NET shortage exists (not just gross demand)
+        // Trigger based on NET need, preventing over-expansion when inventory is high
         if ((netForecastNeed - forecastSupplyPotential) > 0 && demandRatio >= ps.shortageThreshold) {
           const expansionAmount = Math.max(calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions) * ps.expansionFraction, (netForecastNeed - forecastSupplyPotential) / (node.maxCapacityUtilization || 0.95));
           state.dynamicExpansions.push({ month: month + (node.leadTimeDebottleneck || 6), capacityAdd: expansionAmount });
