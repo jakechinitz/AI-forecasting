@@ -429,6 +429,32 @@ export function calculateBacklog(prevBacklog, demand, supply) {
 }
 
 /**
+ * Cap monthly GPU deployments using datacenter power deployment velocity.
+ * Uses existing datacenter_mw capacity plus server power intensities.
+ */
+function calculateDeploymentVelocityCap(month, scenarioOverrides, nodeState) {
+  const dcNode = NODES.find(node => node.id === 'datacenter_mw');
+  if (!dcNode) {
+    return Infinity;
+  }
+
+  const dcState = nodeState?.[dcNode.id];
+  const capacity = calculateCapacity(dcNode, month, scenarioOverrides, dcState?.dynamicExpansions);
+  const nodeYield = calculateNodeYield(dcNode, month);
+  const maxUtilization = dcNode.maxCapacityUtilization || 0.95;
+  const maxPowerMw = capacity * maxUtilization * nodeYield;
+
+  const { kwPerGpu, pue } = getServerInfraIntensities();
+  const mwPerGpu = (kwPerGpu * pue) / 1000;
+
+  if (!Number.isFinite(mwPerGpu) || mwPerGpu <= 0) {
+    return Infinity;
+  }
+
+  return Math.max(0, maxPowerMw / mwPerGpu);
+}
+
+/**
  * Simple moving average
  */
 export function sma(values, window) {
