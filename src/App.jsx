@@ -202,6 +202,13 @@ function App() {
             results={simulationResults}
           />
         );
+      case 'printout':
+        return (
+          <PrintoutTab
+            results={simulationResults}
+            scenario={SCENARIOS[selectedScenario]}
+          />
+        );
 
       case 'printout':
         return (
