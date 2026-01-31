@@ -21,6 +21,7 @@ import AnalysisTab from './components/AnalysisTab.jsx';
 import ChartsTab from './components/ChartsTab.jsx';
 import ScenarioTab from './components/ScenarioTab.jsx';
 import GrowthRatesTab from './components/GrowthRatesTab.jsx';
+import PrintoutTab from './components/PrintoutTab.jsx';
 
 import './styles/app.css';
 
@@ -33,7 +34,8 @@ const TABS = [
   { id: 'analysis', label: 'Market Stress', icon: '🚦', description: 'Shortages & gluts' },
   { id: 'growth', label: 'YoY Growth', icon: '📅', description: 'Demand vs supply' },
   { id: 'charts', label: 'Node Trends', icon: '📊', description: 'Detailed charts' },
-  { id: 'scenarios', label: 'Scenarios', icon: '🎭', description: 'Compare cases' }
+  { id: 'scenarios', label: 'Scenarios', icon: '🎭', description: 'Compare cases' },
+  { id: 'printout', label: 'Printout', icon: '🧾', description: 'Snapshot summary' }
 ];
 
 function App() {
@@ -197,6 +199,13 @@ function App() {
             scenarios={SCENARIOS}
             selectedScenario={selectedScenario}
             onSelectScenario={setSelectedScenario}
+            results={simulationResults}
+          />
+        );
+
+      case 'printout':
+        return (
+          <PrintoutTab
             results={simulationResults}
           />
         );
