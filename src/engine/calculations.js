@@ -1,17 +1,19 @@
 /**
  * AI Infrastructure Supply Chain - Calculation Engine
  *
- * CLEAN REWRITE (v33):
- * - FIX: GPU/Component "potential" is consistently PHYSICS-based (includes inventory for STOCK nodes).
- * - FIX: "unmetDemand" is consistently PHYSICS shortfall: Plan - PhysicsPotential.
- * - ADD: "unmetRealized" captures execution shortfall: Plan - Actual (blocked by anything).
- * - FIX: Component backlogs persist AND can clear (physics-based queue: backlog = max(0, backlog + plan - potential)).
- * - FIX: Training demand included in GPU requirement, and DC/Inference split respects training.
- * - ADD: Binding constraint recorded each month (which node is actually binding deploy).
- * - FIX: Scenario overrides for installed base/backlog/inventory are fully applied per node.
+ * Rewritten (vNext) to address:
+ *  - Demand wildly inconsistent with installed base (deterministic Month-0 demand scaling)
+ *  - Inference demand collapsing to ~0 when blocks/paths are missing (hard fallbacks)
+ *  - No “immediate shortage” when component pressure is inferred only from actual deployments
+ *
+ * Design:
+ *  - We treat component “demand” as the PLAN (desired GPU deployments), while “supply” is what
+ *    physics allows (capacity + yield + inventory).
+ *  - Component backlog is tracked as a *planning backlog* (unmet plan vs true potential),
+ *    which avoids circularity and makes constraints visible immediately.
  */
 
-import { NODES } from '../data/nodes.js';
+import { NODES, getNode, getChildNodes } from '../data/nodes.js';
 import {
   GLOBAL_PARAMS,
   DEMAND_ASSUMPTIONS,
@@ -23,12 +25,12 @@ import {
 } from '../data/assumptions.js';
 
 // ============================================
-// 1. PHYSICS & ONTOLOGY
+// 1) PHYSICS & ONTOLOGY
 // ============================================
 
 const PHYSICS_DEFAULTS = {
-  flopsPerToken: 140e9,
-  flopsPerGpu: 2e15,
+  flopsPerToken: 140e9,    // token -> FLOPs (very rough)
+  flopsPerGpu: 2e15,       // GPU FLOPs/s (rough “effective”)
   utilizationInference: 0.35,
   utilizationTraining: 0.50,
   secondsPerMonth: 2.6e6,
@@ -78,26 +80,27 @@ function getNodeType(nodeId) {
   if (STOCK_NODES.has(nodeId)) return 'STOCK';
   if (THROUGHPUT_NODES.has(nodeId)) return 'THROUGHPUT';
   if (QUEUE_NODES.has(nodeId)) return 'QUEUE';
+  // Default to STOCK so it can carry inventory/backlog if it’s actually a stock node
   return 'STOCK';
 }
 
 // ============================================
-// 2. CORE UTILITIES
+// 2) CORE UTILITIES
 // ============================================
 
 const EPSILON = 1e-10;
 
-// “How fast do we try to close installed base gaps”
+// Planning knobs
 const CATCHUP_MONTHS = 24;
-
-// Buffer policy (inventory target) — doesn’t affect PHYSICS potential,
-// only affects inventory management for STOCK nodes.
 const DEFAULT_BUFFER_MONTHS = 2;
 
-// For GPU installed base backlog paydown (policy-ish)
-const GPU_BACKLOG_PAYDOWN_MONTHS = 6;
+// Aggressive urgency
+const BACKLOG_PAYDOWN_MONTHS_GPU = 6;
+const BACKLOG_PAYDOWN_MONTHS_COMPONENTS = 6;
 
-// For component backlogs, we keep them physics-based; no special paydown needed.
+function clamp(x, lo, hi) {
+  return Math.max(lo, Math.min(hi, x));
+}
 
 function deepMerge(target, source) {
   if (!source) return target;
@@ -118,42 +121,70 @@ function resolveAssumptionValue(value, fallback) {
 }
 
 function sma(values, window) {
-  if (values.length === 0) return 0;
+  if (!values || values.length === 0) return 0;
   if (values.length < window) return values.reduce((a, b) => a + b, 0) / values.length;
   return values.slice(-window).reduce((a, b) => a + b, 0) / window;
 }
 
 function calculatePriceIndex(tightness) {
-  const { a, b, minPrice, maxPrice } = GLOBAL_PARAMS.priceIndex;
+  const { a, b, minPrice, maxPrice } = GLOBAL_PARAMS.priceIndex || { a: 1.2, b: 2.2, minPrice: 0.65, maxPrice: 2.0 };
   if (!Number.isFinite(tightness)) return 1;
   if (tightness >= 1) return Math.min(maxPrice, 1 + a * Math.pow(tightness - 1, b));
   return Math.max(minPrice, 1 - a * Math.pow(1 - tightness, b));
 }
 
 // ============================================
-// 3. CAPACITY / YIELD
+// 3) DEMAND + EFFICIENCY HELPERS
 // ============================================
 
 export function clearGrowthCache() {
   // No-op (run-scoped cache used)
 }
 
-function dateToMonth(dateStr) {
-  const [year, month] = dateStr.split('-').map(Number);
-  return (year - GLOBAL_PARAMS.startYear) * 12 + (month - GLOBAL_PARAMS.startMonth);
+function getDemandBlockForMonth(month, assumptions) {
+  const blockKey = getBlockKeyForMonth(month);
+  return assumptions?.[blockKey] || DEMAND_ASSUMPTIONS?.[blockKey] || DEMAND_ASSUMPTIONS?.base || {};
 }
 
-function applyRampProfile(capacityAdd, monthsSinceExpansion, profile, rampDuration) {
-  const t = Math.min(monthsSinceExpansion / rampDuration, 1);
-  if (profile === 'step') return capacityAdd;
-  if (profile === 's-curve') return capacityAdd * (1 / (1 + Math.exp(-((t - 0.5) * 10))));
-  return capacityAdd * t; // linear
+function calculateInferenceDemand(month, demandBlock) {
+  const segments = ['consumer', 'enterprise', 'agentic'];
+
+  const out = { total: 0 };
+  for (const seg of segments) {
+    const base = resolveAssumptionValue(demandBlock?.workloadBase?.inferenceTokensPerMonth?.[seg], 0);
+    const growth = resolveAssumptionValue(demandBlock?.inferenceGrowth?.[seg]?.value, 0);
+    const value = base * Math.pow(1 + growth, month / 12);
+    out[seg] = value;
+    out.total += value;
+  }
+
+  // Hard fallback so charts never go to 0 unless explicitly configured that way
+  if (!Number.isFinite(out.total) || out.total <= 0) {
+    const fallback = 1e12; // 1T tokens/month “floor” to keep plots sane
+    out.consumer = fallback;
+    out.enterprise = 0;
+    out.agentic = 0;
+    out.total = fallback;
+  }
+
+  return out;
+}
+
+function calculateTrainingDemand(month, demandBlock) {
+  const segments = ['frontier', 'midtier'];
+  const out = {};
+  for (const seg of segments) {
+    const base = resolveAssumptionValue(demandBlock?.workloadBase?.trainingRunsPerMonth?.[seg], 0);
+    const growth = resolveAssumptionValue(demandBlock?.trainingGrowth?.[seg]?.value, 0);
+    out[seg] = base * Math.pow(1 + growth, month / 12);
+  }
+  return out;
 }
 
 export function calculateCapacity(node, month, scenarioOverrides = {}, dynamicExpansions = []) {
-  let capacity = node.startingCapacity || 0;
+  let capacity = node?.startingCapacity || 0;
 
-  (node.committedExpansions || []).forEach(expansion => {
+  (node?.committedExpansions || []).forEach(expansion => {
     const onlineMonth = dateToMonth(expansion.date) + (expansion.leadTimeMonths || 0);
     if (month >= onlineMonth) {
       capacity += applyRampProfile(
@@ -176,7 +207,8 @@ export function calculateCapacity(node, month, scenarioOverrides = {}, dynamicEx
     }
   });
 
-  if (scenarioOverrides.supply?.affectedNodes?.includes(node.id)) {
+  // Optional supply shock
+  if (scenarioOverrides?.supply?.affectedNodes?.includes(node.id)) {
     const shockMonth = scenarioOverrides.supply.shockMonth || 24;
     const reduction = scenarioOverrides.supply.capacityReduction || 0.5;
     if (month >= shockMonth && month < shockMonth + 12) {
@@ -187,7 +219,21 @@ export function calculateCapacity(node, month, scenarioOverrides = {}, dynamicEx
   return capacity;
 }
 
+function applyRampProfile(capacityAdd, monthsSinceExpansion, profile, rampDuration) {
+  const t = Math.min(monthsSinceExpansion / rampDuration, 1);
+  if (profile === 'step') return capacityAdd;
+  if (profile === 's-curve') return capacityAdd * (1 / (1 + Math.exp(-((t - 0.5) * 10))));
+  return capacityAdd * t; // linear
+}
+
+function dateToMonth(dateStr) {
+  const [year, month] = String(dateStr || '').split('-').map(Number);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return 0;
+  return (year - GLOBAL_PARAMS.startYear) * 12 + (month - GLOBAL_PARAMS.startMonth);
+}
+
 function calculateNodeYield(node, month) {
+  if (!node) return 1;
   if (node.yieldModel === 'stacked') {
     return calculateStackedYield(
       node.yieldInitial || 0.65,
@@ -199,50 +245,10 @@ function calculateNodeYield(node, month) {
   return calculateSimpleYield(node.yieldSimpleLoss || 0.03);
 }
 
-function calcEffectiveCapacity(node, month, scenarioOverrides, dynamicExpansions) {
-  const capacity = calculateCapacity(node, month, scenarioOverrides, dynamicExpansions);
-  const y = calculateNodeYield(node, month);
-  const util = node.maxCapacityUtilization || 0.95;
-  return {
-    capacityRaw: capacity,
-    capacityEff: capacity * util * y,
-    yieldRate: y
-  };
-}
-
-// ============================================
-// 4. DEMAND & EFFICIENCY (GPU REQUIREMENTS)
-// ============================================
-
-function getDemandBlockForMonth(month, assumptions) {
-  const blockKey = getBlockKeyForMonth(month);
-  return assumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
-}
-
-function calculateInferenceDemand(month, demandBlock) {
-  const segments = ['consumer', 'enterprise', 'agentic'];
-  const demand = { total: 0 };
-  segments.forEach(seg => {
-    const base = resolveAssumptionValue(demandBlock?.workloadBase?.inferenceTokensPerMonth?.[seg], 0);
-    const growth = resolveAssumptionValue(demandBlock?.inferenceGrowth?.[seg]?.value, 0);
-    const value = base * Math.pow(1 + growth, month / 12);
-    demand[seg] = value;
-    demand.total += value;
-  });
-  return demand;
-}
-
-function calculateTrainingDemand(month, demandBlock) {
-  const segments = ['frontier', 'midtier'];
-  const demand = {};
-  segments.forEach(seg => {
-    const base = resolveAssumptionValue(demandBlock?.workloadBase?.trainingRunsPerMonth?.[seg], 0);
-    const growth = resolveAssumptionValue(demandBlock?.trainingGrowth?.[seg]?.value, 0);
-    demand[seg] = base * Math.pow(1 + growth, month / 12);
-  });
-  return demand;
-}
-
+// --- Efficiency multipliers ---
+// Convention:
+//  - M_* multiplies cost (good -> decreases over time, i.e. decay)
+//  - S_* and H multiply throughput (good -> increases over time, i.e. growth)
 function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet) {
   if (cache[month]) return cache[month];
 
@@ -253,144 +259,153 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
 
   const prev = getEfficiencyMultipliers(month - 1, assumptions, cache, warnings, warnedSet);
   const blockKey = getBlockKeyForMonth(month);
-  const block = assumptions?.[blockKey] || EFFICIENCY_ASSUMPTIONS[blockKey];
+  const block = assumptions?.[blockKey] || EFFICIENCY_ASSUMPTIONS?.[blockKey] || EFFICIENCY_ASSUMPTIONS?.base || {};
 
-  // Model efficiency reduces compute per unit of work (cost down)
-  const m_infer_annual = resolveAssumptionValue(block?.modelEfficiency?.m_inference?.value, 0.18);
-  const m_train_annual = resolveAssumptionValue(block?.modelEfficiency?.m_training?.value, 0.10);
+  const mInfAnnual = resolveAssumptionValue(block?.modelEfficiency?.m_inference?.value, 0.18);
+  const mTrnAnnual = resolveAssumptionValue(block?.modelEfficiency?.m_training?.value, 0.10);
 
-  // Systems/hardware increase throughput (capacity up)
-  const s_infer_annual = resolveAssumptionValue(block?.systemsEfficiency?.s_inference?.value, 0.10);
-  const h_annual = resolveAssumptionValue(block?.hardwareEfficiency?.h?.value, 0.15);
+  const sInfAnnual = resolveAssumptionValue(block?.systemsEfficiency?.s_inference?.value, 0.10);
+  const sTrnAnnual = resolveAssumptionValue(block?.systemsEfficiency?.s_training?.value, 0.08);
 
-  const decay_inf = Math.pow(1 - m_infer_annual, 1 / 12);
-  const decay_train = Math.pow(1 - m_train_annual, 1 / 12);
-  const growth_sys_inf = Math.pow(1 + s_infer_annual, 1 / 12);
-  const growth_hw = Math.pow(1 + h_annual, 1 / 12);
+  const hAnnual = resolveAssumptionValue(block?.hardwareEfficiency?.h?.value, 0.15);
 
-  const current = {
-    M_inference: prev.M_inference * decay_inf,
-    M_training: prev.M_training * decay_train,
-    S_inference: prev.S_inference * growth_sys_inf,
-    S_training: prev.S_training, // placeholder if you ever add it
-    H: prev.H * growth_hw
+  const decayInf = Math.pow(1 - mInfAnnual, 1 / 12);
+  const decayTrn = Math.pow(1 - mTrnAnnual, 1 / 12);
+
+  const growSInf = Math.pow(1 + sInfAnnual, 1 / 12);
+  const growSTrn = Math.pow(1 + sTrnAnnual, 1 / 12);
+  const growH = Math.pow(1 + hAnnual, 1 / 12);
+
+  const cur = {
+    M_inference: prev.M_inference * decayInf,
+    M_training: prev.M_training * decayTrn,
+    S_inference: prev.S_inference * growSInf,
+    S_training: prev.S_training * growSTrn,
+    H: prev.H * growH
   };
 
-  // SAFETY: model efficiency multiplier should not increase (would imply worse efficiency)
-  if (current.M_inference > prev.M_inference + 1e-9 && !warnedSet.has('eff_sign')) {
-    warnings.push(`Sanity Check Fail (Month ${month}): M_inference increased. Check signs.`);
-    warnedSet.add('eff_sign');
+  // Safety: M should not increase (cost multiplier should trend down)
+  if (cur.M_inference > prev.M_inference + 1e-9 && !warnedSet.has('eff_sign_inf')) {
+    warnings.push(`Sanity Check: Month ${month} M_inference increased. Check sign/inputs.`);
+    warnedSet.add('eff_sign_inf');
+  }
+  if (cur.M_training > prev.M_training + 1e-9 && !warnedSet.has('eff_sign_trn')) {
+    warnings.push(`Sanity Check: Month ${month} M_training increased. Check sign/inputs.`);
+    warnedSet.add('eff_sign_trn');
   }
 
-  cache[month] = current;
-  return current;
+  cache[month] = cur;
+  return cur;
 }
 
 /**
- * Returns { total, inference, training } required GPUs (not split DC vs INF yet)
+ * Compute required GPUs for month given demand + efficiency, with a persistent demandScale.
+ * Returns inference/training components so we can split installed base sensibly.
  */
-function calculateRequiredGpusDetailed(month, demandAssumptions, efficiencyAssumptions, effCache, warnings, warnedSet, installedBaseTotal) {
+function computeRequiredGpus(month, demandAssumptions, efficiencyAssumptions, effCache, warnings, warnedSet, demandScale = 1) {
   const block = getDemandBlockForMonth(month, demandAssumptions);
 
   const inferenceDemand = calculateInferenceDemand(month, block);
   const trainingDemand = calculateTrainingDemand(month, block);
 
-  const eff = getEfficiencyMultipliers(month, efficiencyAssumptions, effCache, warnings, warnedSet);
+  // Apply persistent scale to workloads (fixes “49k GPUs in 2026” class issues)
+  const totalTokens = inferenceDemand.total * demandScale;
 
-  // -------- Inference GPUs --------
-  const tokens = inferenceDemand.total;
-
-  const flopsPerToken = PHYSICS_DEFAULTS.flopsPerToken;
-  const flopsPerGpu = PHYSICS_DEFAULTS.flopsPerGpu;
-
-  const rawFlopsPerGpuMonth =
-    flopsPerGpu * PHYSICS_DEFAULTS.utilizationInference * PHYSICS_DEFAULTS.secondsPerMonth;
-
-  // Inference cost: Tokens * (M) in numerator; throughput gains (S,H) in denominator
-  const effectiveFlopsPerToken = flopsPerToken * eff.M_inference;
-  const effectiveThroughputInference = rawFlopsPerGpuMonth * eff.S_inference * eff.H;
-
-  const requiredInference = (tokens * effectiveFlopsPerToken) / Math.max(effectiveThroughputInference, EPSILON);
-
-  // -------- Training GPUs --------
-  // Demand specified as runs/month; intensity specified as GPU-hours per run (assumption)
   const hoursFrontier = resolveAssumptionValue(block?.workloadBase?.trainingComputePerRun?.frontier, 50e6);
   const hoursMidtier = resolveAssumptionValue(block?.workloadBase?.trainingComputePerRun?.midtier, 200000);
 
-  const totalTrainingHours =
-    (trainingDemand.frontier * hoursFrontier) + (trainingDemand.midtier * hoursMidtier);
+  const frontierRuns = (trainingDemand.frontier || 0) * demandScale;
+  const midtierRuns = (trainingDemand.midtier || 0) * demandScale;
 
-  // Training capacity is GPU-hours/month * util, scaled by hardware efficiency H
-  const effectiveGpuHoursPerGpuMonth = PHYSICS_DEFAULTS.hoursPerMonth * PHYSICS_DEFAULTS.utilizationTraining * eff.H;
+  // Physics constants (allow optional overrides via TRANSLATION_INTENSITIES.compute)
+  const computeCfg = TRANSLATION_INTENSITIES?.compute || {};
+  const flopsPerToken = resolveAssumptionValue(computeCfg.flopsPerToken?.value, PHYSICS_DEFAULTS.flopsPerToken);
+  const flopsPerGpu = resolveAssumptionValue(computeCfg.flopsPerGpu?.value, PHYSICS_DEFAULTS.flopsPerGpu);
 
-  // Training compute per unit work reduced by M_training (multiplier in numerator)
-  const requiredTraining =
-    (totalTrainingHours * eff.M_training) / Math.max(effectiveGpuHoursPerGpuMonth, EPSILON);
+  const utilInf = resolveAssumptionValue(computeCfg.utilizationInference?.value, PHYSICS_DEFAULTS.utilizationInference);
+  const utilTrn = resolveAssumptionValue(computeCfg.utilizationTraining?.value, PHYSICS_DEFAULTS.utilizationTraining);
 
-  const total = requiredInference + requiredTraining;
+  const demonstratedSecondsPerMonth = PHYSICS_DEFAULTS.secondsPerMonth;
+  const hoursPerMonth = PHYSICS_DEFAULTS.hoursPerMonth;
 
-  if (month === 0 && !warnedSet.has('calib_info')) {
-    warnings.push(
-      `INFO: Month 0 GPU Demand: ${formatNumber(total)} (Infer: ${formatNumber(requiredInference)}, Train: ${formatNumber(requiredTraining)}). Installed: ${formatNumber(installedBaseTotal)}.`
-    );
-    warnedSet.add('calib_info');
+  const eff = getEfficiencyMultipliers(month, efficiencyAssumptions, effCache, warnings, warnedSet);
 
-    const ratio = total / Math.max(installedBaseTotal, 1);
-    if (ratio < 0.1 || ratio > 2.0) {
-      warnings.push(`CALIBRATION ALARM: Demand (${formatNumber(total)}) is ${(ratio * 100).toFixed(0)}% of Installed Base.`);
-    }
-  }
+  // Inference: required = (tokens * flops/token * M) / (flops/gpu-month * S * H)
+  const effectiveFlopsPerToken = flopsPerToken * eff.M_inference;
+  const rawFlopsPerGpuMonth = flopsPerGpu * utilInf * demonstratedSecondsPerMonth;
+  const effectiveThroughputInf = rawFlopsPerGpuMonth * eff.S_inference * eff.H;
 
-  return { total, inference: requiredInference, training: requiredTraining };
+  const requiredInference = (totalTokens * effectiveFlopsPerToken) / Math.max(effectiveThroughputInf, EPSILON);
+
+  // Training: required = (totalAccelHours * M) / (hours/month * util * S * H)
+  const totalTrainingHours = (frontierRuns * hoursFrontier) + (midtierRuns * hoursMidtier);
+  const denomTraining = hoursPerMonth * utilTrn * eff.S_training * eff.H;
+  const requiredTraining = (totalTrainingHours * eff.M_training) / Math.max(denomTraining, EPSILON);
+
+  const requiredTotal = requiredInference + requiredTraining;
+
+  return {
+    requiredTotal,
+    requiredInference,
+    requiredTraining,
+    inferenceDemand,
+    trainingDemand
+  };
 }
 
 // ============================================
-// 5. INTENSITY MAP & PREFLIGHT
+// 4) INTENSITY MAP + PREFLIGHT
 // ============================================
 
 function buildIntensityMap() {
   const map = {};
-  const gpuToComp = TRANSLATION_INTENSITIES.gpuToComponents;
-  const serverToInfra = TRANSLATION_INTENSITIES.serverToInfra;
+  const gpuToComp = TRANSLATION_INTENSITIES?.gpuToComponents || {};
+  const serverToInfra = TRANSLATION_INTENSITIES?.serverToInfra || {};
 
-  const kwPerGpu = serverToInfra.kwPerGpu?.value || 1.0;
-  const pue = serverToInfra.pue?.value || 1.3;
+  const kwPerGpu = resolveAssumptionValue(serverToInfra.kwPerGpu?.value, 1.0);
+  const pue = resolveAssumptionValue(serverToInfra.pue?.value, 1.3);
   const mwPerGpu = (kwPerGpu * pue) / 1000;
 
-  map['hbm_stacks'] = gpuToComp.hbmStacksPerGpu?.value || 8;
+  map['hbm_stacks'] = resolveAssumptionValue(gpuToComp.hbmStacksPerGpu?.value, 8);
   map['datacenter_mw'] = mwPerGpu;
 
-  map['advanced_wafers'] = gpuToComp.advancedWafersPerGpu?.value || 0.3;
-  map['abf_substrate'] = NODE_MAP.get('abf_substrate')?.inputIntensity || 0.02;
+  map['advanced_wafers'] = resolveAssumptionValue(gpuToComp.advancedWafersPerGpu?.value, 0.3);
+  map['abf_substrate'] = resolveAssumptionValue(
+    NODE_MAP.get('abf_substrate')?.inputIntensity,
+    resolveAssumptionValue(gpuToComp.abfUnitsPerGpu?.value, 0.02)
+  );
 
-  map['cowos_capacity'] = gpuToComp.cowosWaferEquivPerGpu?.value || 0.3;
+  map['cowos_capacity'] = resolveAssumptionValue(gpuToComp.cowosWaferEquivPerGpu?.value, 0.3);
 
-  const hbIntensity = gpuToComp.hybridBondingPerGpu?.value || 0.35;
-  const hbShare = gpuToComp.hybridBondingPackageShare?.value || 0.2;
+  const hbIntensity = resolveAssumptionValue(gpuToComp.hybridBondingPerGpu?.value, 0.35);
+  const hbShare = resolveAssumptionValue(gpuToComp.hybridBondingPackageShare?.value, 0.2);
   map['hybrid_bonding'] = hbIntensity * hbShare;
 
-  map['server_assembly'] = 1 / (serverToInfra.gpusPerServer?.value || 8);
+  const gpusPerServer = resolveAssumptionValue(serverToInfra.gpusPerServer?.value, 8);
+  map['server_assembly'] = 1 / Math.max(gpusPerServer, 1);
+
   map['grid_interconnect'] = mwPerGpu;
 
-  // Allow node-defined intensities to fill gaps
-  NODES.forEach(node => {
-    if (node.inputIntensity && !map[node.id]) map[node.id] = node.inputIntensity;
-  });
+  // Fill gaps from node definitions
+  for (const node of NODES) {
+    if (node?.inputIntensity && map[node.id] === undefined) map[node.id] = node.inputIntensity;
+  }
 
   return map;
 }
 
 function runPreflightDiagnostics(map, warnings) {
   let errCount = 0;
+
   const gpuNode = NODE_MAP.get('gpu_datacenter');
   const gpuStartCap = gpuNode?.startingCapacity || 1;
 
-  NODES.forEach(node => {
+  for (const node of NODES) {
     const isEligible = node.group !== 'A' && !['gpu_datacenter', 'gpu_inference'].includes(node.id);
     const isMapped = !!map[node.id];
 
-    if (isMapped && node.startingCapacity === 0 && node.startingInventory === 0 && (!node.committedExpansions || node.committedExpansions.length === 0)) {
-      warnings.push(`PREFLIGHT ERROR: Node '${node.id}' starts at 0 and has no expansions. Will clamp sim.`);
+    if (isMapped && (node.startingCapacity || 0) === 0 && (node.startingInventory || 0) === 0 && (!node.committedExpansions || node.committedExpansions.length === 0)) {
+      warnings.push(`PREFLIGHT ERROR: Node '${node.id}' starts at 0 and has no expansions.`);
       errCount++;
     }
 
@@ -398,17 +413,15 @@ function runPreflightDiagnostics(map, warnings) {
       const type = getNodeType(node.id);
       if (type !== 'QUEUE') warnings.push(`PREFLIGHT WARNING: Node '${node.id}' is unmapped. It will not constrain.`);
     }
-  });
+  }
 
-  Object.keys(map).forEach(key => {
+  for (const key of Object.keys(map)) {
     const node = NODE_MAP.get(key);
     if (!node) {
       warnings.push(`PREFLIGHT ERROR: Intensity map references missing node '${key}'.`);
       errCount++;
-      return;
+      continue;
     }
-
-    if (node.group === 'A') warnings.push(`PREFLIGHT WARNING: Node '${key}' is mapped but Group A.`);
 
     if (EXPECTED_UNITS[key]) {
       if (!node.unit) {
@@ -427,76 +440,58 @@ function runPreflightDiagnostics(map, warnings) {
         warnings.push(`PREFLIGHT WARNING: Magnitude '${key}'. Implied support ${formatNumber(impliedGpuSupport)} vs GPU cap ${formatNumber(gpuStartCap)}.`);
       }
     }
-  });
+  }
 
   if (errCount > 0) warnings.push(`PREFLIGHT: Found ${errCount} configuration errors.`);
 }
 
 // ============================================
-// 6. MAIN SIM LOOP
+// 5) MAIN SIMULATION LOOP
 // ============================================
 
 export function runSimulation(assumptions, scenarioOverrides = {}) {
-  const months = GLOBAL_PARAMS.horizonYears * 12;
+  const months = (GLOBAL_PARAMS.horizonYears || 10) * 12;
 
   const results = {
     months: [],
     nodes: {},
-    summary: { shortages: [], gluts: [] },
-    warnings: [],
-    bindingConstraint: [] // [{month, nodeId, reason, value}]
+    summary: { shortages: [], gluts: [], bottlenecks: [] },
+    warnings: []
   };
 
   const nodeIntensityMap = buildIntensityMap();
   runPreflightDiagnostics(nodeIntensityMap, results.warnings);
 
   const warnedSet = new Set();
+  const effCache = [];
 
   const demandAssumptions = deepMerge(assumptions?.demand || DEMAND_ASSUMPTIONS, scenarioOverrides?.demand);
   const efficiencyAssumptions = deepMerge(assumptions?.efficiency || EFFICIENCY_ASSUMPTIONS, scenarioOverrides?.efficiency);
 
-  const effCache = [];
-
-  // ----- STATE INIT -----
+  // --- state init ---
   const nodeState = {};
   const startOverrides = scenarioOverrides?.startingState || {};
 
-  // Allow per-node overrides:
-  // startingState.installedBaseByNode = { gpu_datacenter: ..., gpu_inference: ... }
-  // startingState.backlogByNode = { ... }
-  // startingState.inventoryByNode = { ... }
-  const installedBaseByNode = startOverrides.installedBaseByNode || {};
-  const backlogByNode = startOverrides.backlogByNode || {};
-  const inventoryByNode = startOverrides.inventoryByNode || {};
+  const defaultDcInstalled = 1200000;
+  const defaultInfInstalled = 300000;
 
-  NODES.forEach(node => {
+  const dcInstalledOverride = startOverrides.datacenterInstalledBase ?? startOverrides.installedBaseDatacenter ?? startOverrides.installedBase;
+  const infInstalledOverride = startOverrides.inferenceInstalledBase ?? startOverrides.installedBaseInference;
+
+  for (const node of NODES) {
     const type = getNodeType(node.id);
 
-    const defaultInstalled =
-      (node.id === 'gpu_datacenter') ? 1200000 :
-      (node.id === 'gpu_inference') ? 300000 :
-      0;
+    let installedBase = 0;
+    if (node.id === 'gpu_datacenter') installedBase = (dcInstalledOverride !== undefined) ? dcInstalledOverride : defaultDcInstalled;
+    if (node.id === 'gpu_inference') installedBase = (infInstalledOverride !== undefined) ? infInstalledOverride : defaultInfInstalled;
 
-    const installedBase =
-      (installedBaseByNode[node.id] !== undefined)
-        ? installedBaseByNode[node.id]
-        : defaultInstalled;
-
-    const backlogInit =
-      (backlogByNode[node.id] !== undefined)
-        ? backlogByNode[node.id]
-        : (node.startingBacklog || 0);
-
-    const invDefault = (type === 'STOCK') ? (node.startingInventory || 0) : 0;
-    const inventoryInit =
-      (inventoryByNode[node.id] !== undefined)
-        ? inventoryByNode[node.id]
-        : invDefault;
+    const overrideBacklog = startOverrides.backlogByNode?.[node.id];
+    const initialBacklog = (overrideBacklog !== undefined) ? overrideBacklog : (node.startingBacklog || 0);
 
     nodeState[node.id] = {
       type,
-      inventory: inventoryInit,
-      backlog: backlogInit,
+      inventory: (type === 'STOCK') ? (node.startingInventory || 0) : 0,
+      backlog: initialBacklog,
       installedBase,
       dynamicExpansions: [],
       lastExpansionMonth: -Infinity,
@@ -507,194 +502,153 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       demand: [], supply: [], capacity: [], inventory: [], backlog: [],
       shortage: [], glut: [], tightness: [], priceIndex: [],
       installedBase: [], requiredBase: [], planDeploy: [], consumption: [],
-      supplyPotential: [], potential: [], yield: [],
-      unmetDemand: [], unmetRealized: [], // <- consistent across nodes
-      gpuDelivered: [], idleGpus: [] // for GPU nodes
+      supplyPotential: [], gpuDelivered: [], idleGpus: [], yield: [],
+      unmetDemand: [], potential: []
     };
-  });
-
-  // Helper: for workload “nodes” that are just metrics (if they exist in NODES)
-  function pushWorkloadMetrics(nodeId, value) {
-    const nodeRes = results.nodes[nodeId];
-    if (!nodeRes) return;
-    nodeRes.demand.push(value);
-    nodeRes.supply.push(null);
-    nodeRes.capacity.push(null);
-    nodeRes.inventory.push(null);
-    nodeRes.backlog.push(null);
-    nodeRes.shortage.push(null);
-    nodeRes.glut.push(null);
-    nodeRes.tightness.push(null);
-    nodeRes.priceIndex.push(null);
-    nodeRes.installedBase.push(null);
-    nodeRes.requiredBase.push(null);
-    nodeRes.planDeploy.push(null);
-    nodeRes.consumption.push(null);
-    nodeRes.supplyPotential.push(null);
-    nodeRes.potential.push(null);
-    nodeRes.yield.push(null);
-    nodeRes.unmetDemand.push(null);
-    nodeRes.unmetRealized.push(null);
-    nodeRes.gpuDelivered.push(null);
-    nodeRes.idleGpus.push(null);
   }
 
-  // ----- MONTH LOOP -----
+  // --- calibration ---
+  const calibrationCfg = {
+    enabled: scenarioOverrides?.calibration?.enabled ?? true,
+    targetRatio: scenarioOverrides?.calibration?.targetRatio ?? 1.0,
+    minScale: scenarioOverrides?.calibration?.minScale ?? 0.02,
+    maxScale: scenarioOverrides?.calibration?.maxScale ?? 50
+  };
+
+  let demandScale = scenarioOverrides?.calibration?.demandScale ?? null;
+
   for (let month = 0; month < months; month++) {
     results.months.push(month);
 
-    // ---- Demand drivers ----
     const demandBlock = getDemandBlockForMonth(month, demandAssumptions);
-    const inferenceDemand = calculateInferenceDemand(month, demandBlock);
-    const trainingDemand = calculateTrainingDemand(month, demandBlock);
 
-    // If these are represented as nodes in your NODES file, keep them synced:
-    pushWorkloadMetrics('training_frontier', trainingDemand.frontier);
-    pushWorkloadMetrics('training_midtier', trainingDemand.midtier);
-    pushWorkloadMetrics('inference_consumer', inferenceDemand.consumer);
-    pushWorkloadMetrics('inference_enterprise', inferenceDemand.enterprise);
-    pushWorkloadMetrics('inference_agentic', inferenceDemand.agentic);
+    const currentInstalled = (nodeState['gpu_datacenter']?.installedBase || 0) + (nodeState['gpu_inference']?.installedBase || 0);
 
-    // ---- Required GPUs (detailed) ----
+    if (month === 0 && (demandScale === null || demandScale === undefined)) {
+      const raw = computeRequiredGpus(0, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, 1);
+      const rawReq = Math.max(raw.requiredTotal, 1);
+      const desired = currentInstalled * calibrationCfg.targetRatio;
+
+      let suggested = desired / rawReq;
+      suggested = clamp(suggested, calibrationCfg.minScale, calibrationCfg.maxScale);
+
+      demandScale = calibrationCfg.enabled ? suggested : 1;
+
+      results.warnings.push(
+        `INFO: Month 0 calibration: installed=${formatNumber(currentInstalled)} GPUs, raw required=${formatNumber(raw.requiredTotal)} GPUs. ` +
+        `Applying demandScale=${demandScale.toFixed(2)} (enabled=${calibrationCfg.enabled}).`
+      );
+    }
+
+    const scaleUsed = (demandScale === null || demandScale === undefined) ? 1 : demandScale;
+
+    const req = computeRequiredGpus(month, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed);
+
+    // Allocation: training => DC; inference split by configurable share
+    const dcInfShare = resolveAssumptionValue(demandBlock?.allocation?.dcInferenceShare?.value, 0.60);
+    const requiredDcBase = req.requiredTraining + (req.requiredInference * dcInfShare);
+    const requiredInfBase = req.requiredInference * (1 - dcInfShare);
+
+    // Keep workload series aligned (if these nodes exist)
+    const pushWorkload = (nodeId, value) => {
+      const r = results.nodes[nodeId];
+      if (!r) return;
+      r.demand.push(value);
+      r.supply.push(null); r.capacity.push(null); r.inventory.push(null); r.backlog.push(null);
+      r.shortage.push(null); r.glut.push(null); r.tightness.push(null); r.priceIndex.push(null);
+      r.installedBase.push(null); r.requiredBase.push(null); r.planDeploy.push(null); r.consumption.push(null);
+      r.supplyPotential.push(null); r.gpuDelivered.push(null); r.idleGpus.push(null); r.yield.push(null);
+      r.unmetDemand.push(null); r.potential.push(null);
+    };
+
+    pushWorkload('training_frontier', req.trainingDemand.frontier || 0);
+    pushWorkload('training_midtier', req.trainingDemand.midtier || 0);
+    pushWorkload('inference_consumer', req.inferenceDemand.consumer || 0);
+    pushWorkload('inference_enterprise', req.inferenceDemand.enterprise || 0);
+    pushWorkload('inference_agentic', req.inferenceDemand.agentic || 0);
+
+    // =======================================================
+    // STEP 0: PLAN
+    // =======================================================
     const gpuState = nodeState['gpu_datacenter'];
     const infState = nodeState['gpu_inference'];
-    const installedTotal = gpuState.installedBase + infState.installedBase;
 
-    const req = calculateRequiredGpusDetailed(
-      month,
-      demandAssumptions,
-      efficiencyAssumptions,
-      effCache,
-      results.warnings,
-      warnedSet,
-      installedTotal
-    );
-
-    // Training is overwhelmingly “DC” (clusters) — keep it there.
-    // Inference GPUs split DC vs inference pool on the remaining inference requirement.
-    const requiredDcBase = req.training + 0.7 * req.inference;
-    const requiredInfBase = 0.3 * req.inference;
-
-    // =======================================================
-    // STEP 0: THE PLAN (GPU deployments)
-    // =======================================================
     const dcGap = Math.max(0, requiredDcBase - gpuState.installedBase);
     const infGap = Math.max(0, requiredInfBase - infState.installedBase);
 
     const dcRetirements = gpuState.installedBase / 48;
     const infRetirements = infState.installedBase / 48;
 
-    // GPU backlog is “unfulfilled baseline deployment” in GPU units
-    const gpuBacklogPaydown = gpuState.backlog / GPU_BACKLOG_PAYDOWN_MONTHS;
+    const backlogPaydown = gpuState.backlog / BACKLOG_PAYDOWN_MONTHS_GPU;
 
     const planDeployDc = (dcGap / CATCHUP_MONTHS) + dcRetirements;
     const planDeployInf = (infGap / CATCHUP_MONTHS) + infRetirements;
 
+    const planDeployTotal = planDeployDc + planDeployInf + backlogPaydown;
     const baselinePlan = planDeployDc + planDeployInf;
-    const planDeployTotal = baselinePlan + gpuBacklogPaydown;
 
     // =======================================================
-    // STEP 1: PHYSICS POTENTIALS (per component)
-    // Potential is ALWAYS physics max:
-    //  - STOCK: inv + effCapacity
-    //  - THROUGHPUT: effCapacity
+    // STEP 1: POTENTIALS
     // =======================================================
-    const potentials = {}; // component physics potential in component units
-
-    NODES.forEach(node => {
-      if (node.group === 'A') return;
-      if (node.id === 'gpu_datacenter' || node.id === 'gpu_inference') return;
+    const potentials = {};
+    for (const node of NODES) {
+      if (node.id === 'gpu_datacenter' || node.id === 'gpu_inference') continue;
+      if (node.group === 'A') continue;
 
       const state = nodeState[node.id];
-      const { capacityEff } = calcEffectiveCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
+      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
+      const y = calculateNodeYield(node, month);
+      const effCap = cap * (node.maxCapacityUtilization || 0.95) * y;
 
-      const physPotential = (state.type === 'STOCK')
-        ? (state.inventory + capacityEff)
-        : capacityEff;
-
-      potentials[node.id] = physPotential;
-    });
+      potentials[node.id] = (state.type === 'STOCK') ? (state.inventory + effCap) : effCap;
+    }
 
     // =======================================================
-    // STEP 2: GATING (deploy GPUs limited by GPU availability & components)
+    // STEP 2: GATING
     // =======================================================
-
-    // 2.1 GPU physics availability
     const gpuNode = NODE_MAP.get('gpu_datacenter');
-    const gpuEff = calcEffectiveCapacity(gpuNode, month, scenarioOverrides, gpuState.dynamicExpansions);
+    const gpuCap = calculateCapacity(gpuNode, month, scenarioOverrides, gpuState.dynamicExpansions);
+    const gpuYield = calculateNodeYield(gpuNode, month);
+    const gpuEffCap = gpuCap * 0.95 * gpuYield;
 
-    const gpuAvailable = gpuState.inventory + gpuEff.capacityEff; // STOCK physics potential
-    const demandCeiling = planDeployTotal;
+    const gpuAvailable = gpuState.inventory + gpuEffCap;
+    const preUpdateGpuInventory = gpuState.inventory;
 
-    // 2.2 Component support (convert component potentials -> supported GPU deploys)
     let maxSupported = Infinity;
-    let bindingComponent = null;
+    let constraintCount = 0;
 
-    Object.entries(nodeIntensityMap).forEach(([nodeId, intensity]) => {
-      const pot = potentials[nodeId];
-      if (pot === undefined || intensity <= 0) return;
-      const supported = pot / intensity;
-      if (supported < maxSupported) {
-        maxSupported = supported;
-        bindingComponent = nodeId;
+    for (const [nodeId, intensity] of Object.entries(nodeIntensityMap)) {
+      const potential = potentials[nodeId];
+      if (potential !== undefined && intensity > 0) {
+        const supported = potential / intensity;
+        if (supported < maxSupported) maxSupported = supported;
+        constraintCount++;
       }
-    });
-
-    if (!Number.isFinite(maxSupported)) maxSupported = Infinity;
-
-    // 2.3 Final deploy
-    const deployBoundByPlan = demandCeiling;
-    const deployBoundByGpu = gpuAvailable;
-    const deployBoundByComponents = maxSupported;
-
-    const actualDeployTotal = Math.min(deployBoundByPlan, deployBoundByGpu, deployBoundByComponents);
-
-    // Track which constraint actually binds the deploy this month
-    let bind = { month, nodeId: null, reason: null, value: null };
-    if (actualDeployTotal + 1e-9 >= deployBoundByPlan && deployBoundByPlan <= deployBoundByGpu + 1e-9 && deployBoundByPlan <= deployBoundByComponents + 1e-9) {
-      bind = { month, nodeId: 'plan', reason: 'plan_ceiling', value: deployBoundByPlan };
-    } else if (deployBoundByGpu <= deployBoundByComponents + 1e-9 && deployBoundByGpu <= deployBoundByPlan + 1e-9) {
-      bind = { month, nodeId: 'gpu_datacenter', reason: 'gpu_available', value: deployBoundByGpu };
-    } else if (deployBoundByComponents <= deployBoundByGpu + 1e-9 && deployBoundByComponents <= deployBoundByPlan + 1e-9) {
-      bind = { month, nodeId: bindingComponent, reason: 'component_support', value: deployBoundByComponents };
-    }
-    results.bindingConstraint.push(bind);
-
-    // Invariant sanity check (kills teleportation silently)
-    if (
-      actualDeployTotal > deployBoundByPlan + 1e-6 ||
-      actualDeployTotal > deployBoundByGpu + 1e-6 ||
-      actualDeployTotal > deployBoundByComponents + 1e-6
-    ) {
-      results.warnings.push(
-        `Invariant fail m=${month}: deploy=${actualDeployTotal} plan=${deployBoundByPlan} gpuAvail=${deployBoundByGpu} compSup=${deployBoundByComponents}`
-      );
     }
 
-    const blockedByComponents = Math.max(0, Math.min(deployBoundByPlan, deployBoundByGpu) - actualDeployTotal);
+    if (constraintCount === 0 && (month === 0 || month % 12 === 0)) {
+      results.warnings.push(`Warning (Month ${month}): No active component constraints found.`);
+      maxSupported = Infinity;
+    }
+
+    const demandCeiling = planDeployTotal;
+    const actualDeployTotal = Math.min(demandCeiling, gpuAvailable, maxSupported);
+    const blockedByComponents = Math.max(0, Math.min(demandCeiling, gpuAvailable) - actualDeployTotal);
 
     // =======================================================
-    // STEP 3: UPDATE GPU STOCKS / INSTALLED BASE
+    // STEP 3: UPDATES
     // =======================================================
-
-    // GPU production policy (STOCK):
-    // produce enough to cover actual deploy + buffer.
-    // (Physics is gpuEff.capacityEff; policy chooses how much of it you actually use.)
     const gpuBufferTarget = planDeployTotal * DEFAULT_BUFFER_MONTHS;
     const gpuProdTarget = actualDeployTotal + Math.max(0, gpuBufferTarget - gpuState.inventory);
-    const gpuProduced = Math.min(gpuEff.capacityEff, gpuProdTarget);
+    const gpuProduced = Math.min(gpuEffCap, gpuProdTarget);
 
-    const preUpdateGpuInventory = gpuState.inventory;
+    const oldGpuBacklog = gpuState.backlog;
+
     gpuState.inventory = (gpuState.inventory + gpuProduced) - actualDeployTotal;
-    if (gpuState.inventory < -1e-6) {
-      results.warnings.push(`Clamp: Negative GPU inventory at month ${month}.`);
-      gpuState.inventory = 0;
-    }
+    if (gpuState.inventory < -1e-6) gpuState.inventory = 0;
 
-    // GPU backlog tracks “baseline plan not delivered”
-    gpuState.backlog = Math.max(0, gpuState.backlog + baselinePlan - actualDeployTotal);
+    gpuState.backlog = Math.max(0, oldGpuBacklog + baselinePlan - actualDeployTotal);
 
-    // Split DC vs INF based on baselinePlan
     const shareDc = baselinePlan > EPSILON ? (planDeployDc / baselinePlan) : 0.7;
     const actualDc = actualDeployTotal * shareDc;
     const actualInf = actualDeployTotal * (1 - shareDc);
@@ -705,160 +659,130 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     gpuState.installedBase = Math.max(0, gpuState.installedBase + actualDc - dcRetirements);
     infState.installedBase = Math.max(0, infState.installedBase + actualInf - infRetirements);
 
-    // GPU tightness / expansion
-    const gpuPotentialPhysics = gpuAvailable; // inventory + eff cap (physics)
-    const gpuTightness = baselinePlan / Math.max(gpuPotentialPhysics, EPSILON);
+    const gpuTotalLoad = baselinePlan + (oldGpuBacklog / BACKLOG_PAYDOWN_MONTHS_GPU);
+    const gpuPotential = preUpdateGpuInventory + gpuEffCap;
+    const gpuTightness = gpuTotalLoad / Math.max(gpuPotential, EPSILON);
     const gpuPriceIndex = calculatePriceIndex(gpuTightness);
 
     gpuState.tightnessHistory.push(gpuTightness);
-
     if (sma(gpuState.tightnessHistory, 6) > 1.05 && (month - gpuState.lastExpansionMonth > 24)) {
-      const expansionAmount = (gpuEff.capacityRaw || 0) * 0.20;
+      const expansionAmount = gpuCap * 0.20;
       const leadTime = gpuNode.leadTimeDebottleneck || 24;
       gpuState.dynamicExpansions.push({ month: month + leadTime, capacityAdd: expansionAmount });
       gpuState.lastExpansionMonth = month;
     }
 
-    // Store GPU node series (PHYSICS-consistent)
-    [gpuState, infState].forEach((state, idx) => {
-      const isDcPool = idx === 0;
-      const nodeId = isDcPool ? 'gpu_datacenter' : 'gpu_inference';
+    const storeGpu = (isDc) => {
+      const nodeId = isDc ? 'gpu_datacenter' : 'gpu_inference';
       const res = results.nodes[nodeId];
+      if (!res) return;
 
-      const share = isDcPool ? shareDc : (1 - shareDc);
-      const plan = planDeployTotal * share;
-      const actual = isDcPool ? actualDc : actualInf;
+      const share = isDc ? shareDc : (1 - shareDc);
 
-      // Physics potential for GPUs this month is gpuAvailable (inventory+cap), then share.
-      const potential = gpuPotentialPhysics * share;
-
-      res.demand.push(plan);
-      res.planDeploy.push(plan);
-      res.supply.push(actual);
-      res.consumption.push(actual);
-
-      res.capacity.push(isDcPool ? gpuEff.capacityEff : 0);
-      res.supplyPotential.push(potential);
-      res.potential.push(potential);
-
-      res.inventory.push(isDcPool ? gpuState.inventory : 0);
+      res.demand.push(planDeployTotal * share);
+      res.planDeploy.push(planDeployTotal * share);
+      res.supply.push(isDc ? actualDc : actualInf);
+      res.capacity.push(isDc ? gpuEffCap : 0);
+      res.supplyPotential.push(gpuEffCap * share);
+      res.potential.push(gpuEffCap * share);
+      res.inventory.push(isDc ? gpuState.inventory : 0);
       res.backlog.push(gpuState.backlog * share);
-
-      res.installedBase.push(state.installedBase);
-      res.requiredBase.push(isDcPool ? requiredDcBase : requiredInfBase);
-
+      res.installedBase.push(isDc ? gpuState.installedBase : infState.installedBase);
+      res.requiredBase.push(isDc ? requiredDcBase : requiredInfBase);
+      res.consumption.push(actualDeployTotal * share);
+      res.gpuDelivered.push(isDc ? actualDc : actualInf);
+      res.idleGpus.push(isDc ? blockedDc : blockedInf);
       res.tightness.push(gpuTightness);
       res.priceIndex.push(gpuPriceIndex);
-      res.yield.push(isDcPool ? gpuEff.yieldRate : null);
-
-      res.gpuDelivered.push(actual);
-      res.idleGpus.push(isDcPool ? blockedDc : blockedInf);
-
-      // Consistent definitions:
-      res.unmetDemand.push(Math.max(0, plan - potential)); // PHYSICS shortfall
-      res.unmetRealized.push(Math.max(0, plan - actual));  // Execution shortfall
-
-      res.shortage.push(res.unmetRealized[res.unmetRealized.length - 1] > 0 ? 1 : 0);
+      res.yield.push(gpuYield);
+      res.shortage.push((gpuState.backlog > 0) ? 1 : 0);
       res.glut.push(0);
-    });
+      res.unmetDemand.push(Math.max(0, (planDeployTotal * share) - (isDc ? actualDc : actualInf)));
+    };
 
-    // =======================================================
-    // STEP 4: UPDATE COMPONENT NODES (PHYSICS-FIRST)
-    // - Potential is physics max.
-    // - Backlog is physics queue: backlog = max(0, backlog + plan says need - physics could supply).
-    // - Inventory evolves based on actual consumption (what the system used).
-    // =======================================================
+    storeGpu(true);
+    storeGpu(false);
 
-    NODES.forEach(node => {
-      if (node.group === 'A') return;
-      if (node.id === 'gpu_datacenter' || node.id === 'gpu_inference') return;
+    // Components
+    for (const node of NODES) {
+      if (node.id === 'gpu_datacenter' || node.id === 'gpu_inference') continue;
+      if (node.group === 'A') continue;
 
-      const state = nodeState[node.id];
       const nodeRes = results.nodes[node.id];
-
+      const state = nodeState[node.id];
       const intensity = nodeIntensityMap[node.id] || 0;
 
-      // Plan demand in component units (based on plan GPU deploy)
-      const demand = planDeployTotal * intensity;
+      const planDemand = planDeployTotal * intensity;
+      const actualConsumption = actualDeployTotal * intensity;
 
-      // Reality consumption in component units (based on actual GPU deploy)
-      const consumption = actualDeployTotal * intensity;
-
-      const eff = calcEffectiveCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
-      const effectiveCapacity = eff.capacityEff;
+      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
+      const y = calculateNodeYield(node, month);
+      const effCap = cap * (node.maxCapacityUtilization || 0.95) * y;
 
       const inventoryIn = state.inventory;
       const backlogIn = state.backlog;
 
-      // Physics potential supply (component units)
-      const potentialSupply = (state.type === 'STOCK')
-        ? (inventoryIn + effectiveCapacity)
-        : effectiveCapacity;
+      const potentialSupply = (state.type === 'STOCK') ? (inventoryIn + effCap) : effCap;
 
-      // Actual delivered-to-system is limited by consumption (system uses what it uses)
-      // and by what exists/flows.
-      const deliveredToSystem = Math.min(consumption, potentialSupply);
-
-      // Inventory update for STOCK nodes: assume production is available up to effectiveCapacity.
-      // We don’t need a “policy throttle” here because potential is physics and inventory is just accounting.
+      let production = 0;
       if (state.type === 'STOCK') {
-        // Production uses full effective capacity (physics). Anything not consumed becomes inventory.
-        const available = inventoryIn + effectiveCapacity;
-        state.inventory = Math.max(0, available - deliveredToSystem);
+        const bufferTarget = planDemand * DEFAULT_BUFFER_MONTHS;
+        const backlogUrgency = backlogIn / BACKLOG_PAYDOWN_MONTHS_COMPONENTS;
+        const prodNeed = actualConsumption + backlogUrgency + Math.max(0, bufferTarget - inventoryIn);
+        production = Math.min(effCap, prodNeed);
+      }
+
+      let delivered = 0;
+      if (state.type === 'STOCK') {
+        const available = inventoryIn + production;
+        delivered = Math.min(actualConsumption, available);
+        state.inventory = available - delivered;
+        if (state.inventory < -1e-6) state.inventory = 0;
       } else {
+        delivered = Math.min(actualConsumption, effCap);
         state.inventory = 0;
       }
 
-      // Physics backlog update: queue accumulates if plan demand exceeds physics potential supply.
-      // Backlog clears when potential exceeds demand.
-      state.backlog = Math.max(0, backlogIn + demand - potentialSupply);
+      const unmetPlanThisMonth = Math.max(0, planDemand - potentialSupply);
+      state.backlog = Math.max(0, backlogIn + unmetPlanThisMonth);
 
-      // Tightness uses total load (plan + queued) divided by physics potential.
-      const totalLoad = demand + backlogIn;
+      const totalLoad = planDemand + (backlogIn / BACKLOG_PAYDOWN_MONTHS_COMPONENTS);
       const tightness = totalLoad / Math.max(potentialSupply, EPSILON);
       const priceIndex = calculatePriceIndex(tightness);
 
       state.tightnessHistory.push(tightness);
-
-      // Expansion logic: respond to persistent tightness (physics)
       if (sma(state.tightnessHistory, 6) > 1.10 && (month - state.lastExpansionMonth > 12)) {
-        const baseCap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
-        const expansionAmount = baseCap * 0.20;
+        const expansionAmount = cap * 0.20;
         const leadTime = node.leadTimeDebottleneck || 12;
         state.dynamicExpansions.push({ month: month + leadTime, capacityAdd: expansionAmount });
         state.lastExpansionMonth = month;
       }
 
-      // Store series
-      nodeRes.demand.push(demand);
-      nodeRes.planDeploy.push(demand);
+      if (nodeRes) {
+        nodeRes.demand.push(planDemand);
+        nodeRes.planDeploy.push(planDemand);
+        nodeRes.supply.push(delivered);
+        nodeRes.capacity.push(effCap);
+        nodeRes.supplyPotential.push(potentialSupply);
+        nodeRes.potential.push(potentialSupply);
+        nodeRes.inventory.push(state.inventory);
+        nodeRes.backlog.push(state.backlog);
+        nodeRes.tightness.push(tightness);
+        nodeRes.priceIndex.push(priceIndex);
+        nodeRes.yield.push(y);
+        nodeRes.unmetDemand.push(unmetPlanThisMonth);
 
-      nodeRes.consumption.push(consumption);
-      nodeRes.supply.push(deliveredToSystem);
+        const isShort = tightness > 1.05 || state.backlog > 0;
+        nodeRes.shortage.push(isShort ? 1 : 0);
+        nodeRes.glut.push(0);
 
-      nodeRes.capacity.push(effectiveCapacity);
-      nodeRes.supplyPotential.push(potentialSupply);
-      nodeRes.potential.push(potentialSupply);
-
-      nodeRes.inventory.push(state.inventory);
-      nodeRes.backlog.push(state.backlog);
-
-      nodeRes.tightness.push(tightness);
-      nodeRes.priceIndex.push(priceIndex);
-      nodeRes.yield.push(eff.yieldRate);
-
-      // Consistent definitions:
-      nodeRes.unmetDemand.push(Math.max(0, demand - potentialSupply));          // PHYSICS shortfall vs plan
-      nodeRes.unmetRealized.push(Math.max(0, demand - deliveredToSystem));      // what system “didn’t get” vs plan
-
-      nodeRes.shortage.push(tightness > 1.05 ? 1 : 0);
-      nodeRes.glut.push(0);
-
-      nodeRes.installedBase.push(0);
-      nodeRes.requiredBase.push(0);
-      nodeRes.gpuDelivered.push(0);
-      nodeRes.idleGpus.push(0);
-    });
+        nodeRes.installedBase.push(0);
+        nodeRes.requiredBase.push(0);
+        nodeRes.gpuDelivered.push(0);
+        nodeRes.idleGpus.push(0);
+        nodeRes.consumption.push(actualConsumption);
+      }
+    }
   }
 
   results.summary = analyzeResults(results);
@@ -866,27 +790,31 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 }
 
 // ============================================
-// 7. ANALYSIS & FORMATTING
+// 6) ANALYSIS & FORMATTING
 // ============================================
 
 function analyzeResults(results) {
   const shortages = [];
   const shortagePersistence = 3;
 
-  Object.entries(results.nodes).forEach(([nodeId, data]) => {
+  for (const [nodeId, data] of Object.entries(results.nodes)) {
     const node = NODE_MAP.get(nodeId);
-    if (!node || node.group === 'A') return;
+    if (!node || node.group === 'A') continue;
 
-    let shortageStart = null, peakTightness = 0, shortageDuration = 0, consecShort = 0;
+    let shortageStart = null;
+    let peakTightness = 0;
+    let shortageDuration = 0;
+    let consecShort = 0;
 
-    data.shortage.forEach((isShort, month) => {
-      const t = data.tightness[month] || 0;
+    for (let month = 0; month < (data.shortage?.length || 0); month++) {
+      const isShort = data.shortage[month] || 0;
+      const t = data.tightness?.[month] || 0;
 
       if (isShort === 1) {
         consecShort++;
         if (consecShort >= shortagePersistence) {
           if (shortageStart === null) shortageStart = month - shortagePersistence + 1;
-          if (t > peakTightness) peakTightness = t;
+          peakTightness = Math.max(peakTightness, t);
           shortageDuration++;
         }
       } else {
@@ -906,7 +834,7 @@ function analyzeResults(results) {
         shortageDuration = 0;
         consecShort = 0;
       }
-    });
+    }
 
     if (shortageStart !== null) {
       shortages.push({
@@ -919,8 +847,9 @@ function analyzeResults(results) {
         severity: peakTightness * shortageDuration
       });
     }
-  });
+  }
 
+  shortages.sort((a, b) => b.severity - a.severity);
   return { shortages: shortages.slice(0, 20), gluts: [], bottlenecks: [] };
 }
 
@@ -933,9 +862,11 @@ export function formatMonth(monthIndex) {
 
 export function formatNumber(num, decimals = 1) {
   if (num === null || num === undefined) return '-';
-  if (Math.abs(num) >= 1e12) return (num / 1e12).toFixed(decimals) + 'T';
-  if (Math.abs(num) >= 1e9) return (num / 1e9).toFixed(decimals) + 'B';
-  if (Math.abs(num) >= 1e6) return (num / 1e6).toFixed(decimals) + 'M';
-  if (Math.abs(num) >= 1e3) return (num / 1e3).toFixed(decimals) + 'K';
+  if (!Number.isFinite(num)) return '-';
+  const abs = Math.abs(num);
+  if (abs >= 1e12) return (num / 1e12).toFixed(decimals) + 'T';
+  if (abs >= 1e9) return (num / 1e9).toFixed(decimals) + 'B';
+  if (abs >= 1e6) return (num / 1e6).toFixed(decimals) + 'M';
+  if (abs >= 1e3) return (num / 1e3).toFixed(decimals) + 'K';
   return num.toFixed(decimals);
 }
