@@ -664,14 +664,14 @@ export const TRANSLATION_INTENSITIES = {
       source: 'Die size analysis, wafer-equivalent normalization'
     },
     hybridBondingPerGpu: {
-      value: 1.0,  // Wafer-equiv per GPU if fully adopted
+      value: 0.35,  // Wafer-equiv per GPU if fully adopted (SoIC-style subset)
       confidence: 'low',
       source: 'Hybrid bonding roadmap estimates'
     },
     hybridBondingAdoption: {
-      initial: 0.05,  // 5% of GPUs using hybrid bonding in early ramp
-      target: 0.6,    // 60% adoption at maturity
-      halflifeMonths: 30,
+      initial: 0.02,  // 2% of GPUs using hybrid bonding in early ramp
+      target: 0.25,    // 25% adoption at maturity
+      halflifeMonths: 36,
       confidence: 'low',
       source: 'Advanced packaging adoption curves'
     },
