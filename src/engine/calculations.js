@@ -210,14 +210,11 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
 }
 
 function calculateRequiredGpus(month, demandAssumptions, efficiencyAssumptions, effCache, warnings, warnedSet, installedBaseTotal) {
-    const blockKey = getBlockKeyForMonth(month);
-    const block = demandAssumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
+    const block = getDemandBlockForMonth(month, demandAssumptions);
     
     // 1. Demand Inputs
-    const baseInf = resolveAssumptionValue(block?.workloadBase?.inferenceTokensPerMonth?.total, 100e9); 
-    const growthRate = resolveAssumptionValue(block?.inferenceGrowth?.consumer?.value, 0.50); 
-    const growthInf = Math.pow(1 + growthRate, month / 12);
-    const totalTokens = baseInf * growthInf;
+    const inferenceDemand = calculateInferenceDemand(month, block);
+    const totalTokens = inferenceDemand.total;
     
     // 2. Physics
     const flopsPerToken = PHYSICS_DEFAULTS.flopsPerToken;
@@ -372,6 +369,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const nodeState = {};
   NODES.forEach(node => {
     const type = getNodeType(node.id);
+    const isGpuNode = node.id === 'gpu_datacenter' || node.id === 'gpu_inference';
     nodeState[node.id] = {
       type: type,
       inventory: (type === 'STOCK') ? (node.startingInventory || 0) : 0,
@@ -396,11 +394,46 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     results.months.push(month);
 
     // 1. LIVE DEMAND DRIVERS (Dynamic Calibration)
+    const demandBlock = getDemandBlockForMonth(month, demandAssumptions);
+    const inferenceDemand = calculateInferenceDemand(month, demandBlock);
+    const trainingDemand = calculateTrainingDemand(month, demandBlock);
     const currentInstalledBase = nodeState['gpu_datacenter'].installedBase + nodeState['gpu_inference'].installedBase;
     const requiredGpuBase = calculateRequiredGpus(month, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedNodes, currentInstalledBase);
     
     const requiredDcBase = requiredGpuBase * 0.7; 
     const requiredInfBase = requiredGpuBase * 0.3; 
+
+    const pushWorkloadMetrics = (nodeId, demandValue) => {
+      const nodeRes = results.nodes[nodeId];
+      if (!nodeRes) return;
+      nodeRes.demand.push(demandValue);
+      nodeRes.supply.push(null);
+      nodeRes.capacity.push(null);
+      nodeRes.inventory.push(null);
+      nodeRes.backlog.push(null);
+      nodeRes.shortage.push(null);
+      nodeRes.glut.push(null);
+      nodeRes.tightness.push(null);
+      nodeRes.priceIndex.push(null);
+      nodeRes.installedBase.push(null);
+      nodeRes.requiredBase.push(null);
+      nodeRes.planDeploy.push(null);
+      nodeRes.consumption.push(null);
+      nodeRes.supplyPotential.push(null);
+      nodeRes.gpuDelivered.push(null);
+      nodeRes.idleGpus.push(null);
+      nodeRes.yield.push(null);
+      if (nodeRes.gpuPurchases) {
+        nodeRes.gpuPurchases.push(null);
+      }
+      nodeRes.unmetDemand.push(null);
+    };
+
+    pushWorkloadMetrics('training_frontier', trainingDemand.frontier);
+    pushWorkloadMetrics('training_midtier', trainingDemand.midtier);
+    pushWorkloadMetrics('inference_consumer', inferenceDemand.consumer);
+    pushWorkloadMetrics('inference_enterprise', inferenceDemand.enterprise);
+    pushWorkloadMetrics('inference_agentic', inferenceDemand.agentic);
 
     // =======================================================
     // STEP 0: THE PLAN
