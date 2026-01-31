@@ -2,290 +2,300 @@
  * AI Infrastructure Supply Chain - Node Library
  *
  * This file defines the complete node graph representing the AI infrastructure
- * supply chain. Each node has demand translation factors, supply dynamics,
- * elasticity regimes, and market mechanics.
+ * supply chain. Each node has demand translation factors, supply parameters, and
+ * optional constraints or dynamics.
  *
- * Historical base rates are documented with sources where applicable.
+ * Notes:
+ * - “unit” strings are used for UI + diagnostics; several are standardized to match
+ *   the calculation engine’s EXPECTED_UNITS warnings.
+ * - Some component intensities are intentionally handled in TRANSLATION_INTENSITIES
+ *   (assumptions.js) to avoid double-counting (e.g., CoWoS wafer-equivalent per GPU).
  */
-import nodesOverrides from './nodesOverrides.json';
 
-const pad2 = (value) => String(value).padStart(2, '0');
 const NOW = new Date();
-const CURRENT_AS_OF_MONTH = `${NOW.getUTCFullYear()}-${pad2(NOW.getUTCMonth() + 1)}`;
+const CURRENT_YEAR = NOW.getUTCFullYear();
+const CURRENT_MONTH = NOW.getUTCMonth() + 1; // 1..12
+const pad2 = (value) => String(value).padStart(2, '0');
+const CURRENT_AS_OF_MONTH = `${CURRENT_YEAR}-${pad2(CURRENT_MONTH)}`;
 
-const isPlainObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
-const deepMerge = (base, overrides) => {
-  if (!isPlainObject(overrides)) return base;
-  const merged = { ...base };
-  Object.entries(overrides).forEach(([key, value]) => {
-    if (isPlainObject(value) && isPlainObject(base?.[key])) {
-      merged[key] = deepMerge(base[key], value);
-    } else {
-      merged[key] = value;
-    }
-  });
-  return merged;
-};
-
-const applyNodeOverrides = (nodes, overrides) => {
-  const perNode = overrides?.nodes || {};
-  return nodes.map((node) => {
-    const nodeOverride = perNode[node.id];
-    if (!nodeOverride) return node;
-    return deepMerge(node, nodeOverride);
-  });
-};
-
-// Node Groups
-export const NODE_GROUPS = {
-  A: { id: 'A', name: 'AI Workloads', color: '#6366f1' },
-  B: { id: 'B', name: 'Compute Hardware', color: '#8b5cf6' },
-  C: { id: 'C', name: 'Memory & Storage', color: '#d946ef' },
-  D: { id: 'D', name: 'Advanced Packaging', color: '#ec4899' },
-  E: { id: 'E', name: 'Foundry & Equipment', color: '#f43f5e' },
-  F: { id: 'F', name: 'Networking & Optics', color: '#f97316' },
-  G: { id: 'G', name: 'Server Manufacturing', color: '#eab308' },
-  H: { id: 'H', name: 'Data Center & Facilities', color: '#22c55e' },
-  I: { id: 'I', name: 'Power Chain', color: '#14b8a6' },
-  J: { id: 'J', name: 'Ops & Human Capital', color: '#0ea5e9' }
-};
-
-/**
- * Complete Node Library
- *
- * Each node contains:
- * - Identity: id, name, group, unit
- * - Demand translation: driver type, intensity, parent nodes
- * - Supply dynamics: capacity, expansions, lead times, ramp profiles
- * - Elasticity: short/mid/long term elasticities, substitutability
- * - Market mechanics: contracting, inventory targets, utilization caps
- * - Yield model: simple or stacked (for HBM)
- * - Scenario hooks: geo risk, export controls
- */
-const BASE_NODES = [
+export const NODES = [
   // ========================================
-  // GROUP A: AI WORKLOADS
+  // GROUP A: DEMAND DRIVERS (Workloads)
   // ========================================
   {
     id: 'training_frontier',
     name: 'Frontier Training Runs',
     group: 'A',
-    unit: 'runs/month',
-    description: 'Large-scale frontier model training (GPT-5 class)',
+    unit: 'accel-hours/month',
+    description: 'Compute demand for SOTA training',
 
-    // Demand translation
     demandDriverType: 'direct',
-    inputIntensity: 1,
     parentNodeIds: [],
-
-    // Supply dynamics (workload nodes represent demand, not supply)
-    startingCapacity: null,
+    startingCapacity: 0,
     committedExpansions: [],
-    leadTimeMonths: 0,
-    rampProfile: 'step',
 
-    // Base rate: ~10-15 frontier runs/year globally (2024)
-    // Source: Epoch AI, public announcements from OpenAI/Anthropic/Google/Meta
+    elasticityShort: 0.0,
+    elasticityMid: 0.0,
+    elasticityLong: 0.0,
+
+    substitutabilityScore: 0.0,
+    supplierConcentration: 0,
+
+    contractingRegime: 'N/A',
+    inventoryBufferTarget: 0,
+    maxCapacityUtilization: 1.0,
+
+    yieldModel: 'simple',
+    yieldSimpleLoss: 0.0,
+
+    geoRiskFlag: false,
+    exportControlSensitivity: 'low',
+
     baseRate: {
-      value: 1.2,  // runs/month
-      confidence: 'medium',
-      source: 'Epoch AI frontier model tracker',
-      historicalRange: [0.5, 2.0]
+      value: 0,
+      confidence: 'high',
+      source: 'Derived in calculation engine from demand assumptions',
+      historicalRange: [0, 0]
     }
   },
   {
     id: 'training_midtier',
     name: 'Mid-tier Training Runs',
     group: 'A',
-    unit: 'runs/month',
-    description: 'Smaller model training, fine-tuning, research runs',
+    unit: 'accel-hours/month',
+    description: 'Compute demand for mid-tier model training',
 
     demandDriverType: 'direct',
-    inputIntensity: 1,
     parentNodeIds: [],
-
-    startingCapacity: null,
+    startingCapacity: 0,
     committedExpansions: [],
-    leadTimeMonths: 0,
-    rampProfile: 'step',
 
-    // Base rate: ~100-200 significant training runs/month across industry
+    elasticityShort: 0.0,
+    elasticityMid: 0.0,
+    elasticityLong: 0.0,
+
+    substitutabilityScore: 0.0,
+    supplierConcentration: 0,
+
+    contractingRegime: 'N/A',
+    inventoryBufferTarget: 0,
+    maxCapacityUtilization: 1.0,
+
+    yieldModel: 'simple',
+    yieldSimpleLoss: 0.0,
+
+    geoRiskFlag: false,
+    exportControlSensitivity: 'low',
+
     baseRate: {
-      value: 150,
-      confidence: 'low',
-      source: 'Industry estimates, cloud provider data',
-      historicalRange: [50, 300]
+      value: 0,
+      confidence: 'high',
+      source: 'Derived in calculation engine from demand assumptions',
+      historicalRange: [0, 0]
     }
   },
   {
     id: 'inference_consumer',
-    name: 'Consumer Inference',
+    name: 'Consumer Inference Tokens',
     group: 'A',
     unit: 'tokens/month',
-    description: 'ChatGPT, Claude, Gemini consumer usage',
+    description: 'Consumer-facing inference demand',
 
     demandDriverType: 'direct',
-    inputIntensity: 1,
     parentNodeIds: [],
-
-    startingCapacity: null,
+    startingCapacity: 0,
     committedExpansions: [],
-    leadTimeMonths: 0,
-    rampProfile: 'step',
 
-    // Base rate: ~5T tokens/month consumer inference (Jan 2026)
-    // Consumer AI (ChatGPT, Claude, Gemini) hitting billions of daily tokens
-    // Source: SimilarWeb traffic estimates, OpenAI usage reports. As of 2026-01.
+    elasticityShort: 0.0,
+    elasticityMid: 0.0,
+    elasticityLong: 0.0,
+
+    substitutabilityScore: 0.0,
+    supplierConcentration: 0,
+
+    contractingRegime: 'N/A',
+    inventoryBufferTarget: 0,
+    maxCapacityUtilization: 1.0,
+
+    yieldModel: 'simple',
+    yieldSimpleLoss: 0.0,
+
+    geoRiskFlag: false,
+    exportControlSensitivity: 'low',
+
     baseRate: {
-      value: 5e12,  // 5T tokens/month
-      confidence: 'medium',
-      source: 'SimilarWeb, company disclosures. As of 2026-01.',
-      historicalRange: [2e12, 8e12]
+      value: 0,
+      confidence: 'high',
+      source: 'Derived in calculation engine from demand assumptions',
+      historicalRange: [0, 0]
     }
   },
   {
     id: 'inference_enterprise',
-    name: 'Enterprise Inference',
+    name: 'Enterprise Inference Tokens',
     group: 'A',
     unit: 'tokens/month',
-    description: 'Enterprise API usage, internal deployments',
+    description: 'Enterprise inference demand',
 
     demandDriverType: 'direct',
-    inputIntensity: 1,
     parentNodeIds: [],
-
-    startingCapacity: null,
+    startingCapacity: 0,
     committedExpansions: [],
-    leadTimeMonths: 0,
-    rampProfile: 'step',
 
-    // Base rate: 6T tokens/month enterprise inference (Jan 2026)
-    // Enterprise AI spend hit $37B in 2025 (3.2x YoY), token usage exploding
+    elasticityShort: 0.0,
+    elasticityMid: 0.0,
+    elasticityLong: 0.0,
+
+    substitutabilityScore: 0.0,
+    supplierConcentration: 0,
+
+    contractingRegime: 'N/A',
+    inventoryBufferTarget: 0,
+    maxCapacityUtilization: 1.0,
+
+    yieldModel: 'simple',
+    yieldSimpleLoss: 0.0,
+
+    geoRiskFlag: false,
+    exportControlSensitivity: 'low',
+
     baseRate: {
-      value: 6e12,  // 6T tokens/month
-      confidence: 'medium',
-      source: 'Cloud provider earnings, $37B enterprise AI spend. As of 2026-01.',
-      historicalRange: [2e12, 10e12]
+      value: 0,
+      confidence: 'high',
+      source: 'Derived in calculation engine from demand assumptions',
+      historicalRange: [0, 0]
     }
   },
   {
     id: 'inference_agentic',
-    name: 'Agentic Inference',
+    name: 'Agentic Inference Tokens',
     group: 'A',
     unit: 'tokens/month',
-    description: 'Autonomous agents, multi-step reasoning, tool use',
+    description: 'Agentic / tool-using inference demand',
 
     demandDriverType: 'direct',
-    inputIntensity: 1,
     parentNodeIds: [],
-
-    startingCapacity: null,
+    startingCapacity: 0,
     committedExpansions: [],
-    leadTimeMonths: 0,
-    rampProfile: 'step',
 
-    // Base rate: 1T tokens/month agentic inference (Jan 2026)
-    // Agentic AI projected in 40% enterprise apps by 2026; 10-100x tokens per task
+    elasticityShort: 0.0,
+    elasticityMid: 0.0,
+    elasticityLong: 0.0,
+
+    substitutabilityScore: 0.0,
+    supplierConcentration: 0,
+
+    contractingRegime: 'N/A',
+    inventoryBufferTarget: 0,
+    maxCapacityUtilization: 1.0,
+
+    yieldModel: 'simple',
+    yieldSimpleLoss: 0.0,
+
+    geoRiskFlag: false,
+    exportControlSensitivity: 'low',
+
     baseRate: {
-      value: 1e12,  // 1T tokens/month
-      confidence: 'low',
-      source: 'Agentic AI in 40% enterprise apps. As of 2026-01.',
-      historicalRange: [0.3e12, 3e12]
+      value: 0,
+      confidence: 'high',
+      source: 'Derived in calculation engine from demand assumptions',
+      historicalRange: [0, 0]
     }
   },
 
   // ========================================
-  // GROUP B: COMPUTE HARDWARE
+  // GROUP B: ACCELERATORS & CORE COMPUTE
   // ========================================
   {
     id: 'gpu_datacenter',
-    name: 'Datacenter GPUs',
+    name: 'Data Center GPUs (Installed Base)',
     group: 'B',
-    unit: 'units/month',
-    description: 'H100, H200, B100, B200 class accelerators',
+    unit: 'gpus',
+    description: 'AI accelerators for training and inference in data centers',
 
     demandDriverType: 'derived',
-    inputIntensity: 1,
+    inputIntensity: 1.0,
     parentNodeIds: ['training_frontier', 'training_midtier', 'inference_consumer', 'inference_enterprise', 'inference_agentic'],
 
-    // Base rate: ~5.4M datacenter GPUs shipped 2025 (NVIDIA + competitors)
-    // NVIDIA data center revenue $57B Q3 FY26 (22% QoQ), ~6-8M AI GPUs/year
-    // Source: NVIDIA earnings, analyst estimates. As of 2026-01-01.
-    startingCapacity: 450000,  // units/month (~5.4M/yr)
+    startingCapacity: 450000,
+    startingInventory: 25000,
+    startingBacklog: 0,
     committedExpansions: [
       { date: '2025-06', capacityAdd: 50000, type: 'committed' },
-      { date: '2026-01', capacityAdd: 120000, type: 'committed' },
-      { date: '2026-07', capacityAdd: 150000, type: 'optional' }
+      { date: '2026-01', capacityAdd: 80000, type: 'committed' }
     ],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 18,
     rampProfile: 's-curve',
 
-    elasticityShort: 0.1,   // Very inelastic short-term
-    elasticityMid: 0.4,     // Moderate mid-term
-    elasticityLong: 0.8,    // More elastic long-term
+    elasticityShort: 0.05,
+    elasticityMid: 0.25,
+    elasticityLong: 0.7,
 
-    substitutabilityScore: 0.2,  // Some substitution to inference chips
-    supplierConcentration: 5,    // NVIDIA dominant (HHI proxy: 5 = very concentrated)
+    substitutabilityScore: 0.2,
+    supplierConcentration: 4,
 
     contractingRegime: 'LTAs',
-    inventoryBufferTarget: 4,    // weeks
+    inventoryBufferTarget: 2,
     maxCapacityUtilization: 0.95,
 
     yieldModel: 'simple',
     yieldSimpleLoss: 0.05,
 
     geoRiskFlag: true,
-    exportControlSensitivity: 'high',
+    exportControlSensitivity: 'critical',
 
     baseRate: {
       value: 450000,
       confidence: 'high',
-      source: 'NVIDIA quarterly reports, supply chain analysis. As of 2026-01.',
-      historicalRange: [350000, 600000]
+      source: 'NVIDIA + AMD quarterly shipments estimates',
+      historicalRange: [250000, 600000]
     }
   },
   {
     id: 'gpu_inference',
-    name: 'Inference Accelerators',
+    name: 'Inference GPUs (Installed Base)',
     group: 'B',
-    unit: 'units/month',
-    description: 'L40S, inference-optimized chips, custom ASICs',
+    unit: 'gpus',
+    description: 'Inference-optimized accelerators (including edge inference clusters)',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.3,  // 30% of inference runs on dedicated inference hardware
+    inputIntensity: 1.0,
     parentNodeIds: ['inference_consumer', 'inference_enterprise', 'inference_agentic'],
 
-    startingCapacity: 200000,
+    startingCapacity: 120000,
+    startingInventory: 5000,
+    startingBacklog: 0,
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 50000, type: 'committed' }
+      { date: '2025-06', capacityAdd: 15000, type: 'committed' },
+      { date: '2026-01', capacityAdd: 25000, type: 'optional' }
     ],
-    leadTimeDebottleneck: 4,
-    leadTimeNewBuild: 12,
+    leadTimeDebottleneck: 6,
+    leadTimeNewBuild: 18,
     rampProfile: 's-curve',
 
-    elasticityShort: 0.2,
-    elasticityMid: 0.5,
-    elasticityLong: 0.9,
+    elasticityShort: 0.08,
+    elasticityMid: 0.3,
+    elasticityLong: 0.75,
 
-    substitutabilityScore: 0.4,
+    substitutabilityScore: 0.35,
     supplierConcentration: 4,
 
-    contractingRegime: 'mixed',
-    inventoryBufferTarget: 6,
-    maxCapacityUtilization: 0.92,
+    contractingRegime: 'LTAs',
+    inventoryBufferTarget: 1,
+    maxCapacityUtilization: 0.95,
 
     yieldModel: 'simple',
-    yieldSimpleLoss: 0.04,
+    yieldSimpleLoss: 0.05,
 
     geoRiskFlag: true,
-    exportControlSensitivity: 'medium',
+    exportControlSensitivity: 'critical',
 
     baseRate: {
-      value: 200000,
+      value: 120000,
       confidence: 'medium',
-      source: 'Analyst estimates, cloud deployments',
-      historicalRange: [100000, 400000]
+      source: 'Inference accelerators mix (NVIDIA L40S, etc.)',
+      historicalRange: [50000, 250000]
     }
   },
   {
@@ -293,7 +303,7 @@ const BASE_NODES = [
     name: 'Server CPUs',
     group: 'B',
     unit: 'units/month',
-    description: 'Intel Xeon, AMD EPYC server processors',
+    description: 'x86/ARM CPUs paired with GPUs in servers',
 
     demandDriverType: 'derived',
     inputIntensity: 0.25,  // 2 CPUs per 8-GPU server = 0.25 CPUs per GPU
@@ -380,7 +390,7 @@ const BASE_NODES = [
     id: 'hbm_stacks',
     name: 'HBM Memory Stacks',
     group: 'C',
-    unit: 'stacks/month',
+    unit: 'Stacks',
     description: 'HBM3, HBM3E stacked memory for GPUs',
 
     demandDriverType: 'derived',
@@ -412,79 +422,72 @@ const BASE_NODES = [
     inventoryBufferTarget: 2,    // Very tight
     maxCapacityUtilization: 0.98,  // Tight override: sold-out regime
 
-    // STACKED YIELD MODEL - Critical for HBM
     yieldModel: 'stacked',
-    yieldInitial: 0.65,       // 65% yield early in ramp
-    yieldTarget: 0.85,        // 85% mature yield
-    yieldHalflifeMonths: 18,  // 18 months to improve halfway
-    stackDieCount: 12,        // HBM3E typically 12-hi
+    yieldInitial: 0.70,
+    yieldTarget: 0.92,
+    yieldHalflifeMonths: 18,
+    stackDieCount: 8,
 
     geoRiskFlag: true,
-    exportControlSensitivity: 'high',
+    exportControlSensitivity: 'critical',
 
     baseRate: {
       value: 5000000,
-      confidence: 'medium',
-      source: 'Memory vendor capacity announcements, Reuters HBM reports. As of 2026-01.',
-      historicalRange: [4000000, 7000000]
+      confidence: 'high',
+      source: 'SK Hynix, Samsung, Micron statements; TrendForce. As of 2026-01.',
+      historicalRange: [3500000, 7000000]
     }
   },
   {
     id: 'dram_server',
-    name: 'Server DRAM',
+    name: 'Server DRAM (GB)',
     group: 'C',
-    unit: 'GB/month',
-    description: 'DDR5 server memory modules for AI servers',
+    unit: 'gb/month',
+    description: 'DDR5 DRAM capacity allocated for AI servers',
 
     demandDriverType: 'derived',
-    inputIntensity: 64,  // 64GB per GPU (512GB per 8-GPU server / 8)
+    inputIntensity: 64,  // 64 GB per GPU (host RAM per accelerator)
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    // AI-allocated server DRAM capacity (allocation-constrained in 2026)
-    // Global DRAM: ~120B GB/year; server DRAM ~30%; AI portion growing
-    // HBM production consumes DRAM wafers, creating tightness
-    // At 64 GB/GPU and ~500K GPU demand, need ~32M GB/month
-    startingCapacity: 34000000,  // 34M GB/month allocation to AI servers
-    startingInventory: 8500000,  // ~0.25 months of coverage
-    startingBacklog: 6500000,    // ~0.2 months queued
+    startingCapacity: 200000000,
     committedExpansions: [
-      { date: '2026-01', capacityAdd: 5000000, type: 'committed' },
-      { date: '2026-09', capacityAdd: 8000000, type: 'optional' }
+      { date: '2025-06', capacityAdd: 30000000, type: 'committed' },
+      { date: '2026-03', capacityAdd: 40000000, type: 'optional' }
     ],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 18,
     rampProfile: 'linear',
 
-    elasticityShort: 0.3,
-    elasticityMid: 0.6,
-    elasticityLong: 0.85,
+    elasticityShort: 0.2,
+    elasticityMid: 0.5,
+    elasticityLong: 0.8,
 
-    substitutabilityScore: 0.7,
-    supplierConcentration: 3,
+    substitutabilityScore: 0.5,
+    supplierConcentration: 4,
 
     contractingRegime: 'mixed',
-    inventoryBufferTarget: 8,
-    maxCapacityUtilization: 0.90,
+    inventoryBufferTarget: 6,
+    maxCapacityUtilization: 0.92,
 
     yieldModel: 'simple',
     yieldSimpleLoss: 0.03,
 
-    geoRiskFlag: false,
-    exportControlSensitivity: 'low',
+    geoRiskFlag: true,
+    exportControlSensitivity: 'medium',
 
     baseRate: {
-      value: 34000000,
+      value: 200000000,
       confidence: 'medium',
-      source: 'AI-allocated server DRAM; HBM wafer competition tightens supply. As of 2026-01.',
-      historicalRange: [25000000, 50000000]
+      source: 'DRAM industry data, AI allocation assumptions',
+      historicalRange: [140000000, 260000000]
     }
   },
   {
     id: 'ssd_datacenter',
-    name: 'Datacenter SSDs',
+    name: 'Enterprise SSDs (TB)',
     group: 'C',
-    unit: 'TB/month',
-    description: 'Enterprise NVMe SSDs for AI storage',
+    unit: 'tb/month',
+    description: 'Data center SSD storage capacity',
 
     demandDriverType: 'derived',
     inputIntensity: 1,  // 1 TB per GPU (8 TB per 8-GPU server / 8)
@@ -535,7 +538,7 @@ const BASE_NODES = [
     id: 'cowos_capacity',
     name: 'CoWoS Packaging Capacity',
     group: 'D',
-    unit: 'wafer-equiv/month',
+    unit: 'Wafers/Month',
     description: 'TSMC CoWoS 2.5D packaging for AI chips',
 
     demandDriverType: 'derived',
@@ -547,7 +550,7 @@ const BASE_NODES = [
     // TSMC CoWoS: 75-80k wafer-equiv/month end-2025, to 115k end-2026 (sold out)
     // At 0.3 wafer/GPU, 80K wafers → ~267K GPUs/month (wafer-equiv vs package-adjusted)
     // Source: TrendForce, TSMC investor calls. As of 2026-01.
-    startingCapacity: 80000,  // wafer-equiv/month (down from 200K — real TSMC capacity)
+    startingCapacity: 80000,  // Wafers/Month (wafer-equivalent; down from 200K prior placeholder)
     committedExpansions: [
       { date: '2025-10', capacityAdd: 15000, type: 'committed' },   // ramp to ~95K
       { date: '2026-06', capacityAdd: 20000, type: 'committed' },   // ramp to ~115K
@@ -557,9 +560,9 @@ const BASE_NODES = [
     leadTimeNewBuild: 24,
     rampProfile: 's-curve',
 
-    elasticityShort: 0.02,  // Almost completely inelastic
-    elasticityMid: 0.15,
-    elasticityLong: 0.5,
+    elasticityShort: 0.01,  // Extremely inelastic near-term
+    elasticityMid: 0.1,
+    elasticityLong: 0.4,
 
     substitutabilityScore: 0.05,  // Near zero - no real substitute
     supplierConcentration: 5,     // TSMC monopoly
@@ -585,8 +588,8 @@ const BASE_NODES = [
     id: 'hybrid_bonding',
     name: 'Hybrid Bonding (3D)',
     group: 'D',
-    unit: 'wafer-equiv/month',
-    description: 'Advanced 3D stacking for future chips',
+    unit: 'Bonds/WaferOps',
+    description: 'Advanced 3D stacking (capacity normalized to wafer-ops)',
 
     demandDriverType: 'derived',
     inputIntensity: 1.0,  // Adoption curve applied in demand translation
@@ -633,14 +636,14 @@ const BASE_NODES = [
     id: 'abf_substrate',
     name: 'ABF Build-up Film',
     group: 'D',
-    unit: 'sqm/month',
+    unit: 'Units',
     description: 'Ajinomoto Build-up Film for advanced substrates',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.02,  // 0.02 sqm per GPU package
+    inputIntensity: 0.02,  // 0.02 (normalized) units per GPU package
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    // Base rate: ABF supply tight, ~100k sqm/month
+    // Base rate: ABF supply tight, ~100k units/month (normalized)
     startingCapacity: 100000,
     committedExpansions: [
       { date: '2025-06', capacityAdd: 20000, type: 'committed' },
@@ -650,59 +653,59 @@ const BASE_NODES = [
     leadTimeNewBuild: 24,
     rampProfile: 'linear',
 
-    elasticityShort: 0.05,
-    elasticityMid: 0.2,
-    elasticityLong: 0.5,
+    elasticityShort: 0.08,
+    elasticityMid: 0.25,
+    elasticityLong: 0.6,
 
-    substitutabilityScore: 0.15,
-    supplierConcentration: 5,  // Ajinomoto dominant
+    substitutabilityScore: 0.3,
+    supplierConcentration: 4,
 
     contractingRegime: 'LTAs',
     inventoryBufferTarget: 4,
     maxCapacityUtilization: 0.95,
 
     yieldModel: 'simple',
-    yieldSimpleLoss: 0.05,
+    yieldSimpleLoss: 0.03,
 
-    geoRiskFlag: true,
+    geoRiskFlag: false,
     exportControlSensitivity: 'medium',
 
     baseRate: {
       value: 100000,
       confidence: 'medium',
-      source: 'Substrate industry reports',
-      historicalRange: [80000, 150000]
+      source: 'ABF market data, AI allocation assumptions',
+      historicalRange: [70000, 150000]
     }
   },
   {
     id: 'osat_capacity',
-    name: 'OSAT Test & Assembly',
+    name: 'OSAT Packaging (Non-CoWoS)',
     group: 'D',
-    unit: 'units/month',
-    description: 'Outsourced semiconductor assembly and test',
+    unit: 'packages/month',
+    description: 'ASE, Amkor, JCET packaging capacity for AI-adjacent components',
 
     demandDriverType: 'derived',
-    inputIntensity: 1,
+    inputIntensity: 1.0,
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    startingCapacity: 800000,
+    startingCapacity: 1000000,
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 100000, type: 'committed' }
+      { date: '2025-09', capacityAdd: 150000, type: 'committed' }
     ],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 18,
-    rampProfile: 's-curve',
+    rampProfile: 'linear',
 
     elasticityShort: 0.15,
     elasticityMid: 0.4,
-    elasticityLong: 0.7,
+    elasticityLong: 0.8,
 
-    substitutabilityScore: 0.4,
+    substitutabilityScore: 0.6,
     supplierConcentration: 3,
 
     contractingRegime: 'mixed',
-    inventoryBufferTarget: 2,
-    maxCapacityUtilization: 0.92,
+    inventoryBufferTarget: 6,
+    maxCapacityUtilization: 0.9,
 
     yieldModel: 'simple',
     yieldSimpleLoss: 0.03,
@@ -711,10 +714,10 @@ const BASE_NODES = [
     exportControlSensitivity: 'medium',
 
     baseRate: {
-      value: 800000,
+      value: 1000000,
       confidence: 'medium',
-      source: 'ASE, Amkor reports',
-      historicalRange: [600000, 1000000]
+      source: 'OSAT industry estimates',
+      historicalRange: [800000, 1400000]
     }
   },
 
@@ -725,112 +728,152 @@ const BASE_NODES = [
     id: 'advanced_wafers',
     name: 'Advanced Node Wafer Starts',
     group: 'E',
-    unit: 'wafers/month',
+    unit: 'Wafers',
     description: '5nm/4nm/3nm wafer starts for AI chips',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.5,  // 0.5 wafers per GPU (reticle limited)
+    // Conversion handled in TRANSLATION_INTENSITIES.gpuToComponents.advancedWafersPerGpu
+    inputIntensity: 1.0,
     parentNodeIds: ['gpu_datacenter'],
 
-    // Base rate: ~150-200k advanced node wafers/month (TSMC)
-    startingCapacity: 180000,
+    // Base rate: Advanced node AI allocation, rough order-of-magnitude
+    startingCapacity: 750000,
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 20000, type: 'committed' },
-      { date: '2026-06', capacityAdd: 40000, type: 'committed' }
+      { date: '2025-12', capacityAdd: 60000, type: 'committed' },
+      { date: '2026-09', capacityAdd: 90000, type: 'optional' }
     ],
-    leadTimeDebottleneck: 6,
-    leadTimeNewBuild: 36,  // New fab is 3 years
+    leadTimeDebottleneck: 18,
+    leadTimeNewBuild: 36,
     rampProfile: 's-curve',
 
-    elasticityShort: 0.05,
-    elasticityMid: 0.2,
-    elasticityLong: 0.6,
+    elasticityShort: 0.02,
+    elasticityMid: 0.12,
+    elasticityLong: 0.35,
 
     substitutabilityScore: 0.1,
-    supplierConcentration: 5,  // TSMC monopoly on leading edge
+    supplierConcentration: 5,
 
     contractingRegime: 'LTAs',
     inventoryBufferTarget: 0,
-    maxCapacityUtilization: 0.95,
+    maxCapacityUtilization: 0.97,
 
     yieldModel: 'simple',
-    yieldSimpleLoss: 0.15,  // Advanced nodes have higher defect rates
+    yieldSimpleLoss: 0.05,
 
     geoRiskFlag: true,
     exportControlSensitivity: 'critical',
 
     baseRate: {
-      value: 180000,
+      value: 750000,
       confidence: 'high',
-      source: 'TSMC quarterly reports',
-      historicalRange: [150000, 220000]
+      source: 'TSMC/Samsung/Intel Foundry reports',
+      historicalRange: [600000, 1000000]
     }
   },
   {
     id: 'euv_tools',
     name: 'EUV Lithography Tools',
     group: 'E',
-    unit: 'tools',
-    description: 'ASML EUV scanners (new tools/month)',
+    unit: 'tools/year',
+    description: 'ASML EUV tool shipments (gating advanced node capacity)',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.00002,  // Tools per wafer-start (calibrated to ~4/month demand)
+    inputIntensity: 0.000002, // placeholder intensity (tools per GPU-equivalent capacity)
     parentNodeIds: ['advanced_wafers'],
 
-    // Base rate: ~44-48 EUV tools shipped annually (~3.7-4.0/month)
-    startingCapacity: 4,  // New tools per month (shipment rate)
+    startingCapacity: 60,
     committedExpansions: [
-      { date: '2026-06', capacityAdd: 0.5, type: 'committed' },
-      { date: '2027-06', capacityAdd: 0.5, type: 'committed' },
-      { date: '2028-06', capacityAdd: 0.5, type: 'optional' }
+      { date: '2026-12', capacityAdd: 10, type: 'committed' }
     ],
     leadTimeDebottleneck: 18,
-    leadTimeNewBuild: 36,     // 3 year lead time from order
-    rampProfile: 'step',
+    leadTimeNewBuild: 48,
+    rampProfile: 'linear',
 
-    elasticityShort: 0.0,   // Completely inelastic
+    elasticityShort: 0.0,
     elasticityMid: 0.05,
-    elasticityLong: 0.3,
+    elasticityLong: 0.2,
 
-    substitutabilityScore: 0.0,  // No substitute for EUV
-    supplierConcentration: 5,    // ASML monopoly
+    substitutabilityScore: 0.0,
+    supplierConcentration: 5,
 
     contractingRegime: 'LTAs',
-    inventoryPolicy: 'non_storable',
     inventoryBufferTarget: 0,
-    maxCapacityUtilization: 0.95,  // Uptime limited
+    maxCapacityUtilization: 0.95,
 
     yieldModel: 'simple',
-    yieldSimpleLoss: 0,  // Tools don't have yield loss
+    yieldSimpleLoss: 0.0,
 
     geoRiskFlag: true,
     exportControlSensitivity: 'critical',
 
     baseRate: {
-      value: 4,
-      confidence: 'medium',
-      source: 'ASML annual reports (shipments per year / 12)',
-      historicalRange: [3, 5]
+      value: 60,
+      confidence: 'high',
+      source: 'ASML annual guidance',
+      historicalRange: [40, 80]
     }
   },
 
   // ========================================
-  // GROUP F: NETWORKING & OPTICS
+  // GROUP F: NETWORKING & OPTICAL
   // ========================================
   {
     id: 'switch_asics',
     name: 'Switch ASICs',
     group: 'F',
     unit: 'units/month',
-    description: 'High-bandwidth switch chips (Tomahawk, Spectrum)',
+    description: 'High-speed switch silicon (400G/800G)',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.125,  // 1 switch per 8 GPUs
+    inputIntensity: 0.08, // ~1 switch ASIC per ~12 GPUs (very rough)
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 100000,
+    startingCapacity: 600000,
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 20000, type: 'committed' }
+      { date: '2025-09', capacityAdd: 100000, type: 'committed' }
+    ],
+    leadTimeDebottleneck: 6,
+    leadTimeNewBuild: 18,
+    rampProfile: 'linear',
+
+    elasticityShort: 0.25,
+    elasticityMid: 0.55,
+    elasticityLong: 0.85,
+
+    substitutabilityScore: 0.4,
+    supplierConcentration: 4,
+
+    contractingRegime: 'mixed',
+    inventoryBufferTarget: 6,
+    maxCapacityUtilization: 0.92,
+
+    yieldModel: 'simple',
+    yieldSimpleLoss: 0.03,
+
+    geoRiskFlag: true,
+    exportControlSensitivity: 'medium',
+
+    baseRate: {
+      value: 600000,
+      confidence: 'medium',
+      source: 'Broadcom / Marvell guidance; analyst estimates',
+      historicalRange: [400000, 800000]
+    }
+  },
+  {
+    id: 'optical_transceivers',
+    name: 'Optical Transceivers',
+    group: 'F',
+    unit: 'units/month',
+    description: '400G/800G optical modules',
+
+    demandDriverType: 'derived',
+    inputIntensity: 1.5, // per GPU, rough for large clusters
+    parentNodeIds: ['gpu_datacenter'],
+
+    startingCapacity: 1500000,
+    committedExpansions: [
+      { date: '2025-06', capacityAdd: 250000, type: 'committed' }
     ],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 15,
@@ -841,79 +884,34 @@ const BASE_NODES = [
     elasticityLong: 0.8,
 
     substitutabilityScore: 0.4,
-    supplierConcentration: 4,
-
-    contractingRegime: 'mixed',
-    inventoryBufferTarget: 6,
-    maxCapacityUtilization: 0.90,
-
-    yieldModel: 'simple',
-    yieldSimpleLoss: 0.04,
-
-    geoRiskFlag: false,
-    exportControlSensitivity: 'medium',
-
-    baseRate: {
-      value: 100000,
-      confidence: 'medium',
-      source: 'Broadcom, NVIDIA networking reports',
-      historicalRange: [70000, 150000]
-    }
-  },
-  {
-    id: 'optical_transceivers',
-    name: 'Optical Transceivers',
-    group: 'F',
-    unit: 'units/month',
-    description: '400G/800G/1.6T optical modules',
-
-    demandDriverType: 'derived',
-    inputIntensity: 1,  // 1 transceiver per GPU for scale-out
-    parentNodeIds: ['gpu_datacenter'],
-
-    // Base rate: ~50M transceivers/year, growing rapidly
-    startingCapacity: 5000000,
-    committedExpansions: [
-      { date: '2025-06', capacityAdd: 1000000, type: 'committed' },
-      { date: '2026-01', capacityAdd: 2000000, type: 'optional' }
-    ],
-    leadTimeDebottleneck: 4,
-    leadTimeNewBuild: 12,
-    rampProfile: 'linear',
-
-    elasticityShort: 0.3,
-    elasticityMid: 0.6,
-    elasticityLong: 0.85,
-
-    substitutabilityScore: 0.5,  // Different speeds interchangeable somewhat
     supplierConcentration: 3,
 
     contractingRegime: 'mixed',
-    inventoryBufferTarget: 8,
-    maxCapacityUtilization: 0.88,
+    inventoryBufferTarget: 4,
+    maxCapacityUtilization: 0.9,
 
     yieldModel: 'simple',
-    yieldSimpleLoss: 0.05,
+    yieldSimpleLoss: 0.03,
 
     geoRiskFlag: true,
-    exportControlSensitivity: 'low',
+    exportControlSensitivity: 'medium',
 
     baseRate: {
-      value: 5000000,
+      value: 1500000,
       confidence: 'medium',
-      source: 'LightCounting, optical industry reports',
-      historicalRange: [3000000, 8000000]
+      source: 'Optics vendors guidance (Lumentum, Coherent, etc.)',
+      historicalRange: [900000, 2200000]
     }
   },
   {
     id: 'infiniband_cables',
-    name: 'InfiniBand/Ethernet Cables',
+    name: 'InfiniBand / High-Speed Cables',
     group: 'F',
-    unit: 'units/month',
-    description: 'High-speed copper and optical cables',
+    unit: 'meters/month',
+    description: 'Copper and AOC/DAC high-speed interconnect cabling',
 
     demandDriverType: 'derived',
-    inputIntensity: 4,  // 4 cables per GPU average
+    inputIntensity: 5, // meters per GPU (rough)
     parentNodeIds: ['gpu_datacenter'],
 
     startingCapacity: 20000000,
@@ -954,7 +952,7 @@ const BASE_NODES = [
     id: 'server_assembly',
     name: 'Server Assembly Capacity',
     group: 'G',
-    unit: 'servers/month',
+    unit: 'Servers/Month',
     description: 'ODM server manufacturing (Foxconn, Quanta, etc.)',
 
     demandDriverType: 'derived',
@@ -1031,53 +1029,51 @@ const BASE_NODES = [
     baseRate: {
       value: 50000,
       confidence: 'high',
-      source: 'Datacenter infrastructure reports',
-      historicalRange: [40000, 70000]
+      source: 'Rack/PDU industry estimates',
+      historicalRange: [30000, 80000]
     }
   },
   {
     id: 'liquid_cooling',
     name: 'Liquid Cooling Systems',
     group: 'G',
-    unit: 'CDUs/month',
-    description: 'CDUs and cold plates for GPU cooling',
+    unit: 'units/month',
+    description: 'Direct-to-chip / immersion cooling systems',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.05,  // 1 CDU per 20 GPUs
+    inputIntensity: 0.015, // systems per GPU (very rough)
     parentNodeIds: ['gpu_datacenter'],
 
-    // Base rate: Liquid cooling adoption growing rapidly
-    startingCapacity: 15000,
+    startingCapacity: 20000,
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 10000, type: 'committed' },
-      { date: '2026-01', capacityAdd: 20000, type: 'optional' }
+      { date: '2026-01', capacityAdd: 6000, type: 'optional' }
     ],
-    leadTimeDebottleneck: 10,
+    leadTimeDebottleneck: 6,
     leadTimeNewBuild: 18,
     rampProfile: 's-curve',
 
-    elasticityShort: 0.3,
-    elasticityMid: 0.6,
-    elasticityLong: 0.85,
+    elasticityShort: 0.15,
+    elasticityMid: 0.45,
+    elasticityLong: 0.8,
 
-    substitutabilityScore: 0.3,  // Can fall back to air cooling with derating
+    substitutabilityScore: 0.5,
     supplierConcentration: 3,
 
     contractingRegime: 'mixed',
-    inventoryBufferTarget: 4,
-    maxCapacityUtilization: 0.85,
+    inventoryBufferTarget: 3,
+    maxCapacityUtilization: 0.9,
 
     yieldModel: 'simple',
-    yieldSimpleLoss: 0.02,
+    yieldSimpleLoss: 0.03,
 
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 15000,
-      confidence: 'medium',
-      source: 'Cooling industry analysis',
-      historicalRange: [10000, 40000]
+      value: 20000,
+      confidence: 'low',
+      source: 'Liquid cooling industry estimates',
+      historicalRange: [5000, 40000]
     }
   },
 
@@ -1092,86 +1088,83 @@ const BASE_NODES = [
     description: 'Operational data center power capacity',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.001,  // 1 kW per GPU average
+    inputIntensity: 0.0013, // MW per GPU (including PUE). Overridden by serverToInfra.kwPerGpu + PUE if desired.
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    // Base rate: ~12 GW/year global AI DC bring-up capacity (2025)
-    // AI data centers from 10GW base 2025 to ~20-30GW incremental by 2026
-    // Grid strain limits bring-up; AI to 27% of data center power
-    // Source: NERC reports, S&P Global data center analysis. As of 2026-01.
-    startingCapacity: 1000,  // MW/month (~12GW/yr)
+    startingCapacity: 28000,
     committedExpansions: [
-      { date: '2026-01', capacityAdd: 300, type: 'committed' },
-      { date: '2027-01', capacityAdd: 300, type: 'optional' }
+      { date: '2025-06', capacityAdd: 2500, type: 'committed' },
+      { date: '2026-01', capacityAdd: 3000, type: 'optional' }
     ],
-    leadTimeDebottleneck: 12,
-    leadTimeNewBuild: 48,  // 4 years for new campus
+    leadTimeDebottleneck: 9,
+    leadTimeNewBuild: 24,
     rampProfile: 's-curve',
 
-    elasticityShort: 0.1,
-    elasticityMid: 0.3,
-    elasticityLong: 0.7,
+    elasticityShort: 0.05,
+    elasticityMid: 0.2,
+    elasticityLong: 0.6,
 
     substitutabilityScore: 0.2,
     supplierConcentration: 2,
 
-    contractingRegime: 'LTAs',
+    contractingRegime: 'mixed',
     inventoryBufferTarget: 0,
-    maxCapacityUtilization: 0.85,
+    maxCapacityUtilization: 0.92,
 
     yieldModel: 'simple',
-    yieldSimpleLoss: 0,
+    yieldSimpleLoss: 0.01,
 
     geoRiskFlag: true,
-    exportControlSensitivity: 'low',
+    exportControlSensitivity: 'medium',
 
     baseRate: {
-      value: 1000,
+      value: 28000,
       confidence: 'medium',
-      source: 'NERC reports, S&P Global data center analysis. As of 2026-01.',
-      historicalRange: [1000, 2000]
+      source: 'Hyperscaler + colo buildout estimates',
+      historicalRange: [20000, 40000]
     }
   },
   {
     id: 'dc_construction',
-    name: 'DC Construction Labor',
+    name: 'Data Center Construction',
     group: 'H',
-    unit: 'worker-months',
-    description: 'Skilled data center construction workforce',
+    unit: 'mw/month',
+    description: 'Rate of bringing new data center MW online',
 
     demandDriverType: 'derived',
-    inputIntensity: 500,  // 500 worker-months per MW built
+    inputIntensity: 1.0,
     parentNodeIds: ['datacenter_mw'],
 
-    startingCapacity: 5000000,
-    committedExpansions: [],
-    leadTimeDebottleneck: 18,
-    leadTimeNewBuild: 36,
+    startingCapacity: 1200,
+    committedExpansions: [
+      { date: '2026-01', capacityAdd: 150, type: 'optional' }
+    ],
+    leadTimeDebottleneck: 6,
+    leadTimeNewBuild: 24,
     rampProfile: 'linear',
 
-    elasticityShort: 0.2,
-    elasticityMid: 0.5,
-    elasticityLong: 0.8,
+    elasticityShort: 0.1,
+    elasticityMid: 0.35,
+    elasticityLong: 0.7,
 
-    substitutabilityScore: 0.3,
-    supplierConcentration: 1,
+    substitutabilityScore: 0.4,
+    supplierConcentration: 2,
 
-    contractingRegime: 'spot',
-    inventoryPolicy: 'non_storable',
+    contractingRegime: 'mixed',
     inventoryBufferTarget: 0,
-    maxCapacityUtilization: 0.80,
+    maxCapacityUtilization: 0.9,
 
     yieldModel: 'simple',
-    yieldSimpleLoss: 0,
+    yieldSimpleLoss: 0.02,
 
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 5000000,
-      confidence: 'low',
-      source: 'Construction labor statistics',
-      historicalRange: [3000000, 8000000]
+      value: 1200,
+      confidence: 'medium',
+      source: 'Construction industry capacity estimates',
+      historicalRange: [800, 1800]
     }
   },
 
@@ -1182,44 +1175,43 @@ const BASE_NODES = [
     id: 'grid_interconnect',
     name: 'Grid Interconnect Queue',
     group: 'I',
-    unit: 'MW-approved/month',
+    unit: 'MW',
     description: 'Utility grid connection approvals',
 
     demandDriverType: 'derived',
-    inputIntensity: 1,
-    parentNodeIds: ['datacenter_mw'],
+    inputIntensity: 0.0013, // MW per GPU (same as datacenter_mw intensity)
+    parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    // Base rate: Grid queues severely backlogged
-    // Only ~20% of queued capacity gets built
-    startingCapacity: 2500,  // MW/month approvals
-    committedExpansions: [],
-    leadTimeDebottleneck: 24,
-    leadTimeNewBuild: 60,
+    startingCapacity: 3500,
+    committedExpansions: [
+      { date: '2026-01', capacityAdd: 500, type: 'optional' }
+    ],
+    leadTimeDebottleneck: 12,
+    leadTimeNewBuild: 36,
     rampProfile: 'linear',
 
     elasticityShort: 0.02,
-    elasticityMid: 0.1,
+    elasticityMid: 0.15,
     elasticityLong: 0.4,
 
-    substitutabilityScore: 0.1,  // Behind-the-meter is partial substitute
+    substitutabilityScore: 0.0,
     supplierConcentration: 2,
 
     contractingRegime: 'regulated',
-    inventoryPolicy: 'queue',
     inventoryBufferTarget: 0,
-    maxCapacityUtilization: 0.80,
+    maxCapacityUtilization: 0.85,
 
     yieldModel: 'simple',
-    yieldSimpleLoss: 0,
+    yieldSimpleLoss: 0.0,
 
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 2500,
+      value: 3500,
       confidence: 'medium',
-      source: 'Utility commission data, LBNL queue reports',
-      historicalRange: [3000, 8000]
+      source: 'Utility interconnect queue estimates',
+      historicalRange: [2000, 6000]
     }
   },
   {
@@ -1227,252 +1219,191 @@ const BASE_NODES = [
     name: 'Large Power Transformers',
     group: 'I',
     unit: 'units/month',
-    description: 'High-voltage transformers for substations',
+    description: 'Utility-scale transformers for new data centers',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.02,  // 1 transformer per 50 MW
+    inputIntensity: 0.02, // ~1 LPT per 50 MW
     parentNodeIds: ['datacenter_mw'],
 
-    // Base rate: LPT lead times are 80-210 weeks
-    // Global production ~2000-3000 units/year
-    startingCapacity: 250,  // units/month globally
+    startingCapacity: 700,
     committedExpansions: [
-      { date: '2026-06', capacityAdd: 50, type: 'committed' },
-      { date: '2027-06', capacityAdd: 50, type: 'optional' }
+      { date: '2026-06', capacityAdd: 120, type: 'optional' }
     ],
-    leadTimeDebottleneck: 24,  // 2 years to debottleneck
-    leadTimeNewBuild: 60,      // 5 years for new factory
+    leadTimeDebottleneck: 12,
+    leadTimeNewBuild: 30,
     rampProfile: 'linear',
 
-    elasticityShort: 0.01,  // Extremely inelastic
-    elasticityMid: 0.05,
-    elasticityLong: 0.25,
+    elasticityShort: 0.05,
+    elasticityMid: 0.2,
+    elasticityLong: 0.5,
 
-    substitutabilityScore: 0.05,
+    substitutabilityScore: 0.15,
     supplierConcentration: 3,
 
     contractingRegime: 'LTAs',
-    inventoryBufferTarget: 0,  // Built to order
-    maxCapacityUtilization: 0.95,
+    inventoryBufferTarget: 2,
+    maxCapacityUtilization: 0.9,
 
     yieldModel: 'simple',
-    yieldSimpleLoss: 0.02,
-
-    geoRiskFlag: true,
-    exportControlSensitivity: 'low',
-
-    baseRate: {
-      value: 250,
-      confidence: 'medium',
-      source: 'DOE transformer reports, utility data',
-      historicalRange: [200, 350]
-    }
-  },
-  {
-    id: 'power_generation',
-    name: 'Power Generation PPAs',
-    group: 'I',
-    unit: 'MW-contracted/month',
-    description: 'New power purchase agreements',
-
-    demandDriverType: 'derived',
-    inputIntensity: 1.2,  // 120% of DC capacity for redundancy
-    parentNodeIds: ['datacenter_mw'],
-
-    startingCapacity: 8000,
-    committedExpansions: [
-      { date: '2025-12', capacityAdd: 2000, type: 'committed' },
-      { date: '2026-12', capacityAdd: 3000, type: 'optional' }
-    ],
-    leadTimeDebottleneck: 12,
-    leadTimeNewBuild: 36,
-    rampProfile: 's-curve',
-
-    elasticityShort: 0.1,
-    elasticityMid: 0.3,
-    elasticityLong: 0.6,
-
-    substitutabilityScore: 0.4,  // Gas/solar/wind somewhat interchangeable
-    supplierConcentration: 1,
-
-    contractingRegime: 'LTAs',
-    inventoryBufferTarget: 0,
-    maxCapacityUtilization: 0.85,
-
-    yieldModel: 'simple',
-    yieldSimpleLoss: 0,
+    yieldSimpleLoss: 0.03,
 
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 8000,
+      value: 700,
       confidence: 'medium',
-      source: 'PPA market reports',
-      historicalRange: [5000, 12000]
+      source: 'Transformer industry capacity; lead time reports',
+      historicalRange: [400, 1200]
     }
   },
   {
     id: 'backup_power',
     name: 'Backup Power Systems',
     group: 'I',
-    unit: 'MW/month',
-    description: 'Generators, UPS, batteries',
+    unit: 'units/month',
+    description: 'Generators / UPS systems for data centers',
 
     demandDriverType: 'derived',
-    inputIntensity: 1.5,  // 150% backup for N+1
+    inputIntensity: 0.04, // placeholder
     parentNodeIds: ['datacenter_mw'],
 
-    startingCapacity: 10000,
+    startingCapacity: 5000,
     committedExpansions: [],
-    leadTimeDebottleneck: 4,
-    leadTimeNewBuild: 12,
+    leadTimeDebottleneck: 6,
+    leadTimeNewBuild: 18,
     rampProfile: 'linear',
 
-    elasticityShort: 0.3,
+    elasticityShort: 0.25,
     elasticityMid: 0.6,
-    elasticityLong: 0.85,
+    elasticityLong: 0.9,
 
-    substitutabilityScore: 0.5,
-    supplierConcentration: 2,
+    substitutabilityScore: 0.6,
+    supplierConcentration: 3,
 
     contractingRegime: 'mixed',
-    inventoryBufferTarget: 8,
-    maxCapacityUtilization: 0.90,
+    inventoryBufferTarget: 5,
+    maxCapacityUtilization: 0.88,
 
     yieldModel: 'simple',
-    yieldSimpleLoss: 0.01,
+    yieldSimpleLoss: 0.02,
 
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 10000,
-      confidence: 'high',
-      source: 'Generator/UPS market data',
-      historicalRange: [8000, 15000]
+      value: 5000,
+      confidence: 'medium',
+      source: 'Generator/UPS industry capacity estimates',
+      historicalRange: [2500, 9000]
     }
   },
 
   // ========================================
-  // GROUP J: OPS & HUMAN CAPITAL
+  // GROUP J: LABOR / SERVICES (Queues)
   // ========================================
   {
     id: 'dc_ops_staff',
-    name: 'Data Center Operations Staff',
+    name: 'Data Center Ops Staff',
     group: 'J',
-    unit: 'FTEs',
-    description: 'NOC, facilities, security personnel',
+    unit: 'heads/month',
+    description: 'Hiring throughput for DC operations staffing',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.5,  // 0.5 FTE per MW
-    parentNodeIds: ['datacenter_mw'],
+    inputIntensity: 0.002, // staff per GPU (very rough)
+    parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    startingCapacity: 50000,
+    startingCapacity: 25000,
     committedExpansions: [],
-    leadTimeDebottleneck: 3,
-    leadTimeNewBuild: 12,
+    leadTimeDebottleneck: 6,
+    leadTimeNewBuild: 18,
     rampProfile: 'linear',
 
-    elasticityShort: 0.4,
-    elasticityMid: 0.7,
-    elasticityLong: 0.9,
+    elasticityShort: 0.15,
+    elasticityMid: 0.4,
+    elasticityLong: 0.8,
 
-    substitutabilityScore: 0.3,
+    substitutabilityScore: 0.5,
     supplierConcentration: 1,
 
-    contractingRegime: 'spot',
+    contractingRegime: 'labor',
     inventoryBufferTarget: 0,
-    maxCapacityUtilization: 0.95,
+    maxCapacityUtilization: 0.85,
 
     yieldModel: 'simple',
-    yieldSimpleLoss: 0,
+    yieldSimpleLoss: 0.0,
 
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 50000,
+      value: 25000,
       confidence: 'medium',
-      source: 'Industry employment data',
-      historicalRange: [40000, 70000]
+      source: 'DC ops labor statistics',
+      historicalRange: [15000, 40000]
     }
   },
   {
     id: 'ml_engineers',
-    name: 'ML Engineers & Researchers',
+    name: 'ML Engineers',
     group: 'J',
-    unit: 'FTEs',
-    description: 'Machine learning talent pool',
+    unit: 'heads/month',
+    description: 'Hiring throughput for ML engineering talent',
 
-    demandDriverType: 'direct',
-    inputIntensity: 1,
-    parentNodeIds: [],
+    demandDriverType: 'derived',
+    inputIntensity: 0.0015, // headcount per GPU-equivalent workload (rough)
+    parentNodeIds: ['training_frontier', 'training_midtier', 'inference_consumer', 'inference_enterprise', 'inference_agentic'],
 
-    // Base rate: ~500k ML engineers globally, growing ~15% annually
-    startingCapacity: 500000,
+    startingCapacity: 60000,
     committedExpansions: [],
-    leadTimeDebottleneck: 6,
-    leadTimeNewBuild: 48,  // Education pipeline
+    leadTimeDebottleneck: 9,
+    leadTimeNewBuild: 24,
     rampProfile: 'linear',
 
-    elasticityShort: 0.2,
-    elasticityMid: 0.4,
+    elasticityShort: 0.1,
+    elasticityMid: 0.35,
     elasticityLong: 0.7,
 
-    substitutabilityScore: 0.2,
+    substitutabilityScore: 0.4,
     supplierConcentration: 1,
 
-    contractingRegime: 'spot',
+    contractingRegime: 'labor',
     inventoryBufferTarget: 0,
-    maxCapacityUtilization: 0.90,
+    maxCapacityUtilization: 0.85,
 
     yieldModel: 'simple',
-    yieldSimpleLoss: 0,
+    yieldSimpleLoss: 0.0,
 
-    geoRiskFlag: true,
-    exportControlSensitivity: 'medium',
+    geoRiskFlag: false,
+    exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 500000,
-      confidence: 'low',
-      source: 'LinkedIn data, industry surveys',
-      historicalRange: [300000, 800000]
+      value: 60000,
+      confidence: 'medium',
+      source: 'Software/ML labor statistics',
+      historicalRange: [30000, 90000]
     }
   }
 ];
 
-export const NODES = applyNodeOverrides(BASE_NODES, nodesOverrides);
+// Convenience lookups
+const NODE_MAP = new Map(NODES.map(n => [n.id, n]));
 
-// ========================================
-// ASSUMPTION UPDATE LOG
-// ========================================
-export const ASSUMPTION_UPDATE_LOG = nodesOverrides?.updateLog || [];
+/**
+ * Get node by id.
+ */
+export function getNode(id) {
+  return NODE_MAP.get(id);
+}
+
+/**
+ * Get direct child nodes (nodes that list `id` in parentNodeIds).
+ */
+export function getChildNodes(id) {
+  return NODES.filter(n => (n.parentNodeIds || []).includes(id));
+}
+
 export const NODE_METADATA = {
-  asOfMonth: CURRENT_AS_OF_MONTH
+  asOfMonth: CURRENT_AS_OF_MONTH,
+  totalNodes: NODES.length
 };
-
-// Get node by ID
-export function getNode(nodeId) {
-  return NODES.find(n => n.id === nodeId);
-}
-
-// Get nodes by group
-export function getNodesByGroup(groupId) {
-  return NODES.filter(n => n.group === groupId);
-}
-
-// Get all parent nodes for a given node
-export function getParentNodes(nodeId) {
-  const node = getNode(nodeId);
-  if (!node) return [];
-  return node.parentNodeIds.map(pid => getNode(pid)).filter(Boolean);
-}
-
-// Get all child nodes that depend on a given node
-export function getChildNodes(nodeId) {
-  return NODES.filter(n => n.parentNodeIds.includes(nodeId));
-}
-
-// Export node count for validation
-export const NODE_COUNT = NODES.length;
