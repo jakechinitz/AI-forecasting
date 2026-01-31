@@ -15,10 +15,13 @@ function Header({ stats, scenario, isSimulating }) {
     <header className="header">
       <div className="header-left">
         <div className="logo">
-          <div className="logo-icon">⚡</div>
+          <div className="logo-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+            </svg>
+          </div>
           <div>
             <div className="logo-text">AI Infrastructure Forecast</div>
-            <div className="logo-subtitle">Supply Chain Model</div>
           </div>
         </div>
 
@@ -31,7 +34,7 @@ function Header({ stats, scenario, isSimulating }) {
               >
                 {stats.gpuTightness}
               </span>
-              <span className="header-stat-label">GPU Tightness</span>
+              <span className="header-stat-label">GPU</span>
             </div>
             <div className="header-stat">
               <span
@@ -40,7 +43,7 @@ function Header({ stats, scenario, isSimulating }) {
               >
                 {stats.hbmTightness}
               </span>
-              <span className="header-stat-label">HBM Tightness</span>
+              <span className="header-stat-label">HBM</span>
             </div>
             <div className="header-stat">
               <span
@@ -49,19 +52,19 @@ function Header({ stats, scenario, isSimulating }) {
               >
                 {stats.cowosTightness}
               </span>
-              <span className="header-stat-label">CoWoS Tightness</span>
+              <span className="header-stat-label">CoWoS</span>
             </div>
             <div className="header-stat">
               <span className="header-stat-value" style={{ color: 'var(--status-tight)' }}>
                 {stats.shortages}
               </span>
-              <span className="header-stat-label">Shortages</span>
+              <span className="header-stat-label">Short</span>
             </div>
             <div className="header-stat">
               <span className="header-stat-value" style={{ color: 'var(--status-glut)' }}>
                 {stats.gluts}
               </span>
-              <span className="header-stat-label">Gluts</span>
+              <span className="header-stat-label">Glut</span>
             </div>
           </div>
         )}

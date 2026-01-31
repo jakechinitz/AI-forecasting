@@ -26,16 +26,16 @@ import PrintoutTab from './components/PrintoutTab.jsx';
 import './styles/app.css';
 
 const TABS = [
-  { id: 'assumptions', label: 'Assumptions', icon: '⚙️', description: 'Inputs & efficiencies' },
-  { id: 'nodes', label: 'Node Library', icon: '🔗', description: 'Supply chain map' },
-  { id: 'demand', label: 'Demand Drivers', icon: '📈', description: 'Workload demand' },
-  { id: 'supply', label: 'Supply Buildout', icon: '🏭', description: 'Capacity growth' },
-  { id: 'market', label: 'Market Clearing', icon: '⚖️', description: 'Tightness & pricing' },
-  { id: 'analysis', label: 'Market Stress', icon: '🚦', description: 'Shortages & gluts' },
-  { id: 'growth', label: 'YoY Growth', icon: '📅', description: 'Demand vs supply' },
-  { id: 'charts', label: 'Node Trends', icon: '📊', description: 'Detailed charts' },
-  { id: 'scenarios', label: 'Scenarios', icon: '🎭', description: 'Compare cases' },
-  { id: 'printout', label: 'Printout', icon: '🧾', description: 'Snapshot summary' }
+  { id: 'assumptions', label: 'Assumptions', icon: '\u2699', description: 'Inputs & efficiencies' },
+  { id: 'nodes', label: 'Node Library', icon: '\u25CE', description: 'Supply chain map' },
+  { id: 'demand', label: 'Demand Drivers', icon: '\u2197', description: 'Workload demand' },
+  { id: 'supply', label: 'Supply Buildout', icon: '\u25A3', description: 'Capacity growth' },
+  { id: 'market', label: 'Market Clearing', icon: '\u2696', description: 'Tightness & pricing' },
+  { id: 'analysis', label: 'Market Stress', icon: '\u26A0', description: 'Shortages & gluts' },
+  { id: 'growth', label: 'YoY Growth', icon: '\u2191', description: 'Demand vs supply' },
+  { id: 'charts', label: 'Node Trends', icon: '\u2500', description: 'Detailed charts' },
+  { id: 'scenarios', label: 'Scenarios', icon: '\u2630', description: 'Compare cases' },
+  { id: 'printout', label: 'Printout', icon: '\u2193', description: 'Snapshot summary' }
 ];
 
 function App() {
@@ -207,13 +207,6 @@ function App() {
           <PrintoutTab
             results={simulationResults}
             scenario={SCENARIOS[selectedScenario]}
-          />
-        );
-
-      case 'printout':
-        return (
-          <PrintoutTab
-            results={simulationResults}
           />
         );
 
