@@ -70,6 +70,11 @@ function deepMerge(target, source) {
   return result;
 }
 
+function resolveAssumptionValue(value, fallback) {
+  if (value === null) return 0;
+  return value ?? fallback;
+}
+
 // ============================================
 // CALIBRATION PARAMETERS
 // These ensure month-0 demand matches reality
@@ -142,11 +147,11 @@ export function calculateEfficiencyMultipliers(month, assumptions) {
 
     // Get annual rates from the active block
     // Defaults match assumptions.js year1 (deployed efficiency rates)
-    const m_infer = block?.modelEfficiency?.m_inference?.value ?? 0.18;
-    const m_train = block?.modelEfficiency?.m_training?.value ?? 0.10;
-    const s_infer = block?.systemsEfficiency?.s_inference?.value ?? 0.10;
-    const s_train = block?.systemsEfficiency?.s_training?.value ?? 0.08;
-    const h = block?.hardwareEfficiency?.h?.value ?? 0.15;
+    const m_infer = resolveAssumptionValue(block?.modelEfficiency?.m_inference?.value, 0.18);
+    const m_train = resolveAssumptionValue(block?.modelEfficiency?.m_training?.value, 0.10);
+    const s_infer = resolveAssumptionValue(block?.systemsEfficiency?.s_inference?.value, 0.10);
+    const s_train = resolveAssumptionValue(block?.systemsEfficiency?.s_training?.value, 0.08);
+    const h = resolveAssumptionValue(block?.hardwareEfficiency?.h?.value, 0.15);
 
     // Convert annual rates to monthly multipliers
     // M_t: (1-m)^(1/12) - decreases each month
@@ -215,9 +220,9 @@ export function calculateDemandGrowth(category, segment, month, assumptions) {
 
     let rate = 0;
     if (category === 'inference') {
-      rate = block?.inferenceGrowth?.[segment]?.value ?? 0.40;
+      rate = resolveAssumptionValue(block?.inferenceGrowth?.[segment]?.value, 0.40);
     } else if (category === 'training') {
-      rate = block?.trainingGrowth?.[segment]?.value ?? 0.25;
+      rate = resolveAssumptionValue(block?.trainingGrowth?.[segment]?.value, 0.25);
     }
 
     // Convert annual rate to monthly
@@ -494,7 +499,7 @@ export function calculateIntensityMultiplier(month, assumptions) {
 
     // Default intensity growth: 40% per year (context + reasoning + agents)
     // This partially offsets efficiency gains
-    const intensityGrowthRate = block?.intensityGrowth?.value ?? 0.40;
+    const intensityGrowthRate = resolveAssumptionValue(block?.intensityGrowth?.value, 0.40);
 
     if (m === 0) {
       intensityCache[m] = 1;
@@ -540,9 +545,9 @@ export function calculateContinualLearningDemand(month, demandAssumptions) {
     const block = demandAssumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
 
     // Get growth rates
-    const computeGrowthRate = block?.continualLearning?.computeGrowth?.value ?? 0.60;
-    const dataGrowthRate = block?.continualLearning?.dataStorageGrowth?.value ?? 0.50;
-    const networkGrowthRate = block?.continualLearning?.networkBandwidthGrowth?.value ?? 0.45;
+    const computeGrowthRate = resolveAssumptionValue(block?.continualLearning?.computeGrowth?.value, 0.60);
+    const dataGrowthRate = resolveAssumptionValue(block?.continualLearning?.dataStorageGrowth?.value, 0.50);
+    const networkGrowthRate = resolveAssumptionValue(block?.continualLearning?.networkBandwidthGrowth?.value, 0.45);
 
     if (m === 0) {
       // Base continual learning demand at month 0 - read from workloadBase
@@ -586,7 +591,7 @@ export function calculateEffectiveHbmPerGpu(month, demandAssumptions) {
   const blockKey = getBlockKeyForMonth(month);
   const block = demandAssumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
   const memoryMultiplierAtFullAdoption =
-    block?.continualLearning?.memoryMultiplierAtFullAdoption?.value ?? 1.6;
+    resolveAssumptionValue(block?.continualLearning?.memoryMultiplierAtFullAdoption?.value, 1.6);
 
   // Calculate adoption using logistic curve based on continual learning compute growth
   const continualLearning = calculateContinualLearningDemand(month, demandAssumptions);
@@ -755,7 +760,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // Predictive supply elasticity
       dynamicExpansions: [],       // [{month, capacityAdd}] triggered by forecast
       lastTriggerMonth: -Infinity, // Cooldown tracking
-      dynamicExpansionCount: 0     // Cap total dynamic expansions
+      dynamicExpansionCount: 0,    // Cap total dynamic expansions
+      lastCapexTriggerMonth: -Infinity,
+      capexExpansionCount: 0
     };
     results.nodes[node.id] = {
       demand: [],
@@ -1193,6 +1200,40 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       nodeResults.shortage.push(isShortage ? 1 : 0);
       nodeResults.glut.push(isGlut ? 1 : 0);
     });
+
+    // ============================================
+    // PHASE 4.5: Endogenous capacity response to sustained shortages
+    // ============================================
+    const capex = GLOBAL_PARAMS.capexTrigger;
+    if (capex) {
+      NODES.forEach(node => {
+        if (!node.startingCapacity || node.group === 'A') return;
+
+        const state = nodeState[node.id];
+
+        if (state.capexExpansionCount >= capex.maxExpansions) return;
+        if (month - state.lastCapexTriggerMonth < capex.cooldownMonths) return;
+
+        const recentPrices = state.priceHistory.slice(-capex.persistenceMonths);
+        const sustainedTightPricing = recentPrices.length >= capex.persistenceMonths &&
+          recentPrices.every(price => price >= capex.priceThreshold);
+        if (!sustainedTightPricing) return;
+
+        const currentCapacity = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
+        const expansionAmount = currentCapacity * capex.maxCapacityAddPct;
+        if (expansionAmount <= 0) return;
+
+        const leadTime = node.leadTimeDebottleneck || 6;
+        const onlineMonth = month + leadTime;
+
+        state.dynamicExpansions.push({
+          month: onlineMonth,
+          capacityAdd: expansionAmount
+        });
+        state.lastCapexTriggerMonth = month;
+        state.capexExpansionCount++;
+      });
+    }
 
     // ============================================
     // PHASE 5: Predictive supply elasticity

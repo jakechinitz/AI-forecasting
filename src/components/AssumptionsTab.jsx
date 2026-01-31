@@ -57,10 +57,18 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
           <input
             type="number"
             step="0.01"
-            value={numValue !== undefined ? (numValue * 100).toFixed(0) : ''}
+            value={
+              numValue === null || numValue === undefined || Number.isNaN(numValue)
+                ? ''
+                : (numValue * 100).toFixed(0)
+            }
             onMouseDown={handleRangeSelect}
             onKeyDown={handleFillDown}
             onChange={(e) => {
+              if (e.target.value === '') {
+                onAssumptionChange(category, blockKey, path, null);
+                return;
+              }
               const newValue = parseFloat(e.target.value) / 100;
               if (!Number.isNaN(newValue)) {
                 onAssumptionChange(category, blockKey, path, newValue);
