@@ -852,7 +852,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     // Calculate workload demands using runtime assumptions
     const inferenceDemand = calculateInferenceDemand(month, demandAssumptions);
-    const trainingDemand = calculateTrainingDemand(month, demandAssumptions, efficiencyAssumptions);
+    const trainingThrottle = calculateTrainingThrottle(month, results);
+    const trainingDemandBase = calculateTrainingDemand(month, demandAssumptions, efficiencyAssumptions);
+    const trainingDemand = {
+      ...trainingDemandBase,
+      frontierRuns: trainingDemandBase.frontierRuns * trainingThrottle,
+      midtierRuns: trainingDemandBase.midtierRuns * trainingThrottle,
+      frontierAccelHours: trainingDemandBase.frontierAccelHours * trainingThrottle,
+      midtierAccelHours: trainingDemandBase.midtierAccelHours * trainingThrottle
+    };
     const continualLearningDemand = calculateContinualLearningDemand(month, demandAssumptions);
 
     // Calculate total accelerator hours with calibration (now includes intensity growth + continual learning)
@@ -1082,6 +1090,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
           month,
           demandAssumptions
         );
+        if (node.id === 'training_frontier' || node.id === 'training_midtier') {
+          workloadDemand *= trainingThrottle;
+        }
 
         // Store workload demand but use neutral values for market metrics
         nodeResults.demand.push(workloadDemand);
