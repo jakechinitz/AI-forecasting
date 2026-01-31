@@ -117,19 +117,19 @@ const DEMAND_YEAR1 = {
   // Inference demand growth (CAGR)
   inferenceGrowth: {
     consumer: {
-      value: 0.40,  // 40% annual growth
+      value: 2.00,  // 3x annual growth
       confidence: 'medium',
       source: 'Usage growth + consumer adoption, 2024-2026 trend',
       historicalRange: [0.25, 0.60]
     },
     enterprise: {
-      value: 0.55,  // 55% annual growth
+      value: 1.60,  // 160% annual growth
       confidence: 'medium',
       source: 'Enterprise AI adoption surveys, cloud earnings',
       historicalRange: [0.35, 0.80]
     },
     agentic: {
-      value: 1.00,  // 100% annual growth (doubling)
+      value: 2.50,  // 250% annual growth
       confidence: 'low',
       source: 'Emerging category, high uncertainty',
       historicalRange: [0.50, 2.00]
@@ -214,6 +214,22 @@ const DEMAND_YEARLY_BLOCKS = FIRST_FIVE_YEAR_KEYS.reduce((acc, key, index) => {
   }
   return acc;
 }, {});
+
+DEMAND_YEARLY_BLOCKS.year2.inferenceGrowth.consumer.value = 2.00;
+DEMAND_YEARLY_BLOCKS.year2.inferenceGrowth.enterprise.value = 1.30;
+DEMAND_YEARLY_BLOCKS.year2.inferenceGrowth.agentic.value = 2.00;
+
+DEMAND_YEARLY_BLOCKS.year3.inferenceGrowth.consumer.value = 1.00;
+DEMAND_YEARLY_BLOCKS.year3.inferenceGrowth.enterprise.value = 1.00;
+DEMAND_YEARLY_BLOCKS.year3.inferenceGrowth.agentic.value = 1.50;
+
+DEMAND_YEARLY_BLOCKS.year4.inferenceGrowth.consumer.value = 0.60;
+DEMAND_YEARLY_BLOCKS.year4.inferenceGrowth.enterprise.value = 0.55;
+DEMAND_YEARLY_BLOCKS.year4.inferenceGrowth.agentic.value = 0.90;
+
+DEMAND_YEARLY_BLOCKS.year5.inferenceGrowth.consumer.value = 0.50;
+DEMAND_YEARLY_BLOCKS.year5.inferenceGrowth.enterprise.value = 0.45;
+DEMAND_YEARLY_BLOCKS.year5.inferenceGrowth.agentic.value = 0.70;
 
 export const DEMAND_ASSUMPTIONS = {
   ...DEMAND_YEARLY_BLOCKS,

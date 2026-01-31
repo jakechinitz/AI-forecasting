@@ -406,6 +406,15 @@
   background: var(--bg-secondary);
 }
 
+.assumptions-input-cell.is-selected {
+  background: rgba(79, 70, 229, 0.12);
+}
+
+.assumption-cell.is-selected input {
+  border-color: rgba(79, 70, 229, 0.6);
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
+}
+
 .assumptions-table--metrics td {
   background: var(--bg-tertiary);
 }
