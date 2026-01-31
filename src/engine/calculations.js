@@ -1349,16 +1349,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
           forecastDemand = nodeResults?.demand?.[nodeResults.demand.length - 1] || 0;
         }
 
-        const forecastTightness = calculateTightness(
-          forecastDemand,
-          state.backlog,
-          forecastSupplyPotential,
-          state.inventory
-        );
+        const forecastDemandGap = forecastDemand - forecastSupplyPotential;
+        const demandRatio = forecastDemand / (forecastSupplyPotential + EPSILON);
 
-        if (forecastTightness >= ps.shortageThreshold) {
+        if (forecastDemandGap > 0 && demandRatio >= ps.shortageThreshold) {
           const currentCapacity = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
-          const expansionAmount = currentCapacity * ps.expansionFraction;
+          const utilizationFactor = Math.max(EPSILON, maxUtilization * forecastYield);
+          const capacityGap = forecastDemandGap / utilizationFactor;
+          const expansionAmount = Math.max(currentCapacity * ps.expansionFraction, capacityGap);
           const leadTime = node.leadTimeDebottleneck || 6;
           const onlineMonth = month + leadTime;
 
