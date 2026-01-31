@@ -795,6 +795,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     nodeState[node.id] = {
       inventory: (scenarioOverrides?.startingState?.inventoryByNode?.[node.id] ??
+        node.startingInventory ??
         ((node.inventoryBufferTarget || 0) * (node.startingCapacity || 0) / 4)),
       backlog: (scenarioOverrides?.startingState?.backlogByNode?.[node.id] ??
         node.startingBacklog ?? 0),
