@@ -126,6 +126,47 @@ export function clearGrowthCache() {
   // No-op (Run-scoped cache used)
 }
 
+function getDemandBlockForMonth(month, assumptions) {
+  const blockKey = getBlockKeyForMonth(month);
+  return assumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
+}
+
+function calculateInferenceDemand(month, demandBlock) {
+  const segments = ['consumer', 'enterprise', 'agentic'];
+  const demand = { total: 0 };
+  segments.forEach((segment) => {
+    const base = resolveAssumptionValue(
+      demandBlock?.workloadBase?.inferenceTokensPerMonth?.[segment],
+      0
+    );
+    const growthRate = resolveAssumptionValue(
+      demandBlock?.inferenceGrowth?.[segment]?.value,
+      0
+    );
+    const value = base * Math.pow(1 + growthRate, month / 12);
+    demand[segment] = value;
+    demand.total += value;
+  });
+  return demand;
+}
+
+function calculateTrainingDemand(month, demandBlock) {
+  const segments = ['frontier', 'midtier'];
+  const demand = {};
+  segments.forEach((segment) => {
+    const base = resolveAssumptionValue(
+      demandBlock?.workloadBase?.trainingRunsPerMonth?.[segment],
+      0
+    );
+    const growthRate = resolveAssumptionValue(
+      demandBlock?.trainingGrowth?.[segment]?.value,
+      0
+    );
+    demand[segment] = base * Math.pow(1 + growthRate, month / 12);
+  });
+  return demand;
+}
+
 export function calculateCapacity(node, month, scenarioOverrides = {}, dynamicExpansions = []) {
   let capacity = node.startingCapacity || 0;
 
