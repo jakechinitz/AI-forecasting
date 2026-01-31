@@ -107,6 +107,9 @@ function calculateHybridBondingAdoption(month) {
   return target - (target - initial) * Math.pow(2, -month / Math.max(1, halflifeMonths));
 }
 
+// NOTE: Component node demand is derived from TRANSLATION_INTENSITIES and gpuToComponentDemands.
+// Node inputIntensity values for these components are informational only to avoid double-counting.
+
 // ============================================
 // CALIBRATION PARAMETERS
 // These ensure month-0 demand matches reality
