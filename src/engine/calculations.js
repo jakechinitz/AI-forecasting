@@ -937,8 +937,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuNode = NODES.find(n => n.id === 'gpu_datacenter');
     const gpuState = nodeState['gpu_datacenter'];
     const gpuResults = results.nodes['gpu_datacenter'];
-    let gpuBacklogIn = 0;
-    let gpuInventoryIn = 0;
+    const gpuBacklogIn = gpuState.backlog;
+    const gpuInventoryIn = gpuState.inventory;
 
     // Calculate GPU capacity and raw shipments (before gating)
     const gpuCapacity = calculateCapacity(gpuNode, month, scenarioOverrides, gpuState.dynamicExpansions);
@@ -953,7 +953,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuDemand = gpuGap + gpuRetirements;
 
     // OPTION 3: Component demand driven by production requirement
-    const gpuProductionRequirement = gpuDemand + gpuState.backlog;
+    const gpuProductionRequirement = gpuDemand + gpuBacklogIn;
     const deploymentVelocityCap = calculateDeploymentVelocityCap(month, scenarioOverrides, nodeState);
     const gpuPurchasesThisMonth = Math.min(gpuProductionRequirement, deploymentVelocityCap);
 
@@ -1060,15 +1060,18 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const maxByPower = componentSupply.datacenter_mw / MWperGPU;
 
     // GPU delivered = min of production and all gating components
-    const gpuAvailableToShip = Math.min(
-      gpuShipmentsRaw + gpuState.inventory,
-      gpuDemand + gpuState.backlog,
-      deploymentVelocityCap
+    const gpuAvailableSupply = gpuShipmentsRaw + gpuInventoryIn;
+    const gpuDelivered = Math.min(
+      gpuAvailableSupply,
+      gpuDemand + gpuBacklogIn,
+      deploymentVelocityCap,
+      maxByHBM,
+      maxByCoWoS,
+      maxByPower
     );
-    const gpuDelivered = Math.min(gpuAvailableToShip, maxByHBM, maxByCoWoS, maxByPower);
 
     // Idle GPUs = produced/shipped but blocked by component constraints
-    const idleGpus = Math.max(0, gpuAvailableToShip - gpuDelivered);
+    const idleGpus = Math.max(0, gpuAvailableSupply - gpuDelivered);
 
     // ============================================
     // PHASE 4: Finalize GPU node results
@@ -1088,12 +1091,6 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuBacklogOut = Math.max(0, gpuDemand + gpuBacklogIn - gpuDelivered);
     gpuState.inventory = gpuInventoryOut;
     gpuState.backlog = gpuBacklogOut;
-
-    // Cap backlog to current shortfall — prevents unbounded backlog growth
-    // that would cause installed base to overshoot required base when cleared.
-    // As deliveries close the gap, excess orders are effectively cancelled.
-    const gpuCurrentShortfall = Math.max(0, requiredGpuBase - gpuState.installedBase);
-    gpuState.backlog = Math.min(gpuState.backlog, gpuCurrentShortfall);
 
     // Store GPU results
     gpuResults.demand.push(gpuDemand);
