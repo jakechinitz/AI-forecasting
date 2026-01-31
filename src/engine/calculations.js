@@ -1084,7 +1084,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     // Update inventory (deliverable inventory only; idle tracked separately)
     // Backlog is demand not met
-    const gpuInventoryOut = Math.max(0, gpuAvailableSupply - gpuDelivered);
+    const gpuInventoryOut = Math.max(0, gpuAvailableToShip - gpuDelivered);
     const gpuBacklogOut = Math.max(0, gpuDemand + gpuBacklogIn - gpuDelivered);
     gpuState.inventory = gpuInventoryOut;
     gpuState.backlog = gpuBacklogOut;
