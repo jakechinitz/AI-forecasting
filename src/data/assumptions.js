@@ -659,9 +659,9 @@ export const TRANSLATION_INTENSITIES = {
       source: 'NVIDIA specs'
     },
     cowosWaferEquivPerGpu: {
-      value: 0.5,  // 2 GPUs per CoWoS wafer
-      confidence: 'high',
-      source: 'Die size analysis'
+      value: 0.3,  // ~3.3 GPUs per CoWoS wafer-equiv (package vs wafer-adjusted)
+      confidence: 'medium',
+      source: 'Die size analysis, wafer-equivalent normalization'
     },
     hybridBondingPerGpu: {
       value: 1.0,  // Wafer-equiv per GPU if fully adopted
@@ -842,7 +842,7 @@ export const SCENARIOS = {
         backlogByNode: {
           gpu_datacenter: 900000,   // ~900K GPU order backlog
           hbm_stacks: 7200000,     // 900K GPUs × 8 stacks = 7.2M stacks backlog
-          cowos_capacity: 450000,  // 900K GPUs × 0.5 wafer-equiv = 450K wafer backlog
+          cowos_capacity: 270000,  // 900K GPUs × 0.3 wafer-equiv = 270K wafer backlog
           server_assembly: 112500, // 900K / 8 GPUs per server
           datacenter_mw: 900       // 900K GPUs × 0.001 MW
         }
