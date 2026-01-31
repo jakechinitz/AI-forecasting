@@ -274,18 +274,18 @@
 
 /* ─── Section headers ─── */
 .section {
-  margin-bottom: var(--space-md);
+  margin-bottom: var(--space-sm);
 }
 
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: var(--space-sm);
+  margin-bottom: 6px;
 }
 
 .section-title {
-  font-size: 0.9375rem;
+  font-size: 0.875rem;
   font-weight: 500;
   color: var(--text-primary);
 }
@@ -305,13 +305,14 @@
 .input-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  gap: 3px;
 }
 
 .input-suffix {
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   color: var(--text-muted);
-  min-width: 32px;
+  white-space: nowrap;
 }
 
 .input-help {
@@ -330,7 +331,7 @@
 .assumption-block {
   background: var(--bg-primary);
   border-radius: var(--radius-lg);
-  padding: var(--space-lg);
+  padding: var(--space-md) var(--space-lg);
   border: 1px solid var(--border-color);
   box-shadow: var(--shadow-sm);
   overflow-x: auto;
@@ -368,14 +369,16 @@
 }
 
 .assumptions-row-title {
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   font-weight: 400;
   color: var(--text-primary);
+  line-height: 1.2;
 }
 
 .assumptions-row-help {
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
   color: var(--text-muted);
+  line-height: 1.2;
 }
 
 .assumptions-table-wrap {
@@ -391,20 +394,26 @@
 
 .assumptions-table th,
 .assumptions-table td {
-  padding: 5px 8px;
+  padding: 4px 6px;
   border-bottom: 1px solid var(--border-color-light);
+  border-right: 1px solid var(--border-color-light);
   text-align: center;
   vertical-align: middle;
+}
+
+.assumptions-table th:last-child,
+.assumptions-table td:last-child {
+  border-right: none;
 }
 
 .assumptions-table th {
   background: var(--bg-tertiary);
   font-size: 0.6875rem;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   color: var(--text-muted);
   font-weight: 500;
-  padding: 6px 8px;
+  padding: 5px 6px;
 }
 
 .assumptions-table tr:last-child td {
@@ -412,12 +421,12 @@
 }
 
 .assumptions-header-cell {
-  min-width: 100px;
+  min-width: 85px;
 }
 
 .assumptions-header-label {
   text-align: left;
-  min-width: 120px;
+  min-width: 100px;
 }
 
 .assumptions-label-cell {
@@ -438,12 +447,23 @@
   box-shadow: 0 0 0 2px rgba(29, 155, 240, 0.1);
 }
 
+.assumptions-table input[type="number"] {
+  padding: 3px 5px;
+  font-size: 0.8125rem;
+  border-color: var(--border-color-light);
+  text-align: right;
+}
+
+.assumptions-table input[type="number"]:focus {
+  border-color: var(--accent-primary);
+}
+
 .assumptions-table--metrics td {
   background: var(--bg-tertiary);
 }
 
 .assumptions-year-cell {
-  width: 110px;
+  width: 90px;
 }
 
 .assumptions-metric {
