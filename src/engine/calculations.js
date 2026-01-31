@@ -31,6 +31,7 @@ import {
   GLOBAL_PARAMS,
   DEMAND_ASSUMPTIONS,
   EFFICIENCY_ASSUMPTIONS,
+  FIRST_ASSUMPTION_KEY,
   getBlockKeyForMonth,
   calculateMt,
   calculateSt,
@@ -140,12 +141,12 @@ export function calculateEfficiencyMultipliers(month, assumptions) {
     const block = assumptions?.[blockKey] || EFFICIENCY_ASSUMPTIONS[blockKey];
 
     // Get annual rates from the active block
-    // Defaults match assumptions.js block0 (deployed efficiency rates)
-    const m_infer = block?.modelEfficiency?.m_inference?.value ?? 0.25;
-    const m_train = block?.modelEfficiency?.m_training?.value ?? 0.15;
-    const s_infer = block?.systemsEfficiency?.s_inference?.value ?? 0.15;
-    const s_train = block?.systemsEfficiency?.s_training?.value ?? 0.12;
-    const h = block?.hardwareEfficiency?.h?.value ?? 0.20;
+    // Defaults match assumptions.js year1 (deployed efficiency rates)
+    const m_infer = block?.modelEfficiency?.m_inference?.value ?? 0.18;
+    const m_train = block?.modelEfficiency?.m_training?.value ?? 0.10;
+    const s_infer = block?.systemsEfficiency?.s_inference?.value ?? 0.10;
+    const s_train = block?.systemsEfficiency?.s_training?.value ?? 0.08;
+    const h = block?.hardwareEfficiency?.h?.value ?? 0.15;
 
     // Convert annual rates to monthly multipliers
     // M_t: (1-m)^(1/12) - decreases each month
@@ -405,7 +406,7 @@ export function calculateInferenceDemand(month, assumptions) {
   const blockKey = getBlockKeyForMonth(month);
   const block = assumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
   const base = block?.workloadBase?.inferenceTokensPerMonth ||
-               DEMAND_ASSUMPTIONS.block0.workloadBase.inferenceTokensPerMonth;
+               DEMAND_ASSUMPTIONS[FIRST_ASSUMPTION_KEY].workloadBase.inferenceTokensPerMonth;
 
   const consumerBase = base.consumer;    // 5T tokens/month (Jan 2026)
   const enterpriseBase = base.enterprise; // 6T tokens/month
@@ -436,9 +437,9 @@ export function calculateTrainingDemand(month, demandAssumptions, efficiencyAssu
   const blockKey = getBlockKeyForMonth(month);
   const block = demandAssumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
   const baseTrain = block?.workloadBase?.trainingRunsPerMonth ||
-                    DEMAND_ASSUMPTIONS.block0.workloadBase.trainingRunsPerMonth;
+                    DEMAND_ASSUMPTIONS[FIRST_ASSUMPTION_KEY].workloadBase.trainingRunsPerMonth;
   const baseCompute = block?.workloadBase?.trainingComputePerRun ||
-                      DEMAND_ASSUMPTIONS.block0.workloadBase.trainingComputePerRun;
+                      DEMAND_ASSUMPTIONS[FIRST_ASSUMPTION_KEY].workloadBase.trainingComputePerRun;
 
   const frontierBase = baseTrain.frontier;   // runs/month
   const midtierBase = baseTrain.midtier;     // runs/month
@@ -491,9 +492,9 @@ export function calculateIntensityMultiplier(month, assumptions) {
     const blockKey = getBlockKeyForMonth(m);
     const block = assumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
 
-    // Default intensity growth: 25% per year (context + reasoning + agents)
-    // This partially offsets the ~63% efficiency gain
-    const intensityGrowthRate = block?.intensityGrowth?.value ?? 0.25;
+    // Default intensity growth: 40% per year (context + reasoning + agents)
+    // This partially offsets efficiency gains
+    const intensityGrowthRate = block?.intensityGrowth?.value ?? 0.40;
 
     if (m === 0) {
       intensityCache[m] = 1;
@@ -546,7 +547,7 @@ export function calculateContinualLearningDemand(month, demandAssumptions) {
     if (m === 0) {
       // Base continual learning demand at month 0 - read from workloadBase
       const baseCL = block?.workloadBase?.continualLearningBase ||
-                     DEMAND_ASSUMPTIONS.block0.workloadBase.continualLearningBase;
+                     DEMAND_ASSUMPTIONS[FIRST_ASSUMPTION_KEY].workloadBase.continualLearningBase;
       continualLearningCache[m] = {
         accelHours: baseCL.accelHoursPerMonth,  // 150K accel-hours/month
         dataTB: baseCL.dataTB,                   // 1500 TB base storage
@@ -594,7 +595,7 @@ export function calculateEffectiveHbmPerGpu(month, demandAssumptions) {
   // Month 0: base accel-hours (from workloadBase) = 10% adoption
   // Grows toward 90% adoption as compute demand increases
   const baseCL = block?.workloadBase?.continualLearningBase ||
-                 DEMAND_ASSUMPTIONS.block0.workloadBase.continualLearningBase;
+                 DEMAND_ASSUMPTIONS[FIRST_ASSUMPTION_KEY].workloadBase.continualLearningBase;
   const baseAccelHours = baseCL.accelHoursPerMonth;
   const growthRatio = continualLearning.accelHours / baseAccelHours;
 
@@ -1195,48 +1196,137 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     // ============================================
     // PHASE 5: Predictive supply elasticity
-    // Check if any node's projected demand exceeds capacity threshold
-    // If so, trigger a dynamic expansion (delayed by lead time)
+    // Trigger dynamic expansions when 6-month forecast shows shortages
     // ============================================
     const ps = GLOBAL_PARAMS.predictiveSupply;
     if (ps) {
+      const forecastMonth = Math.min(month + ps.forecastHorizonMonths, months - 1);
+
+      const forecastInference = calculateInferenceDemand(forecastMonth, demandAssumptions);
+      const forecastTraining = calculateTrainingDemand(forecastMonth, demandAssumptions, efficiencyAssumptions);
+      const forecastContinual = calculateContinualLearningDemand(forecastMonth, demandAssumptions);
+      const forecastInferenceAccelHours = calculateInferenceAccelHours(
+        forecastInference.total,
+        forecastMonth,
+        efficiencyAssumptions,
+        demandAssumptions
+      );
+      const forecastTotalAccelHours = (forecastInferenceAccelHours +
+        forecastTraining.frontierAccelHours +
+        forecastTraining.midtierAccelHours +
+        forecastContinual.accelHours) * CALIBRATION.globalAccelHoursMultiplier;
+      const forecastRequiredGpuBase = accelHoursToRequiredGpuBase(forecastTotalAccelHours);
+
+      const forecastGpuState = nodeState['gpu_datacenter'];
+      const forecastGpuRetirements = forecastGpuState.installedBase / forecastGpuState.lifetimeMonths;
+      const forecastGpuGap = Math.max(0, forecastRequiredGpuBase - forecastGpuState.installedBase);
+      const forecastGpuDemand = forecastGpuGap + forecastGpuRetirements;
+      const forecastGpuProductionRequirement = forecastGpuDemand + forecastGpuState.backlog;
+
+      const forecastEffectiveHbmPerGpu = calculateEffectiveHbmPerGpu(forecastMonth, demandAssumptions);
+      const forecastComponentDemands = gpuToComponentDemands(
+        forecastGpuProductionRequirement,
+        forecastEffectiveHbmPerGpu
+      );
+      const forecastPowerDemands = dcMwToPowerDemands(forecastComponentDemands.powerMw);
+
       NODES.forEach(node => {
         if (!node.startingCapacity || node.group === 'A') return;
 
         const state = nodeState[node.id];
-        const nodeResults = results.nodes[node.id];
 
         // Check cooldown and expansion cap
         if (state.dynamicExpansionCount >= ps.maxDynamicExpansions) return;
         if (month - state.lastTriggerMonth < ps.cooldownMonths) return;
 
-        // Get current tightness - use most recent
-        const currentTightness = nodeResults.tightness[nodeResults.tightness.length - 1] || 1;
+        const forecastCapacity = calculateCapacity(node, forecastMonth, scenarioOverrides, state.dynamicExpansions);
+        const forecastYield = calculateNodeYield(node, forecastMonth);
+        const maxUtilization = node.maxCapacityUtilization || 0.95;
+        const forecastSupplyPotential = forecastCapacity * maxUtilization * forecastYield;
 
-        // Trigger if tightness exceeds threshold for this and recent months
-        if (currentTightness >= ps.shortageThreshold) {
-          // Check persistence: need at least 3 consecutive tight months
-          const recentTight = state.tightnessHistory.slice(-3);
-          const persistentShortage = recentTight.length >= 3 &&
-                                     recentTight.every(t => t >= ps.shortageThreshold);
+        let forecastDemand = 0;
+        if (node.id === 'gpu_datacenter') {
+          forecastDemand = forecastGpuProductionRequirement;
+        } else if (node.id === 'gpu_inference') {
+          const inferenceState = nodeState['gpu_inference'];
+          const retirements = inferenceState.installedBase / inferenceState.lifetimeMonths;
+          const inferenceRequiredBase = forecastRequiredGpuBase * 0.3;
+          const gap = Math.max(0, inferenceRequiredBase - inferenceState.installedBase);
+          forecastDemand = gap + retirements;
+        } else if (node.id === 'hbm_stacks') {
+          forecastDemand = forecastComponentDemands.hbmStacks;
+        } else if (node.id === 'cowos_capacity') {
+          forecastDemand = forecastComponentDemands.cowosWaferEquiv;
+        } else if (node.id === 'datacenter_mw') {
+          forecastDemand = forecastComponentDemands.powerMw;
+        } else if (node.id === 'advanced_wafers') {
+          forecastDemand = forecastComponentDemands.advancedWafers;
+        } else if (node.id === 'hybrid_bonding') {
+          forecastDemand = forecastComponentDemands.hybridBonding;
+        } else if (node.id === 'abf_substrate') {
+          forecastDemand = forecastComponentDemands.abfSubstrate;
+        } else if (node.id === 'osat_capacity') {
+          forecastDemand = forecastComponentDemands.osatUnits;
+        } else if (node.id === 'dram_server') {
+          forecastDemand = forecastComponentDemands.serverDramGb;
+        } else if (node.id === 'ssd_datacenter') {
+          forecastDemand = forecastComponentDemands.ssdTb;
+        } else if (node.id === 'cpu_server') {
+          forecastDemand = forecastComponentDemands.cpus;
+        } else if (node.id === 'dpu_nic') {
+          forecastDemand = forecastComponentDemands.dpuNics;
+        } else if (node.id === 'switch_asics') {
+          forecastDemand = forecastComponentDemands.switchAsics;
+        } else if (node.id === 'optical_transceivers') {
+          forecastDemand = forecastComponentDemands.transceivers;
+        } else if (node.id === 'infiniband_cables') {
+          forecastDemand = forecastComponentDemands.infinibandCables;
+        } else if (node.id === 'server_assembly') {
+          forecastDemand = forecastComponentDemands.servers;
+        } else if (node.id === 'rack_pdu') {
+          forecastDemand = forecastComponentDemands.servers * 0.25;
+        } else if (node.id === 'liquid_cooling') {
+          forecastDemand = forecastComponentDemands.cdus;
+        } else if (node.id === 'transformers_lpt') {
+          forecastDemand = forecastPowerDemands.transformers;
+        } else if (node.id === 'grid_interconnect') {
+          forecastDemand = forecastPowerDemands.gridApprovals;
+        } else if (node.id === 'power_generation') {
+          forecastDemand = forecastPowerDemands.ppas;
+        } else if (node.id === 'backup_power') {
+          forecastDemand = forecastPowerDemands.backupMw;
+        } else if (node.id === 'dc_construction') {
+          forecastDemand = forecastPowerDemands.dcConstruction;
+        } else if (node.id === 'dc_ops_staff') {
+          forecastDemand = forecastPowerDemands.dcOpsStaff;
+        } else if (node.id === 'euv_tools') {
+          forecastDemand = forecastComponentDemands.advancedWafers * 0.00001;
+        } else if (node.id === 'ml_engineers') {
+          forecastDemand = forecastRequiredGpuBase * 0.005;
+        } else {
+          const nodeResults = results.nodes[node.id];
+          forecastDemand = nodeResults?.demand?.[nodeResults.demand.length - 1] || 0;
+        }
 
-          if (persistentShortage) {
-            // Calculate expansion amount: fraction of current capacity
-            const currentCapacity = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
-            const expansionAmount = currentCapacity * ps.expansionFraction;
+        const forecastTightness = calculateTightness(
+          forecastDemand,
+          state.backlog,
+          forecastSupplyPotential,
+          state.inventory
+        );
 
-            // Delay by lead time (debottleneck time for existing suppliers)
-            const leadTime = node.leadTimeDebottleneck || 6;
-            const onlineMonth = month + leadTime;
+        if (forecastTightness >= ps.shortageThreshold) {
+          const currentCapacity = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
+          const expansionAmount = currentCapacity * ps.expansionFraction;
+          const leadTime = node.leadTimeDebottleneck || 6;
+          const onlineMonth = month + leadTime;
 
-            // Add dynamic expansion
-            state.dynamicExpansions.push({
-              month: onlineMonth,
-              capacityAdd: expansionAmount
-            });
-            state.lastTriggerMonth = month;
-            state.dynamicExpansionCount++;
-          }
+          state.dynamicExpansions.push({
+            month: onlineMonth,
+            capacityAdd: expansionAmount
+          });
+          state.lastTriggerMonth = month;
+          state.dynamicExpansionCount++;
         }
       });
     }

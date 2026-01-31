@@ -75,10 +75,10 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
     <div>
       <div className="tab-header">
         <div>
-          <h1 className="tab-title">Supply Engine</h1>
+          <h1 className="tab-title">Supply Buildout</h1>
           <p className="tab-description">
             Models capacity evolution with committed expansions, lead times, and ramp profiles.
-            Supply = Capacity × Utilization × Yield. Optional expansions trigger when prices are elevated.
+            Supply = Capacity × Utilization × Yield. Endogenous expansions trigger on forecasted shortages.
           </p>
         </div>
       </div>

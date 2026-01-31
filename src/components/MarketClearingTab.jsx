@@ -98,7 +98,7 @@ function MarketClearingTab({ results, selectedNode, onSelectNode }) {
     <div>
       <div className="tab-header">
         <div>
-          <h1 className="tab-title">Market Clearing</h1>
+          <h1 className="tab-title">Market Clearing & Pricing</h1>
           <p className="tab-description">
             Computes tightness ratios, price indices, and inventory levels. Tightness {'>'} 1 indicates
             shortage; {'<'} 1 indicates oversupply. Price index reflects market stress.

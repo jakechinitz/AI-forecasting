@@ -1,57 +1,116 @@
-import React, { useState } from 'react';
+import React, { useMemo } from 'react';
+import { ASSUMPTION_SEGMENTS } from '../data/assumptions.js';
 
 function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSimulating }) {
-  const [activeBlock, setActiveBlock] = useState('block0');
+  const timeBlocks = ASSUMPTION_SEGMENTS;
 
-  const blocks = [
-    { key: 'block0', label: 'Years 0-5', years: '2025-2030' },
-    { key: 'block1', label: 'Years 5-10', years: '2030-2035' },
-    { key: 'block2', label: 'Years 10-15', years: '2035-2040' },
-    { key: 'block3', label: 'Years 15-20', years: '2040-2045' }
-  ];
-
-  const demandBlock = assumptions.demand[activeBlock];
-  const efficiencyBlock = assumptions.efficiency[activeBlock];
-
-  const renderInput = (category, path, label, suffix = '%/yr', help = '', source = '') => {
-    let value = category === 'demand'
-      ? demandBlock
-      : efficiencyBlock;
-
-    // Navigate to nested value
+  const getValue = (category, blockKey, path) => {
+    let value = assumptions?.[category]?.[blockKey];
     for (const key of path) {
       value = value?.[key];
     }
+    return value;
+  };
 
+  const renderInputCell = (category, blockKey, path, suffix) => {
+    const value = getValue(category, blockKey, path);
     const numValue = typeof value === 'object' ? value?.value : value;
-    const confidence = typeof value === 'object' ? value?.confidence : 'medium';
+    const confidence = typeof value === 'object' ? value?.confidence : null;
+    const source = typeof value === 'object' ? value?.source : '';
 
     return (
-      <div className="input-group">
-        <label>{label}</label>
+      <div className="assumption-cell">
         <div className="input-row">
           <input
             type="number"
             step="0.01"
-            value={(numValue * 100).toFixed(0)}
+            value={numValue !== undefined ? (numValue * 100).toFixed(0) : ''}
             onChange={(e) => {
               const newValue = parseFloat(e.target.value) / 100;
-              onAssumptionChange(category, activeBlock, path, newValue);
+              if (!Number.isNaN(newValue)) {
+                onAssumptionChange(category, blockKey, path, newValue);
+              }
             }}
-            style={{ width: '80px' }}
+            style={{ width: '72px' }}
           />
           <span className="input-suffix">{suffix}</span>
           {confidence && (
-            <span className={`confidence-${confidence}`} title={`Confidence: ${confidence}`}>
+            <span
+              className={`confidence-${confidence}`}
+              title={`Confidence: ${confidence}${source ? ` • ${source}` : ''}`}
+            >
               {confidence === 'high' ? '●' : confidence === 'medium' ? '◐' : '○'}
             </span>
           )}
         </div>
-        {source && <div className="input-help">Source: {source}</div>}
-        {help && <div className="input-help">{help}</div>}
       </div>
     );
   };
+
+  const renderYearRow = (block, columns) => (
+    <tr key={block.key}>
+      <td className="assumptions-label-cell assumptions-year-cell">
+        <div className="assumptions-row-title">{block.label}</div>
+        <div className="assumptions-row-help">{block.years}</div>
+      </td>
+      {columns.map((column) => (
+        <td key={`${block.key}-${column.label}`} className="assumptions-input-cell">
+          {column.type === 'metric'
+            ? (
+              <span className="assumptions-metric">
+                {column.format(efficiencySummary[block.key][column.valueKey])}
+              </span>
+            )
+            : renderInputCell(column.category, block.key, column.path, column.suffix)}
+        </td>
+      ))}
+    </tr>
+  );
+
+  const efficiencySummary = useMemo(() => {
+    const calcStats = (blockKey) => {
+      const block = assumptions?.efficiency?.[blockKey];
+      const mInference = block?.modelEfficiency?.m_inference?.value ?? 0;
+      const mTraining = block?.modelEfficiency?.m_training?.value ?? 0;
+      const sInference = block?.systemsEfficiency?.s_inference?.value ?? 0;
+      const sTraining = block?.systemsEfficiency?.s_training?.value ?? 0;
+      const h = block?.hardwareEfficiency?.h?.value ?? 0;
+
+      const inferenceFactor = (1 - mInference) / ((1 + sInference) * (1 + h));
+      const trainingFactor = (1 - mTraining) / ((1 + sTraining) * (1 + h));
+
+      const inferenceGain = 1 / inferenceFactor;
+      const trainingGain = 1 / trainingFactor;
+
+      const totalGain = Math.sqrt(inferenceGain * trainingGain);
+
+      return {
+        inferenceGain,
+        trainingGain,
+        totalGain,
+        inferenceOom: Math.log10(inferenceGain),
+        trainingOom: Math.log10(trainingGain),
+        totalOom: Math.log10(totalGain)
+      };
+    };
+
+    return timeBlocks.reduce((acc, block) => {
+      acc[block.key] = calcStats(block.key);
+      return acc;
+    }, {});
+  }, [assumptions, timeBlocks]);
+
+  const renderHeaderRow = (columns, label = 'Year') => (
+    <tr>
+      <th className="assumptions-header-cell assumptions-header-label">{label}</th>
+      {columns.map((column) => (
+        <th key={column.label} className="assumptions-header-cell">
+          <div className="assumptions-col-title">{column.label}</div>
+          {column.help && <div className="assumptions-col-years">{column.help}</div>}
+        </th>
+      ))}
+    </tr>
+  );
 
   return (
     <div>
@@ -59,8 +118,8 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
         <div>
           <h1 className="tab-title">Assumptions</h1>
           <p className="tab-description">
-            Configure demand growth, efficiency improvements, and supply expansion rates.
-            Changes are applied when you click "Run Simulation".
+            Adjust demand growth, token efficiency, and supply expansion assumptions in one view.
+            Years 1-5 are editable individually, with rolling 5-year blocks beyond that.
           </p>
         </div>
         <button
@@ -72,24 +131,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
         </button>
       </div>
 
-      {/* Time Block Selector */}
-      <div className="tabs" style={{ marginBottom: 'var(--space-lg)' }}>
-        {blocks.map(block => (
-          <button
-            key={block.key}
-            className={`tab ${activeBlock === block.key ? 'active' : ''}`}
-            onClick={() => setActiveBlock(block.key)}
-          >
-            {block.label}
-            <span style={{ fontSize: '0.6875rem', marginLeft: '4px', opacity: 0.7 }}>
-              ({block.years})
-            </span>
-          </button>
-        ))}
-      </div>
-
-      <div className="grid grid-2" style={{ gap: 'var(--space-lg)' }}>
-        {/* Demand Assumptions */}
+      <div className="assumptions-grid">
         <div className="assumption-block">
           <div className="assumption-block-header">
             <h3 className="assumption-block-title">Demand Growth</h3>
@@ -97,117 +139,93 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
           </div>
 
           <div className="section">
-            <h4 className="section-title" style={{ marginBottom: 'var(--space-md)' }}>
-              Inference Demand
-            </h4>
-            <div className="grid grid-3" style={{ gap: 'var(--space-md)' }}>
-              {renderInput(
-                'demand',
-                ['inferenceGrowth', 'consumer'],
-                'Consumer',
-                '%/yr',
-                '',
-                demandBlock?.inferenceGrowth?.consumer?.source
-              )}
-              {renderInput(
-                'demand',
-                ['inferenceGrowth', 'enterprise'],
-                'Enterprise',
-                '%/yr',
-                '',
-                demandBlock?.inferenceGrowth?.enterprise?.source
-              )}
-              {renderInput(
-                'demand',
-                ['inferenceGrowth', 'agentic'],
-                'Agentic',
-                '%/yr',
-                'High uncertainty',
-                demandBlock?.inferenceGrowth?.agentic?.source
-              )}
+            <h4 className="section-title">Inference Demand</h4>
+            {(() => {
+              const columns = [
+                { category: 'demand', path: ['inferenceGrowth', 'consumer'], label: 'Consumer', suffix: '%/yr' },
+                { category: 'demand', path: ['inferenceGrowth', 'enterprise'], label: 'Enterprise', suffix: '%/yr' },
+                { category: 'demand', path: ['inferenceGrowth', 'agentic'], label: 'Agentic', suffix: '%/yr', help: 'High uncertainty' }
+              ];
+              return (
+            <div className="assumptions-table-wrap">
+              <table className="assumptions-table">
+                <thead>{renderHeaderRow(columns)}</thead>
+                <tbody>
+                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                </tbody>
+              </table>
             </div>
+              );
+            })()}
           </div>
 
           <div className="section">
-            <h4 className="section-title" style={{ marginBottom: 'var(--space-md)' }}>
-              Training Demand
-            </h4>
-            <div className="grid grid-2" style={{ gap: 'var(--space-md)' }}>
-              {renderInput(
-                'demand',
-                ['trainingGrowth', 'frontier'],
-                'Frontier Runs',
-                '%/yr',
-                '',
-                demandBlock?.trainingGrowth?.frontier?.source
-              )}
-              {renderInput(
-                'demand',
-                ['trainingGrowth', 'midtier'],
-                'Mid-tier Runs',
-                '%/yr',
-                '',
-                demandBlock?.trainingGrowth?.midtier?.source
-              )}
+            <h4 className="section-title">Training Demand</h4>
+            {(() => {
+              const columns = [
+                { category: 'demand', path: ['trainingGrowth', 'frontier'], label: 'Frontier Runs', suffix: '%/yr' },
+                { category: 'demand', path: ['trainingGrowth', 'midtier'], label: 'Mid-tier Runs', suffix: '%/yr' }
+              ];
+              return (
+            <div className="assumptions-table-wrap">
+              <table className="assumptions-table">
+                <thead>{renderHeaderRow(columns)}</thead>
+                <tbody>
+                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                </tbody>
+              </table>
             </div>
+              );
+            })()}
           </div>
 
           <div className="section">
-            <h4 className="section-title" style={{ marginBottom: 'var(--space-md)' }}>
-              Continual Learning
-            </h4>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 'var(--space-md)' }}>
-              Fine-tuning, RLHF, RAG updates — drives compute + memory/storage demand
-            </p>
-            <div className="grid grid-3" style={{ gap: 'var(--space-md)' }}>
-              {renderInput(
-                'demand',
-                ['continualLearning', 'computeGrowth'],
-                'Compute',
-                '%/yr',
-                '',
-                demandBlock?.continualLearning?.computeGrowth?.source
-              )}
-              {renderInput(
-                'demand',
-                ['continualLearning', 'dataStorageGrowth'],
-                'Data Storage',
-                '%/yr',
-                '',
-                demandBlock?.continualLearning?.dataStorageGrowth?.source
-              )}
-              {renderInput(
-                'demand',
-                ['continualLearning', 'networkBandwidthGrowth'],
-                'Network BW',
-                '%/yr',
-                '',
-                demandBlock?.continualLearning?.networkBandwidthGrowth?.source
-              )}
+            <h4 className="section-title">Continual Learning</h4>
+            {(() => {
+              const columns = [
+                { category: 'demand', path: ['continualLearning', 'computeGrowth'], label: 'Compute', suffix: '%/yr' },
+                { category: 'demand', path: ['continualLearning', 'dataStorageGrowth'], label: 'Data Storage', suffix: '%/yr' },
+                { category: 'demand', path: ['continualLearning', 'networkBandwidthGrowth'], label: 'Network BW', suffix: '%/yr' }
+              ];
+              return (
+            <div className="assumptions-table-wrap">
+              <table className="assumptions-table">
+                <thead>{renderHeaderRow(columns)}</thead>
+                <tbody>
+                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                </tbody>
+              </table>
             </div>
+              );
+            })()}
           </div>
 
           <div className="section">
-            <h4 className="section-title" style={{ marginBottom: 'var(--space-md)' }}>
-              Inference Intensity
-            </h4>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 'var(--space-md)' }}>
-              Compute per token growth (context, reasoning, agents)
-            </p>
-            <div className="grid grid-1" style={{ gap: 'var(--space-md)' }}>
-              {renderInput(
-                'demand',
-                ['intensityGrowth'],
-                'Intensity Growth',
-                '%/yr',
-                '',
-                demandBlock?.intensityGrowth?.source
-              )}
+            <h4 className="section-title">Inference Intensity</h4>
+            {(() => {
+              const columns = [
+                {
+                  category: 'demand',
+                  path: ['intensityGrowth'],
+                  label: 'Compute per Token',
+                  suffix: '%/yr',
+                  help: 'Context length + reasoning + agent loops'
+                }
+              ];
+              return (
+            <div className="assumptions-table-wrap">
+              <table className="assumptions-table">
+                <thead>{renderHeaderRow(columns)}</thead>
+                <tbody>
+                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                </tbody>
+              </table>
             </div>
+              );
+            })()}
           </div>
         </div>
 
-        {/* Efficiency Assumptions */}
         <div className="assumption-block">
           <div className="assumption-block-header">
             <h3 className="assumption-block-title">Efficiency Improvements</h3>
@@ -215,140 +233,134 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
           </div>
 
           <div className="section">
-            <h4 className="section-title" style={{ marginBottom: 'var(--space-md)' }}>
-              Model Efficiency (Compute/Token Reduction)
-            </h4>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 'var(--space-md)' }}>
-              M<sub>t</sub> = (1-m)<sup>t/12</sup> — Compute per token decreases
-            </p>
-            <div className="grid grid-2" style={{ gap: 'var(--space-md)' }}>
-              {renderInput(
-                'efficiency',
-                ['modelEfficiency', 'm_inference'],
-                'Inference',
-                '%/yr',
-                '',
-                efficiencyBlock?.modelEfficiency?.m_inference?.source
-              )}
-              {renderInput(
-                'efficiency',
-                ['modelEfficiency', 'm_training'],
-                'Training',
-                '%/yr',
-                '',
-                efficiencyBlock?.modelEfficiency?.m_training?.source
-              )}
+            <h4 className="section-title">Model Efficiency (Compute/Token Reduction)</h4>
+            {(() => {
+              const columns = [
+                { category: 'efficiency', path: ['modelEfficiency', 'm_inference'], label: 'Inference', suffix: '%/yr' },
+                { category: 'efficiency', path: ['modelEfficiency', 'm_training'], label: 'Training', suffix: '%/yr' }
+              ];
+              return (
+            <div className="assumptions-table-wrap">
+              <table className="assumptions-table">
+                <thead>{renderHeaderRow(columns)}</thead>
+                <tbody>
+                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                </tbody>
+              </table>
             </div>
+              );
+            })()}
           </div>
 
           <div className="section">
-            <h4 className="section-title" style={{ marginBottom: 'var(--space-md)' }}>
-              Systems Throughput (Software Gains)
-            </h4>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 'var(--space-md)' }}>
-              S<sub>t</sub> = (1+s)<sup>t/12</sup> — Throughput increases
-            </p>
-            <div className="grid grid-2" style={{ gap: 'var(--space-md)' }}>
-              {renderInput(
-                'efficiency',
-                ['systemsEfficiency', 's_inference'],
-                'Inference',
-                '%/yr',
-                'vLLM, batching, speculative decoding'
-              )}
-              {renderInput(
-                'efficiency',
-                ['systemsEfficiency', 's_training'],
-                'Training',
-                '%/yr',
-                'Distributed training optimizations'
-              )}
+            <h4 className="section-title">Systems Throughput (Software Gains)</h4>
+            {(() => {
+              const columns = [
+                {
+                  category: 'efficiency',
+                  path: ['systemsEfficiency', 's_inference'],
+                  label: 'Inference',
+                  suffix: '%/yr',
+                  help: 'Batching, kernels, schedulers'
+                },
+                {
+                  category: 'efficiency',
+                  path: ['systemsEfficiency', 's_training'],
+                  label: 'Training',
+                  suffix: '%/yr',
+                  help: 'Distributed training optimizations'
+                }
+              ];
+              return (
+            <div className="assumptions-table-wrap">
+              <table className="assumptions-table">
+                <thead>{renderHeaderRow(columns)}</thead>
+                <tbody>
+                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                </tbody>
+              </table>
             </div>
+              );
+            })()}
           </div>
 
           <div className="section">
-            <h4 className="section-title" style={{ marginBottom: 'var(--space-md)' }}>
-              Hardware Throughput (Chip Improvements)
-            </h4>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 'var(--space-md)' }}>
-              H<sub>t</sub> = (1+h)<sup>t/12</sup> — Performance/$ increases
-            </p>
-            <div className="grid grid-2" style={{ gap: 'var(--space-md)' }}>
-              {renderInput(
-                'efficiency',
-                ['hardwareEfficiency', 'h'],
-                'Accelerator Perf/$',
-                '%/yr',
-                '',
-                efficiencyBlock?.hardwareEfficiency?.h?.source
-              )}
-              {renderInput(
-                'efficiency',
-                ['hardwareEfficiency', 'h_memory'],
-                'Memory Bandwidth',
-                '%/yr',
-                'HBM generation improvements'
-              )}
+            <h4 className="section-title">Hardware Throughput (Chip Improvements)</h4>
+            {(() => {
+              const columns = [
+                { category: 'efficiency', path: ['hardwareEfficiency', 'h'], label: 'Accelerator Perf/$', suffix: '%/yr' },
+                { category: 'efficiency', path: ['hardwareEfficiency', 'h_memory'], label: 'Memory Bandwidth', suffix: '%/yr' }
+              ];
+              return (
+            <div className="assumptions-table-wrap">
+              <table className="assumptions-table">
+                <thead>{renderHeaderRow(columns)}</thead>
+                <tbody>
+                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                </tbody>
+              </table>
             </div>
+              );
+            })()}
+          </div>
+
+          <div className="section">
+            <h4 className="section-title">Implied Token Efficiency</h4>
+            <p className="section-description">
+              Derived from the combined model + systems + hardware improvements. OOM/year is the
+              log10 efficiency gain (e.g., 0.3 = 2×/year). Total OOM/year mirrors the
+              combined efficiency improvement rate used in industry reporting.
+            </p>
+            {(() => {
+              const columns = [
+                { type: 'metric', valueKey: 'inferenceGain', label: 'Inference eff. (x/yr)', format: (value) => value.toFixed(2) },
+                { type: 'metric', valueKey: 'inferenceOom', label: 'Inference OOM/yr', format: (value) => value.toFixed(2) },
+                { type: 'metric', valueKey: 'trainingGain', label: 'Training eff. (x/yr)', format: (value) => value.toFixed(2) },
+                { type: 'metric', valueKey: 'trainingOom', label: 'Training OOM/yr', format: (value) => value.toFixed(2) },
+                { type: 'metric', valueKey: 'totalGain', label: 'Total eff. (x/yr)', format: (value) => value.toFixed(2) },
+                { type: 'metric', valueKey: 'totalOom', label: 'Total OOM/yr', format: (value) => value.toFixed(2) }
+              ];
+              return (
+            <div className="assumptions-table-wrap">
+              <table className="assumptions-table assumptions-table--metrics">
+                <thead>{renderHeaderRow(columns)}</thead>
+                <tbody>
+                  {timeBlocks.map((block) => renderYearRow(block, columns))}
+                </tbody>
+              </table>
+            </div>
+              );
+            })()}
           </div>
         </div>
       </div>
 
-      {/* Formula Reference */}
       <div className="card" style={{ marginTop: 'var(--space-lg)' }}>
         <div className="card-header">
           <h3 className="card-title">Formula Reference</h3>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 'var(--space-lg)' }}>
+        <div className="formula-grid">
           <div>
-            <h4 style={{ fontSize: '0.875rem', marginBottom: 'var(--space-sm)' }}>Inference Accelerator-Hours</h4>
-            <code style={{
-              display: 'block',
-              padding: 'var(--space-sm)',
-              background: 'var(--bg-tertiary)',
-              borderRadius: 'var(--radius-sm)',
-              fontSize: '0.75rem',
-              fontFamily: 'var(--font-mono)'
-            }}>
+            <h4>Inference Accelerator-Hours</h4>
+            <code>
               InferAH = (Tokens × ComputePerToken × M<sub>t</sub>) / (Throughput × S<sub>t</sub> × H<sub>t</sub>)
             </code>
           </div>
           <div>
-            <h4 style={{ fontSize: '0.875rem', marginBottom: 'var(--space-sm)' }}>Stacked Yield (HBM)</h4>
-            <code style={{
-              display: 'block',
-              padding: 'var(--space-sm)',
-              background: 'var(--bg-tertiary)',
-              borderRadius: 'var(--radius-sm)',
-              fontSize: '0.75rem',
-              fontFamily: 'var(--font-mono)'
-            }}>
+            <h4>Stacked Yield (HBM)</h4>
+            <code>
               Y(t) = Y<sub>target</sub> - (Y<sub>target</sub> - Y<sub>initial</sub>) × 2<sup>-t/HL</sup>
             </code>
           </div>
           <div>
-            <h4 style={{ fontSize: '0.875rem', marginBottom: 'var(--space-sm)' }}>Tightness Ratio</h4>
-            <code style={{
-              display: 'block',
-              padding: 'var(--space-sm)',
-              background: 'var(--bg-tertiary)',
-              borderRadius: 'var(--radius-sm)',
-              fontSize: '0.75rem',
-              fontFamily: 'var(--font-mono)'
-            }}>
+            <h4>Tightness Ratio</h4>
+            <code>
               Tightness = (Demand + Backlog) / (Supply + Inventory + ε)
             </code>
           </div>
           <div>
-            <h4 style={{ fontSize: '0.875rem', marginBottom: 'var(--space-sm)' }}>Price Index</h4>
-            <code style={{
-              display: 'block',
-              padding: 'var(--space-sm)',
-              background: 'var(--bg-tertiary)',
-              borderRadius: 'var(--radius-sm)',
-              fontSize: '0.75rem',
-              fontFamily: 'var(--font-mono)'
-            }}>
+            <h4>Price Index</h4>
+            <code>
               P = 1 + a × (Tightness - 1)<sup>b</sup> when Tight {'>'} 1
             </code>
           </div>

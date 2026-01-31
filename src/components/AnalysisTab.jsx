@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { NODE_GROUPS, getNode } from '../data/nodes.js';
+import { NODE_GROUPS } from '../data/nodes.js';
 import { formatMonth } from '../engine/calculations.js';
 
 function AnalysisTab({ results, onSelectNode }) {
@@ -13,14 +13,27 @@ function AnalysisTab({ results, onSelectNode }) {
     return 'var(--status-glut)';
   };
 
+  const getSeverityBadge = (value, type) => {
+    const thresholds = type === 'shortage'
+      ? { high: 25, medium: 12 }
+      : { high: 8, medium: 4 };
+    if (value >= thresholds.high) {
+      return { label: 'Material', color: 'var(--status-tight)' };
+    }
+    if (value >= thresholds.medium) {
+      return { label: 'Meaningful', color: 'var(--status-stressed)' };
+    }
+    return { label: 'Minor', color: 'var(--text-muted)' };
+  };
+
   return (
     <div>
       <div className="tab-header">
         <div>
-          <h1 className="tab-title">Shortage/Glut Analysis</h1>
+          <h1 className="tab-title">Market Stress Overview</h1>
           <p className="tab-description">
-            Identifies supply chain bottlenecks, shortage periods, and potential gluts.
-            Click any item to view detailed charts for that node.
+            Highlights material shortages and gluts with severity scoring and timelines.
+            Click any item to view detailed node charts.
           </p>
         </div>
       </div>
@@ -96,9 +109,9 @@ function AnalysisTab({ results, onSelectNode }) {
         {/* Shortage Events */}
         <div className="card">
           <div className="card-header">
-            <h3 className="card-title">Shortage Events</h3>
+            <h3 className="card-title">Material Shortages</h3>
             <span style={{ fontSize: '0.6875rem', color: 'var(--status-tight)' }}>
-              Tightness {'>'} 1.05
+              Severity = peak tightness × duration
             </span>
           </div>
 
@@ -109,7 +122,9 @@ function AnalysisTab({ results, onSelectNode }) {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
-              {shortages.slice(0, 10).map((item, index) => (
+              {shortages.slice(0, 10).map((item, index) => {
+                const badge = getSeverityBadge(item.severity, 'shortage');
+                return (
                 <div
                   key={`${item.nodeId}-${item.startMonth}`}
                   className="analysis-card"
@@ -133,7 +148,9 @@ function AnalysisTab({ results, onSelectNode }) {
                         {item.nodeName}
                       </div>
                     </div>
-                    <span className="badge badge-tight">Shortage</span>
+                    <span className="badge" style={{ background: badge.color, color: 'white' }}>
+                      {badge.label}
+                    </span>
                   </div>
                   <div className="analysis-card-metric">
                     <span className="analysis-card-metric-label">Onset</span>
@@ -149,8 +166,12 @@ function AnalysisTab({ results, onSelectNode }) {
                     <span className="analysis-card-metric-label">Duration</span>
                     <span className="analysis-card-metric-value">{item.duration} months</span>
                   </div>
+                  <div className="analysis-card-metric">
+                    <span className="analysis-card-metric-label">Severity</span>
+                    <span className="analysis-card-metric-value">{item.severity.toFixed(1)}</span>
+                  </div>
                 </div>
-              ))}
+              );})}
             </div>
           )}
         </div>
@@ -158,9 +179,9 @@ function AnalysisTab({ results, onSelectNode }) {
         {/* Glut Events */}
         <div className="card">
           <div className="card-header">
-            <h3 className="card-title">Glut Events</h3>
+            <h3 className="card-title">Material Gluts</h3>
             <span style={{ fontSize: '0.6875rem', color: 'var(--status-glut)' }}>
-              Tightness {'<'} 0.95
+              Severity = (1 - min tightness) × duration
             </span>
           </div>
 
@@ -171,7 +192,9 @@ function AnalysisTab({ results, onSelectNode }) {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
-              {gluts.slice(0, 10).map((item, index) => (
+              {gluts.slice(0, 10).map((item, index) => {
+                const badge = getSeverityBadge(item.severity, 'glut');
+                return (
                 <div
                   key={`${item.nodeId}-${item.startMonth}`}
                   className="analysis-card"
@@ -195,7 +218,9 @@ function AnalysisTab({ results, onSelectNode }) {
                         {item.nodeName}
                       </div>
                     </div>
-                    <span className="badge badge-glut">Glut</span>
+                    <span className="badge" style={{ background: badge.color, color: 'white' }}>
+                      {badge.label}
+                    </span>
                   </div>
                   <div className="analysis-card-metric">
                     <span className="analysis-card-metric-label">Onset</span>
@@ -211,8 +236,12 @@ function AnalysisTab({ results, onSelectNode }) {
                     <span className="analysis-card-metric-label">Duration</span>
                     <span className="analysis-card-metric-value">{item.duration} months</span>
                   </div>
+                  <div className="analysis-card-metric">
+                    <span className="analysis-card-metric-label">Severity</span>
+                    <span className="analysis-card-metric-value">{item.severity.toFixed(1)}</span>
+                  </div>
                 </div>
-              ))}
+              );})}
             </div>
           )}
         </div>
@@ -237,7 +266,7 @@ function AnalysisTab({ results, onSelectNode }) {
               </li>
               <li>
                 {gluts.length > 0
-                  ? `${gluts.length} potential glut events if demand slows`
+                  ? `${gluts.length} glut windows flagged by the severity model`
                   : 'Demand remains strong, no glut risk'}
               </li>
             </ul>

@@ -1,7 +1,8 @@
 /**
  * AI Infrastructure Supply Chain - Assumptions & Base Rates
  *
- * This file defines all user-adjustable assumptions organized into 5-year blocks.
+ * This file defines all user-adjustable assumptions organized into yearly
+ * segments for years 1-5 and 5-year blocks thereafter.
  * Historical base rates are documented with sources for transparency.
  *
  * IMPORTANT: Efficiency formulas use the CORRECTED math:
@@ -65,130 +66,160 @@ export const GLOBAL_PARAMS = {
 };
 
 // ============================================
+// ASSUMPTION TIME SEGMENTS
+// ============================================
+export const ASSUMPTION_SEGMENTS = [
+  { key: 'year1', label: 'Year 1', years: '2025-2026', startMonth: 0, endMonth: 11 },
+  { key: 'year2', label: 'Year 2', years: '2026-2027', startMonth: 12, endMonth: 23 },
+  { key: 'year3', label: 'Year 3', years: '2027-2028', startMonth: 24, endMonth: 35 },
+  { key: 'year4', label: 'Year 4', years: '2028-2029', startMonth: 36, endMonth: 47 },
+  { key: 'year5', label: 'Year 5', years: '2029-2030', startMonth: 48, endMonth: 59 },
+  { key: 'years6_10', label: 'Years 6-10', years: '2030-2035', startMonth: 60, endMonth: 119 },
+  { key: 'years11_15', label: 'Years 11-15', years: '2035-2040', startMonth: 120, endMonth: 179 },
+  { key: 'years16_20', label: 'Years 16-20', years: '2040-2045', startMonth: 180, endMonth: 239 }
+];
+
+export const FIRST_ASSUMPTION_KEY = ASSUMPTION_SEGMENTS[0].key;
+export const FIRST_FIVE_YEAR_KEYS = ASSUMPTION_SEGMENTS.slice(0, 5).map(segment => segment.key);
+
+const cloneBlock = (block) => JSON.parse(JSON.stringify(block));
+
+// ============================================
 // DEMAND ASSUMPTIONS BY 5-YEAR BLOCK
 // ============================================
-export const DEMAND_ASSUMPTIONS = {
-  // Block 0: Years 0-5 (2025-2030)
-  block0: {
-    label: 'Years 0-5 (2025-2030)',
-    asOfDate: '2026-01-01',
+const DEMAND_YEAR1 = {
+  label: 'Year 1 (2025-2026)',
+  asOfDate: '2026-01-01',
 
-    // Single source of truth for workload baselines
-    // All base rates centralized here; calculations.js reads from this
-    workloadBase: {
-      inferenceTokensPerMonth: {
-        consumer: 5e12,    // 5T tokens/month - ChatGPT/Claude billions of daily tokens
-        enterprise: 6e12,  // 6T tokens/month - $37B enterprise AI spend, 3.2x YoY
-        agentic: 1e12      // 1T tokens/month - agentic AI in 40% enterprise apps by 2026
-      },
-      trainingRunsPerMonth: {
-        frontier: 1.2,     // ~10-15 frontier runs/year globally
-        midtier: 150       // ~100-200 significant runs/month
-      },
-      trainingComputePerRun: {
-        frontier: 1e6,     // 1M accel-hours per frontier run
-        midtier: 5000      // 5K accel-hours per mid-tier run
-      },
-      continualLearningBase: {
-        accelHoursPerMonth: 150000,  // 150K accel-hours/month for fine-tuning/RLHF
-        dataTB: 1500,                // 1500 TB base storage
-        networkGbps: 300             // 300 Gbps base bandwidth
-      }
+  // Single source of truth for workload baselines
+  // All base rates centralized here; calculations.js reads from this
+  workloadBase: {
+    inferenceTokensPerMonth: {
+      consumer: 5e12,    // 5T tokens/month - ChatGPT/Claude billions of daily tokens
+      enterprise: 6e12,  // 6T tokens/month - $37B enterprise AI spend, 3.2x YoY
+      agentic: 1e12      // 1T tokens/month - agentic AI in 40% enterprise apps by 2026
     },
-
-    // Inference demand growth (CAGR)
-    inferenceGrowth: {
-      consumer: {
-        value: 0.40,  // 40% annual growth
-        confidence: 'medium',
-        source: 'ChatGPT/Claude growth trajectory, mobile adoption',
-        historicalRange: [0.25, 0.60]
-      },
-      enterprise: {
-        value: 0.55,  // 55% annual growth
-        confidence: 'medium',
-        source: 'Enterprise AI adoption surveys, cloud earnings',
-        historicalRange: [0.35, 0.80]
-      },
-      agentic: {
-        value: 1.00,  // 100% annual growth (doubling)
-        confidence: 'low',
-        source: 'Emerging category, high uncertainty',
-        historicalRange: [0.50, 2.00]
-      }
+    trainingRunsPerMonth: {
+      frontier: 1.2,     // ~10-15 frontier runs/year globally
+      midtier: 150       // ~100-200 significant runs/month
     },
-
-    // Training demand growth
-    trainingGrowth: {
-      frontier: {
-        value: 0.25,  // 25% more frontier runs per year
-        confidence: 'medium',
-        source: 'Scaling law research, lab announcements',
-        historicalRange: [0.10, 0.50]
-      },
-      midtier: {
-        value: 0.50,  // 50% growth in mid-tier training
-        confidence: 'low',
-        source: 'Fine-tuning demand, enterprise custom models',
-        historicalRange: [0.30, 0.80]
-      }
+    trainingComputePerRun: {
+      frontier: 1e6,     // 1M accel-hours per frontier run
+      midtier: 5000      // 5K accel-hours per mid-tier run
     },
-
-    // Context length trend (affects memory)
-    contextLength: {
-      averageTokens: 4000,  // Starting average
-      growthRate: 0.30,     // 30% annual increase
-      confidence: 'medium',
-      source: 'Model releases, long-context adoption'
-    },
-
-    // Inference intensity growth (compute per token increases)
-    // Captures: longer contexts, multi-step reasoning, agentic loops, tool use
-    // Critical for offsetting efficiency gains and keeping GPU demand growing
-    // Old: 25% → New: 40% reflecting reasoning models (o1/o3), agent loops
-    intensityGrowth: {
-      value: 0.40,  // 40% annual increase in compute per token
-      confidence: 'medium',
-      source: 'Reasoning models (o1/o3), agent loops, 10-100x tokens per task',
-      historicalRange: [0.25, 0.60]
-    },
-
-    // Continual Learning demand (fine-tuning, RLHF, RAG updates)
-    // Drives compute for training + memory/storage/network for data
-    continualLearning: {
-      computeGrowth: {
-        value: 0.60,  // 60% annual growth in continual learning compute
-        confidence: 'medium',
-        source: 'Enterprise fine-tuning adoption, RLHF scaling',
-        historicalRange: [0.40, 0.80]
-      },
-      dataStorageGrowth: {
-        value: 0.50,  // 50% annual growth in data storage needs
-        confidence: 'medium',
-        source: 'RAG corpus growth, checkpoint storage'
-      },
-      networkBandwidthGrowth: {
-        value: 0.45,  // 45% annual growth in network bandwidth
-        confidence: 'medium',
-        source: 'Distributed training, data movement'
-      },
-      // HBM memory pressure from continual learning adoption
-      adoptionRateBy2030: {
-        value: 0.90,  // 90% of AI workloads use continual learning by 2030
-        confidence: 'medium',
-        source: 'Enterprise fine-tuning, RLHF ubiquity'
-      },
-      memoryMultiplierAtFullAdoption: {
-        value: 1.6,  // 60% more HBM per GPU for continual learning
-        confidence: 'medium',
-        source: 'HBM pressure 20-40% higher in AI workloads; larger working sets'
-      }
+    continualLearningBase: {
+      accelHoursPerMonth: 150000,  // 150K accel-hours/month for fine-tuning/RLHF
+      dataTB: 1500,                // 1500 TB base storage
+      networkGbps: 300             // 300 Gbps base bandwidth
     }
   },
 
-  // Block 1: Years 5-10 (2030-2035)
-  block1: {
-    label: 'Years 5-10 (2030-2035)',
+  // Inference demand growth (CAGR)
+  inferenceGrowth: {
+    consumer: {
+      value: 0.40,  // 40% annual growth
+      confidence: 'medium',
+      source: 'Usage growth + consumer adoption, 2024-2026 trend',
+      historicalRange: [0.25, 0.60]
+    },
+    enterprise: {
+      value: 0.55,  // 55% annual growth
+      confidence: 'medium',
+      source: 'Enterprise AI adoption surveys, cloud earnings',
+      historicalRange: [0.35, 0.80]
+    },
+    agentic: {
+      value: 1.00,  // 100% annual growth (doubling)
+      confidence: 'low',
+      source: 'Emerging category, high uncertainty',
+      historicalRange: [0.50, 2.00]
+    }
+  },
+
+  // Training demand growth
+  trainingGrowth: {
+    frontier: {
+      value: 0.25,  // 25% more frontier runs per year
+      confidence: 'medium',
+      source: 'Scaling law research, lab announcements',
+      historicalRange: [0.10, 0.50]
+    },
+    midtier: {
+      value: 0.50,  // 50% growth in mid-tier training
+      confidence: 'low',
+      source: 'Fine-tuning demand, enterprise custom models',
+      historicalRange: [0.30, 0.80]
+    }
+  },
+
+  // Context length trend (affects memory)
+  contextLength: {
+    averageTokens: 4000,  // Starting average
+    growthRate: 0.30,     // 30% annual increase
+    confidence: 'medium',
+    source: 'Model releases, long-context adoption'
+  },
+
+  // Inference intensity growth (compute per token increases)
+  // Captures: longer contexts, multi-step reasoning, agentic loops, tool use
+  // Critical for offsetting efficiency gains and keeping GPU demand growing
+  intensityGrowth: {
+    value: 0.40,  // 40% annual increase in compute per token
+    confidence: 'medium',
+    source: 'Reasoning models, agent loops, 10-100x tokens per task',
+    historicalRange: [0.25, 0.60]
+  },
+
+  // Continual Learning demand (fine-tuning, RLHF, RAG updates)
+  // Drives compute for training + memory/storage/network for data
+  continualLearning: {
+    computeGrowth: {
+      value: 0.60,  // 60% annual growth in continual learning compute
+      confidence: 'medium',
+      source: 'Enterprise fine-tuning adoption, RLHF scaling',
+      historicalRange: [0.40, 0.80]
+    },
+    dataStorageGrowth: {
+      value: 0.50,  // 50% annual growth in data storage needs
+      confidence: 'medium',
+      source: 'RAG corpus growth, checkpoint storage'
+    },
+    networkBandwidthGrowth: {
+      value: 0.45,  // 45% annual growth in network bandwidth
+      confidence: 'medium',
+      source: 'Distributed training, data movement'
+    },
+    // HBM memory pressure from continual learning adoption
+    adoptionRateBy2030: {
+      value: 0.90,  // 90% of AI workloads use continual learning by 2030
+      confidence: 'medium',
+      source: 'Enterprise fine-tuning, RLHF ubiquity'
+    },
+    memoryMultiplierAtFullAdoption: {
+      value: 1.6,  // 60% more HBM per GPU for continual learning
+      confidence: 'medium',
+      source: 'HBM pressure 20-40% higher in AI workloads; larger working sets'
+    }
+  }
+};
+
+const DEMAND_YEARLY_BLOCKS = FIRST_FIVE_YEAR_KEYS.reduce((acc, key, index) => {
+  const segment = ASSUMPTION_SEGMENTS[index];
+  acc[key] = {
+    ...cloneBlock(DEMAND_YEAR1),
+    label: `${segment.label} (${segment.years})`
+  };
+  if (index > 0) {
+    delete acc[key].asOfDate;
+  }
+  return acc;
+}, {});
+
+export const DEMAND_ASSUMPTIONS = {
+  ...DEMAND_YEARLY_BLOCKS,
+
+  years6_10: {
+    label: 'Years 6-10 (2030-2035)',
 
     inferenceGrowth: {
       consumer: { value: 0.25, confidence: 'low', source: 'Market maturation expected' },
@@ -219,9 +250,8 @@ export const DEMAND_ASSUMPTIONS = {
     }
   },
 
-  // Block 2: Years 10-15 (2035-2040)
-  block2: {
-    label: 'Years 10-15 (2035-2040)',
+  years11_15: {
+    label: 'Years 11-15 (2035-2040)',
 
     inferenceGrowth: {
       consumer: { value: 0.15, confidence: 'low', source: 'Market saturation' },
@@ -252,9 +282,8 @@ export const DEMAND_ASSUMPTIONS = {
     }
   },
 
-  // Block 3: Years 15-20 (2040-2045)
-  block3: {
-    label: 'Years 15-20 (2040-2045)',
+  years16_20: {
+    label: 'Years 16-20 (2040-2045)',
 
     inferenceGrowth: {
       consumer: { value: 0.10, confidence: 'low', source: 'Highly uncertain' },
@@ -289,6 +318,71 @@ export const DEMAND_ASSUMPTIONS = {
 // ============================================
 // EFFICIENCY ASSUMPTIONS BY 5-YEAR BLOCK
 // ============================================
+const EFFICIENCY_YEAR1 = {
+  label: 'Year 1 (2025-2026)',
+
+  // Model efficiency (compute per token declines)
+  // NOTE: These are DEPLOYED efficiency rates, not theoretical peaks.
+  // Updated to reflect token efficiency research and real-world propagation lags.
+  modelEfficiency: {
+    m_inference: {
+      value: 0.18,  // 18% annual reduction (deployed systems lag theoretical gains)
+      confidence: 'medium',
+      source: 'Deployed model efficiency; rollout lag from frontier research',
+      historicalRange: [0.10, 0.30]
+    },
+    m_training: {
+      value: 0.10,  // 10% annual reduction in compute per capability
+      confidence: 'low',
+      source: 'Scaling law efficiency + optimizer improvements',
+      historicalRange: [0.05, 0.20]
+    }
+  },
+
+  // Systems/software throughput improvements
+  systemsEfficiency: {
+    s_inference: {
+      value: 0.10,  // 10% annual throughput gain (deployment-lagged)
+      confidence: 'medium',
+      source: 'Batching + scheduling + compiler gains (deployed)',
+      historicalRange: [0.06, 0.18]
+    },
+    s_training: {
+      value: 0.08,  // 8% annual improvement
+      confidence: 'medium',
+      source: 'Distributed training optimizations',
+      historicalRange: [0.05, 0.15]
+    }
+  },
+
+  // Hardware throughput improvements (perf/$)
+  // H applies to NEW purchases only conceptually, but the model uses it
+  // on all demand. 15% is more realistic for blended fleet improvement.
+  hardwareEfficiency: {
+    h: {
+      value: 0.15,  // 15% annual perf/$ improvement (blended fleet)
+      confidence: 'high',
+      source: 'NVIDIA gen-over-gen; blended fleet effect',
+      historicalRange: [0.10, 0.25]
+    },
+    h_memory: {
+      value: 0.12,  // 12% memory bandwidth improvement
+      confidence: 'medium',
+      source: 'HBM generation improvements',
+      historicalRange: [0.08, 0.20]
+    }
+  }
+};
+
+const EFFICIENCY_YEARLY_BLOCKS = FIRST_FIVE_YEAR_KEYS.reduce((acc, key, index) => {
+  const segment = ASSUMPTION_SEGMENTS[index];
+  acc[key] = {
+    ...cloneBlock(EFFICIENCY_YEAR1),
+    label: `${segment.label} (${segment.years})`
+  };
+  return acc;
+}, {});
+
 export const EFFICIENCY_ASSUMPTIONS = {
   /**
    * CORRECTED FORMULAS:
@@ -309,118 +403,62 @@ export const EFFICIENCY_ASSUMPTIONS = {
    *   Goes in DENOMINATOR of demand calculation
    */
 
-  block0: {
-    label: 'Years 0-5 (2025-2030)',
+  ...EFFICIENCY_YEARLY_BLOCKS,
 
-    // Model efficiency (compute per token declines)
-    // NOTE: These are DEPLOYED efficiency rates, not theoretical peaks.
-    // Real deployments lag: new architectures take 6-12 months to propagate.
-    // Old: 40% → New: 25% for inference. Still aggressive but realistic.
+  years6_10: {
+    label: 'Years 6-10 (2030-2035)',
+
     modelEfficiency: {
-      m_inference: {
-        value: 0.25,  // 25% annual reduction (deployed systems lag theoretical gains)
-        confidence: 'medium',
-        source: 'Deployed model efficiency; propagation lag from theory',
-        historicalRange: [0.15, 0.40]
-      },
-      m_training: {
-        value: 0.15,  // 15% annual reduction in compute per capability
-        confidence: 'low',
-        source: 'Chinchilla-optimal training, architecture improvements',
-        historicalRange: [0.08, 0.25]
-      }
+      m_inference: { value: 0.14, confidence: 'low', source: 'Diminishing returns expected' },
+      m_training: { value: 0.08, confidence: 'low', source: 'Architecture maturation' }
     },
 
-    // Systems/software throughput improvements
-    // Real-world batching/scheduling gains are more like 15% deployed
     systemsEfficiency: {
-      s_inference: {
-        value: 0.15,  // 15% annual throughput gain (deployed batching, scheduling)
-        confidence: 'medium',
-        source: 'vLLM, continuous batching; deployment lag from cutting edge',
-        historicalRange: [0.10, 0.25]
-      },
-      s_training: {
-        value: 0.12,  // 12% annual improvement
-        confidence: 'medium',
-        source: 'Distributed training optimizations',
-        historicalRange: [0.08, 0.20]
-      }
+      s_inference: { value: 0.08, confidence: 'low', source: 'Continued optimization' },
+      s_training: { value: 0.06, confidence: 'low', source: 'Distributed training matures' }
     },
 
-    // Hardware throughput improvements (perf/$)
-    // H applies to NEW purchases only conceptually, but the model uses it
-    // on all demand. 20% is more realistic for blended fleet improvement.
     hardwareEfficiency: {
-      h: {
-        value: 0.20,  // 20% annual perf/$ improvement (blended fleet)
-        confidence: 'high',
-        source: 'NVIDIA generation-over-generation; blended fleet effect',
-        historicalRange: [0.12, 0.30]
-      },
-      h_memory: {
-        value: 0.18,  // 18% memory bandwidth improvement
-        confidence: 'medium',
-        source: 'HBM generation improvements',
-        historicalRange: [0.10, 0.25]
-      }
+      h: { value: 0.12, confidence: 'low', source: 'Moore\'s law slowing' },
+      h_memory: { value: 0.10, confidence: 'low', source: 'Memory scaling challenges' }
     }
   },
 
-  block1: {
-    label: 'Years 5-10 (2030-2035)',
+  years11_15: {
+    label: 'Years 11-15 (2035-2040)',
 
     modelEfficiency: {
-      m_inference: { value: 0.30, confidence: 'low', source: 'Diminishing returns expected' },
-      m_training: { value: 0.15, confidence: 'low', source: 'Architecture maturation' }
+      m_inference: { value: 0.10, confidence: 'low', source: 'Highly uncertain' },
+      m_training: { value: 0.06, confidence: 'low', source: 'Highly uncertain' }
     },
 
     systemsEfficiency: {
-      s_inference: { value: 0.20, confidence: 'low', source: 'Continued optimization' },
-      s_training: { value: 0.12, confidence: 'low', source: 'Distributed training matures' }
+      s_inference: { value: 0.06, confidence: 'low', source: 'Highly uncertain' },
+      s_training: { value: 0.05, confidence: 'low', source: 'Highly uncertain' }
     },
 
     hardwareEfficiency: {
-      h: { value: 0.20, confidence: 'low', source: 'Moore\'s law slowing' },
-      h_memory: { value: 0.18, confidence: 'low', source: 'Memory scaling challenges' }
+      h: { value: 0.08, confidence: 'low', source: 'Post-Moore era' },
+      h_memory: { value: 0.07, confidence: 'low', source: 'New memory tech unclear' }
     }
   },
 
-  block2: {
-    label: 'Years 10-15 (2035-2040)',
+  years16_20: {
+    label: 'Years 16-20 (2040-2045)',
 
     modelEfficiency: {
-      m_inference: { value: 0.20, confidence: 'low', source: 'Highly uncertain' },
-      m_training: { value: 0.10, confidence: 'low', source: 'Highly uncertain' }
+      m_inference: { value: 0.08, confidence: 'low', source: 'Highly uncertain' },
+      m_training: { value: 0.05, confidence: 'low', source: 'Highly uncertain' }
     },
 
     systemsEfficiency: {
-      s_inference: { value: 0.15, confidence: 'low', source: 'Highly uncertain' },
-      s_training: { value: 0.10, confidence: 'low', source: 'Highly uncertain' }
+      s_inference: { value: 0.05, confidence: 'low', source: 'Highly uncertain' },
+      s_training: { value: 0.04, confidence: 'low', source: 'Highly uncertain' }
     },
 
     hardwareEfficiency: {
-      h: { value: 0.15, confidence: 'low', source: 'Post-Moore era' },
-      h_memory: { value: 0.12, confidence: 'low', source: 'New memory tech unclear' }
-    }
-  },
-
-  block3: {
-    label: 'Years 15-20 (2040-2045)',
-
-    modelEfficiency: {
-      m_inference: { value: 0.15, confidence: 'low', source: 'Highly uncertain' },
-      m_training: { value: 0.08, confidence: 'low', source: 'Highly uncertain' }
-    },
-
-    systemsEfficiency: {
-      s_inference: { value: 0.10, confidence: 'low', source: 'Highly uncertain' },
-      s_training: { value: 0.08, confidence: 'low', source: 'Highly uncertain' }
-    },
-
-    hardwareEfficiency: {
-      h: { value: 0.10, confidence: 'low', source: 'Speculative' },
-      h_memory: { value: 0.08, confidence: 'low', source: 'Speculative' }
+      h: { value: 0.06, confidence: 'low', source: 'Speculative' },
+      h_memory: { value: 0.05, confidence: 'low', source: 'Speculative' }
     }
   }
 };
@@ -428,42 +466,53 @@ export const EFFICIENCY_ASSUMPTIONS = {
 // ============================================
 // SUPPLY ASSUMPTIONS BY 5-YEAR BLOCK
 // ============================================
-export const SUPPLY_ASSUMPTIONS = {
-  block0: {
-    label: 'Years 0-5 (2025-2030)',
+const SUPPLY_YEAR1 = {
+  label: 'Year 1 (2025-2026)',
 
-    // Capacity expansion rates by node group
-    expansionRates: {
-      packaging: {
-        value: 0.35,  // 35% annual capacity growth
-        confidence: 'high',
-        source: 'TSMC CoWoS expansion plans, Amkor commitments'
-      },
-      foundry: {
-        value: 0.15,  // 15% annual advanced node growth
-        confidence: 'high',
-        source: 'TSMC fab construction schedule'
-      },
-      memory: {
-        value: 0.25,  // 25% HBM capacity growth
-        confidence: 'medium',
-        source: 'SK Hynix, Samsung expansion announcements'
-      },
-      datacenter: {
-        value: 0.20,  // 20% DC capacity growth
-        confidence: 'medium',
-        source: 'Hyperscaler capex guidance'
-      },
-      power: {
-        value: 0.08,  // 8% grid/transformer capacity growth
-        confidence: 'medium',
-        source: 'Utility capex plans, DOE reports'
-      }
+  // Capacity expansion rates by node group
+  expansionRates: {
+    packaging: {
+      value: 0.35,  // 35% annual capacity growth
+      confidence: 'high',
+      source: 'TSMC CoWoS expansion plans, Amkor commitments'
+    },
+    foundry: {
+      value: 0.15,  // 15% annual advanced node growth
+      confidence: 'high',
+      source: 'TSMC fab construction schedule'
+    },
+    memory: {
+      value: 0.25,  // 25% HBM capacity growth
+      confidence: 'medium',
+      source: 'SK Hynix, Samsung expansion announcements'
+    },
+    datacenter: {
+      value: 0.20,  // 20% DC capacity growth
+      confidence: 'medium',
+      source: 'Hyperscaler capex guidance'
+    },
+    power: {
+      value: 0.08,  // 8% grid/transformer capacity growth
+      confidence: 'medium',
+      source: 'Utility capex plans, DOE reports'
     }
-  },
+  }
+};
 
-  block1: {
-    label: 'Years 5-10 (2030-2035)',
+const SUPPLY_YEARLY_BLOCKS = FIRST_FIVE_YEAR_KEYS.reduce((acc, key, index) => {
+  const segment = ASSUMPTION_SEGMENTS[index];
+  acc[key] = {
+    ...cloneBlock(SUPPLY_YEAR1),
+    label: `${segment.label} (${segment.years})`
+  };
+  return acc;
+}, {});
+
+export const SUPPLY_ASSUMPTIONS = {
+  ...SUPPLY_YEARLY_BLOCKS,
+
+  years6_10: {
+    label: 'Years 6-10 (2030-2035)',
     expansionRates: {
       packaging: { value: 0.20, confidence: 'low' },
       foundry: { value: 0.10, confidence: 'low' },
@@ -473,8 +522,8 @@ export const SUPPLY_ASSUMPTIONS = {
     }
   },
 
-  block2: {
-    label: 'Years 10-15 (2035-2040)',
+  years11_15: {
+    label: 'Years 11-15 (2035-2040)',
     expansionRates: {
       packaging: { value: 0.12, confidence: 'low' },
       foundry: { value: 0.08, confidence: 'low' },
@@ -484,8 +533,8 @@ export const SUPPLY_ASSUMPTIONS = {
     }
   },
 
-  block3: {
-    label: 'Years 15-20 (2040-2045)',
+  years16_20: {
+    label: 'Years 16-20 (2040-2045)',
     expansionRates: {
       packaging: { value: 0.08, confidence: 'low' },
       foundry: { value: 0.05, confidence: 'low' },
@@ -581,11 +630,11 @@ export const TRANSLATION_INTENSITIES = {
 // SCENARIO DEFINITIONS
 // ============================================
 /**
- * Scenario inheritance helper - deep-merges overrides into block0 defaults
- * Ensures scenarios don't duplicate block0 and only override what's different
+ * Scenario inheritance helper - deep-merges overrides into year 1 defaults
+ * Ensures scenarios don't duplicate year 1 and only override what's different
  */
-function inheritBlock0(overrides = {}) {
-  const b0 = DEMAND_ASSUMPTIONS.block0;
+function inheritYear1(overrides = {}) {
+  const b0 = DEMAND_ASSUMPTIONS[FIRST_ASSUMPTION_KEY];
   return {
     ...b0,
     ...overrides,
@@ -608,6 +657,13 @@ function inheritBlock0(overrides = {}) {
   };
 }
 
+function applyOverridesToYears(overrides = {}) {
+  return FIRST_FIVE_YEAR_KEYS.reduce((acc, key) => {
+    acc[key] = overrides;
+    return acc;
+  }, {});
+}
+
 export const SCENARIOS = {
   base: {
     id: 'base',
@@ -621,18 +677,14 @@ export const SCENARIOS = {
     name: 'High Demand / Slow Efficiency',
     description: 'Strong adoption but efficiency gains disappoint',
     overrides: {
-      demand: {
-        block0: {
+      demand: applyOverridesToYears({
           inferenceGrowth: { consumer: 0.55, enterprise: 0.70, agentic: 1.50 },
           trainingGrowth: { frontier: 0.40, midtier: 0.70 }
-        }
-      },
-      efficiency: {
-        block0: {
+      }),
+      efficiency: applyOverridesToYears({
           modelEfficiency: { m_inference: 0.25, m_training: 0.12 },
           hardwareEfficiency: { h: 0.20 }
-        }
-      }
+      })
     }
   },
 
@@ -641,18 +693,14 @@ export const SCENARIOS = {
     name: 'High Demand / Fast Efficiency',
     description: 'Strong adoption with rapid efficiency improvements',
     overrides: {
-      demand: {
-        block0: {
+      demand: applyOverridesToYears({
           inferenceGrowth: { consumer: 0.55, enterprise: 0.70, agentic: 1.50 }
-        }
-      },
-      efficiency: {
-        block0: {
+      }),
+      efficiency: applyOverridesToYears({
           modelEfficiency: { m_inference: 0.55, m_training: 0.30 },
           systemsEfficiency: { s_inference: 0.35 },
           hardwareEfficiency: { h: 0.40 }
-        }
-      }
+      })
     }
   },
 
@@ -662,11 +710,11 @@ export const SCENARIOS = {
     description: 'Adoption disappoints, overcapacity develops',
     overrides: {
       demand: {
-        block0: {
+        ...applyOverridesToYears({
           inferenceGrowth: { consumer: 0.20, enterprise: 0.30, agentic: 0.50 },
           trainingGrowth: { frontier: 0.10, midtier: 0.25 }
-        },
-        block1: {
+        }),
+        years6_10: {
           inferenceGrowth: { consumer: 0.10, enterprise: 0.15, agentic: 0.25 }
         }
       }
@@ -692,7 +740,7 @@ export const SCENARIOS = {
     name: '2026 Tight Market (Backlog + Allocation)',
     description: 'Sold-out components + large order backlogs; shortages visible immediately. ' +
       'Reflects Jan 2026 market: HBM sold out, CoWoS at capacity, GPU backlog ~900K.',
-    demandAssumptions: inheritBlock0({ asOfDate: '2026-01-01' }),
+    demandAssumptions: inheritYear1({ asOfDate: '2026-01-01' }),
     overrides: {
       startingState: {
         backlogByNode: {
@@ -715,18 +763,18 @@ export const SCENARIOS = {
  * Get the block index for a given month
  */
 export function getBlockForMonth(month) {
-  const year = Math.floor(month / 12);
-  if (year < 5) return 0;
-  if (year < 10) return 1;
-  if (year < 15) return 2;
-  return 3;
+  const index = ASSUMPTION_SEGMENTS.findIndex(
+    segment => month >= segment.startMonth && month <= segment.endMonth
+  );
+  return index === -1 ? ASSUMPTION_SEGMENTS.length - 1 : index;
 }
 
 /**
  * Get the block key for a given month
  */
 export function getBlockKeyForMonth(month) {
-  return `block${getBlockForMonth(month)}`;
+  const segment = ASSUMPTION_SEGMENTS[getBlockForMonth(month)];
+  return segment?.key || ASSUMPTION_SEGMENTS[ASSUMPTION_SEGMENTS.length - 1].key;
 }
 
 /**

@@ -97,7 +97,7 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
     <div>
       <div className="tab-header">
         <div>
-          <h1 className="tab-title">Charts Dashboard</h1>
+          <h1 className="tab-title">Node Trends</h1>
           <p className="tab-description">
             Interactive visualizations for supply-demand dynamics, tightness ratios, and capacity evolution.
           </p>
