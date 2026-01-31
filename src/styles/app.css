@@ -394,7 +394,7 @@
 
 .assumptions-table th,
 .assumptions-table td {
-  padding: 4px 6px;
+  padding: 2px 6px;
   border-bottom: 1px solid var(--border-color-light);
   border-right: 1px solid var(--border-color-light);
   text-align: center;
@@ -413,7 +413,7 @@
   letter-spacing: 0.03em;
   color: var(--text-muted);
   font-weight: 500;
-  padding: 5px 6px;
+  padding: 3px 6px;
 }
 
 .assumptions-table tr:last-child td {
@@ -447,6 +447,11 @@
   box-shadow: 0 0 0 2px rgba(29, 155, 240, 0.1);
 }
 
+.assumptions-input-cell.is-focused {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
 .assumptions-table input[type="number"] {
   padding: 3px 5px;
   font-size: 0.8125rem;
@@ -463,7 +468,8 @@
 }
 
 .assumptions-year-cell {
-  width: 90px;
+  width: 120px;
+  white-space: nowrap;
 }
 
 .assumptions-metric {
