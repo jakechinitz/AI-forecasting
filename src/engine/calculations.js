@@ -76,6 +76,10 @@ function resolveAssumptionValue(value, fallback) {
   return value ?? fallback;
 }
 
+function isNonInventoriable(node) {
+  return node?.inventoryPolicy === 'queue' || node?.inventoryPolicy === 'non_storable';
+}
+
 function getGpuToComponentIntensities() {
   const gpuToComponents = TRANSLATION_INTENSITIES?.gpuToComponents || {};
   return {
@@ -1242,8 +1246,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       }
 
       // Update inventory and backlog
-      const actualShipments = Math.min(shipments + state.inventory, demand + state.backlog);
-      state.inventory = calculateInventory(state.inventory, shipments, actualShipments);
+      const inventoryAvailable = isNonInventoriable(node) ? 0 : state.inventory;
+      const actualShipments = Math.min(shipments + inventoryAvailable, demand + state.backlog);
+      state.inventory = isNonInventoriable(node)
+        ? 0
+        : calculateInventory(state.inventory, shipments, actualShipments);
       state.backlog = calculateBacklog(state.backlog, demand, actualShipments);
 
       // Store results
