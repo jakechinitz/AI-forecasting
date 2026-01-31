@@ -52,11 +52,11 @@ function GrowthRatesTab({ results }) {
         </div>
       </div>
 
-      <div style={{ overflowX: 'auto' }}>
-        <table className="data-table" style={{ width: '100%' }}>
+      <div className="yoy-table-wrapper">
+        <table className="data-table yoy-table">
           <thead>
             <tr>
-              <th className="text-cell" style={{ textAlign: 'left' }}>Node</th>
+              <th className="text-cell sticky-col">Node</th>
               {monthLabels.map((label) => (
                 <th key={label} style={{ whiteSpace: 'nowrap' }}>{label}</th>
               ))}
@@ -65,7 +65,7 @@ function GrowthRatesTab({ results }) {
           <tbody>
             {rows.map((row) => (
               <tr key={row.id}>
-                <td className="text-cell">{row.name}</td>
+                <td className="text-cell sticky-col">{row.name}</td>
                 {row.demandGrowthByMonth.map((value, index) => (
                   <td key={`${row.id}-${index}`}>{formatPercent(value)}</td>
                 ))}
