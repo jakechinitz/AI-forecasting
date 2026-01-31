@@ -1,8 +1,8 @@
 /**
  * AI Infrastructure Supply Chain - Calculation Engine
  *
- * FINAL PERFECTED VERSION (v30):
- * * DIAGNOSTICS: Unmet Demand = Plan - Potential (Pinpoints the true bottleneck).
+ * FINAL PERFECTED VERSION (v31):
+ * * DIAGNOSTICS: Unmet Demand = Plan - True Potential (Physics, not Policy).
  * * PHYSICS: Throughput nodes strictly clamped to Capacity (No teleportation).
  * * CALIBRATION: Dynamic Installed Base + Actionable Month 0 Info.
  * * SAFETY: Continuous Efficiency Trend Checks.
@@ -116,47 +116,6 @@ function calculatePriceIndex(tightness) {
     return Math.min(maxPrice, 1 + a * Math.pow(tightness - 1, b));
   }
   return Math.max(minPrice, 1 - a * Math.pow(1 - tightness, b));
-}
-
-function getDemandBlockForMonth(month, assumptions) {
-  const blockKey = getBlockKeyForMonth(month);
-  return assumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
-}
-
-function calculateInferenceDemand(month, demandBlock) {
-  const segments = ['consumer', 'enterprise', 'agentic'];
-  const demand = { total: 0 };
-  segments.forEach((segment) => {
-    const base = resolveAssumptionValue(
-      demandBlock?.workloadBase?.inferenceTokensPerMonth?.[segment],
-      0
-    );
-    const growthRate = resolveAssumptionValue(
-      demandBlock?.inferenceGrowth?.[segment]?.value,
-      0
-    );
-    const value = base * Math.pow(1 + growthRate, month / 12);
-    demand[segment] = value;
-    demand.total += value;
-  });
-  return demand;
-}
-
-function calculateTrainingDemand(month, demandBlock) {
-  const segments = ['frontier', 'midtier'];
-  const demand = {};
-  segments.forEach((segment) => {
-    const base = resolveAssumptionValue(
-      demandBlock?.workloadBase?.trainingRunsPerMonth?.[segment],
-      0
-    );
-    const growthRate = resolveAssumptionValue(
-      demandBlock?.trainingGrowth?.[segment]?.value,
-      0
-    );
-    demand[segment] = base * Math.pow(1 + growthRate, month / 12);
-  });
-  return demand;
 }
 
 // ============================================
@@ -426,8 +385,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       shortage: [], glut: [], tightness: [], priceIndex: [],
       installedBase: [], requiredBase: [], planDeploy: [], consumption: [],
       supplyPotential: [], gpuDelivered: [], idleGpus: [], yield: [],
-      gpuPurchases: isGpuNode ? [] : null,
-      unmetDemand: [] // DIAGNOSTIC METRIC
+      unmetDemand: [], potential: [] // Added 'potential' for diagnostics
     };
   });
 
@@ -613,17 +571,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         res.supply.push(isDc ? actualDc : actualInf); 
         res.capacity.push(isDc ? gpuEffCap : 0);
         res.supplyPotential.push(gpuEffCap * share);
+        res.potential.push(gpuEffCap * share); // Standardize field
         res.inventory.push(isDc ? gpuState.inventory : 0);
         res.backlog.push(gpuState.backlog * share);
         res.installedBase.push(state.installedBase);
         res.requiredBase.push(isDc ? requiredDcBase : requiredInfBase);
-        res.planDeploy.push(planDeployTotal * share);
         res.consumption.push(actualDeployTotal * share);
         res.gpuDelivered.push(isDc ? actualDc : actualInf);
         res.idleGpus.push(isDc ? blockedDc : blockedInf);
-        if (res.gpuPurchases) {
-            res.gpuPurchases.push(planDeployTotal * share);
-        }
         res.tightness.push(gpuTightness); 
         res.priceIndex.push(gpuPriceIndex);
         res.yield.push(gpuYield);
@@ -640,26 +595,42 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         const nodeRes = results.nodes[node.id];
         
         const intensity = nodeIntensityMap[node.id] || 0;
-        // DIAGNOSTIC FIX: Demand = Plan * Intensity
+        
+        // 1. Demand (The Plan)
         const demand = planDeployTotal * intensity; 
+        
+        // 2. Consumption (The Reality)
         const consumption = actualDeployTotal * intensity;
 
         const capacity = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
         const yieldRate = calculateNodeYield(node, month);
         const effectiveCapacity = capacity * (node.maxCapacityUtilization || 0.95) * yieldRate;
 
+        // SNAPSHOTS (Pre-Update)
         const inventoryIn = state.inventory; 
         const backlogIn = state.backlog;
+        
+        // 3. Calculate TRUE POTENTIAL (The Physics)
+        let potentialSupply = 0;
+        if (state.type === 'STOCK') {
+            potentialSupply = inventoryIn + effectiveCapacity;
+        } else {
+            potentialSupply = effectiveCapacity;
+        }
+
         let delivered = 0;
         let unmet = 0;
 
         if (state.type === 'STOCK') {
+            // --- STOCK LOGIC ---
+            // Policy: Only produce what is needed to sustain consumption + buffer
             const bufferTarget = consumption * DEFAULT_BUFFER_MONTHS;
             const prodNeed = consumption + Math.max(0, bufferTarget - state.inventory);
             const production = Math.min(effectiveCapacity, prodNeed);
             
             const available = state.inventory + production;
             
+            // Delivery is limited by what we actually have (Policy World)
             delivered = Math.min(consumption, available); 
             
             if (delivered < consumption - 1e-6) {
@@ -672,34 +643,34 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
             state.inventory = available - delivered;
             state.backlog = 0; 
             
-            // DIAGNOSTIC FIX: Unmet = PlanDemand - Potential
-            const maxDeliverable = available; // We could have delivered this much
-            unmet = Math.max(0, demand - maxDeliverable);
+            // DIAGNOSTIC FIX: Unmet = Plan - True Potential (Ignoring Policy)
+            unmet = Math.max(0, demand - potentialSupply);
             
         } else {
-            // THROUGHPUT - PHYSICS FIX: Delivered cannot exceed Capacity
+            // --- THROUGHPUT LOGIC ---
+            // Physics: You cannot deliver more than capacity.
+            
+            delivered = Math.min(consumption, effectiveCapacity);
+
             if (consumption > effectiveCapacity + 1e-6) {
                 if (!warnedNodes.has(node.id)) {
                     results.warnings.push(`Physics Error: Throughput Overrun in ${node.id}. Delivered clamped to Capacity.`);
                     warnedNodes.add(node.id);
                 }
-                delivered = effectiveCapacity;
-            } else {
-                delivered = consumption;
             }
 
             state.backlog = 0; 
             state.inventory = 0;
-            // DIAGNOSTIC FIX: Unmet = PlanDemand - Capacity
+            
+            // DIAGNOSTIC FIX: Unmet = Plan - Capacity
             unmet = Math.max(0, demand - effectiveCapacity);
         }
 
         // C. Expansion Logic
         const totalLoad = demand + backlogIn;
-        const potentialSupply = (state.type === 'STOCK') ? (inventoryIn + effectiveCapacity) : effectiveCapacity;
-        
         const tightness = totalLoad / Math.max(potentialSupply, EPSILON);
         const priceIndex = calculatePriceIndex(tightness);
+        
         state.tightnessHistory.push(tightness);
         
         if (sma(state.tightnessHistory, 6) > 1.10 && (month - state.lastExpansionMonth > 12)) {
@@ -716,13 +687,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         nodeRes.demand.push(demand);
         nodeRes.supply.push(delivered);
         nodeRes.capacity.push(effectiveCapacity);
-        nodeRes.supplyPotential.push(effectiveCapacity);
+        nodeRes.supplyPotential.push(potentialSupply); // Now strictly Physics-based
+        nodeRes.potential.push(potentialSupply); // Dual field for safety
         nodeRes.inventory.push(state.inventory);
         nodeRes.backlog.push(state.backlog);
         nodeRes.tightness.push(tightness);
         nodeRes.priceIndex.push(priceIndex);
         nodeRes.yield.push(yieldRate);
-        nodeRes.unmetDemand.push(unmet); // New Metric
+        nodeRes.unmetDemand.push(unmet); 
         
         const isShort = tightness > 1.05;
         nodeRes.shortage.push(isShort ? 1 : 0);
