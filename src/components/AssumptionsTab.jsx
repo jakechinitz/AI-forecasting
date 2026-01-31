@@ -1,124 +1,327 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import { ASSUMPTION_SEGMENTS } from '../data/assumptions.js';
+
+/* ── Table definitions: id → { category, columns[] } ── */
+const TABLE_DEFS = {
+  'inf-demand': {
+    category: 'demand',
+    columns: [
+      { path: ['inferenceGrowth', 'consumer'], label: 'Consumer', suffix: '%/yr' },
+      { path: ['inferenceGrowth', 'enterprise'], label: 'Enterprise', suffix: '%/yr' },
+      { path: ['inferenceGrowth', 'agentic'], label: 'Agentic', suffix: '%/yr', help: 'High uncertainty' }
+    ]
+  },
+  'train-demand': {
+    category: 'demand',
+    columns: [
+      { path: ['trainingGrowth', 'frontier'], label: 'Frontier Runs', suffix: '%/yr' },
+      { path: ['trainingGrowth', 'midtier'], label: 'Mid-tier Runs', suffix: '%/yr' }
+    ]
+  },
+  'cont-learning': {
+    category: 'demand',
+    columns: [
+      { path: ['continualLearning', 'computeGrowth'], label: 'Compute', suffix: '%/yr' },
+      { path: ['continualLearning', 'dataStorageGrowth'], label: 'Data Storage', suffix: '%/yr' },
+      { path: ['continualLearning', 'networkBandwidthGrowth'], label: 'Network BW', suffix: '%/yr' }
+    ]
+  },
+  'inf-intensity': {
+    category: 'demand',
+    columns: [
+      { path: ['intensityGrowth'], label: 'Compute per Token', suffix: '%/yr', help: 'Context length + reasoning + agent loops' }
+    ]
+  },
+  'model-eff': {
+    category: 'efficiency',
+    columns: [
+      { path: ['modelEfficiency', 'm_inference'], label: 'Inference', suffix: '%/yr' },
+      { path: ['modelEfficiency', 'm_training'], label: 'Training', suffix: '%/yr' }
+    ]
+  },
+  'sys-eff': {
+    category: 'efficiency',
+    columns: [
+      { path: ['systemsEfficiency', 's_inference'], label: 'Inference', suffix: '%/yr', help: 'Batching, kernels, schedulers' },
+      { path: ['systemsEfficiency', 's_training'], label: 'Training', suffix: '%/yr', help: 'Distributed training optimizations' }
+    ]
+  },
+  'hw-eff': {
+    category: 'efficiency',
+    columns: [
+      { path: ['hardwareEfficiency', 'h'], label: 'Accelerator Perf/$', suffix: '%/yr' },
+      { path: ['hardwareEfficiency', 'h_memory'], label: 'Memory Bandwidth', suffix: '%/yr' }
+    ]
+  }
+};
+
+/* Metrics table columns (read-only derived values) */
+const METRICS_COLUMNS = [
+  { valueKey: 'inferenceGain', label: 'Inference eff. (x/yr)', format: v => v.toFixed(2) },
+  { valueKey: 'inferenceOom', label: 'Inference OOM/yr', format: v => v.toFixed(2) },
+  { valueKey: 'trainingGain', label: 'Training eff. (x/yr)', format: v => v.toFixed(2) },
+  { valueKey: 'trainingOom', label: 'Training OOM/yr', format: v => v.toFixed(2) },
+  { valueKey: 'totalGain', label: 'Total eff. (x/yr)', format: v => v.toFixed(2) },
+  { valueKey: 'totalOom', label: 'Total OOM/yr', format: v => v.toFixed(2) }
+];
 
 function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSimulating }) {
   const timeBlocks = ASSUMPTION_SEGMENTS;
-  const [selection, setSelection] = useState(null);
+  const numRows = timeBlocks.length;
 
-  const getValue = (category, blockKey, path) => {
-    let value = assumptions?.[category]?.[blockKey];
-    for (const key of path) {
+  /*
+   * 2D selection model:
+   *   sel = { t: tableId, r0, c0, r1, c1 }
+   *   r0/c0 = anchor cell, r1/c1 = focus (cursor) cell
+   *   Selected rectangle = min/max of anchor & focus
+   */
+  const [sel, setSel] = useState(null);
+  const selRef = useRef(sel);
+  selRef.current = sel;
+
+  /* Internal clipboard (raw decimal value, e.g. 0.35 for 35%) */
+  const clipboardRef = useRef(null);
+
+  /* Mouse drag state */
+  const draggingRef = useRef(false);
+
+  useEffect(() => {
+    const handleMouseUp = () => { draggingRef.current = false; };
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => document.removeEventListener('mouseup', handleMouseUp);
+  }, []);
+
+  /* ── Value read/write helpers ── */
+
+  const getRawValue = useCallback((tableId, colIndex, rowIndex) => {
+    const def = TABLE_DEFS[tableId];
+    if (!def) return null;
+    const col = def.columns[colIndex];
+    if (!col) return null;
+    const blockKey = timeBlocks[rowIndex]?.key;
+    if (!blockKey) return null;
+    let value = assumptions?.[def.category]?.[blockKey];
+    for (const key of col.path) {
       value = value?.[key];
     }
-    return value;
+    return typeof value === 'object' ? value?.value : value;
+  }, [assumptions, timeBlocks]);
+
+  const setRawValue = useCallback((tableId, colIndex, rowIndex, rawValue) => {
+    const def = TABLE_DEFS[tableId];
+    if (!def) return;
+    const col = def.columns[colIndex];
+    if (!col) return;
+    const blockKey = timeBlocks[rowIndex]?.key;
+    if (!blockKey) return;
+    onAssumptionChange(def.category, blockKey, col.path, rawValue);
+  }, [timeBlocks, onAssumptionChange]);
+
+  /* ── DOM helpers ── */
+
+  const getInput = useCallback((t, r, c) =>
+    document.querySelector(`input[data-t="${t}"][data-r="${r}"][data-c="${c}"]`),
+  []);
+
+  const focusCell = useCallback((t, r, c) => {
+    const el = getInput(t, r, c);
+    if (el) { el.focus(); el.select(); }
+    return !!el;
+  }, [getInput]);
+
+  /* ── Selection rectangle ── */
+
+  const selectionRect = useMemo(() => {
+    if (!sel) return null;
+    return {
+      t: sel.t,
+      minR: Math.min(sel.r0, sel.r1),
+      maxR: Math.max(sel.r0, sel.r1),
+      minC: Math.min(sel.c0, sel.c1),
+      maxC: Math.max(sel.c0, sel.c1),
+    };
+  }, [sel]);
+
+  const isCellInSelection = (tableId, row, col) => {
+    if (!selectionRect || selectionRect.t !== tableId) return false;
+    return row >= selectionRect.minR && row <= selectionRect.maxR
+      && col >= selectionRect.minC && col <= selectionRect.maxC;
   };
 
-  const renderInputCell = (category, blockKey, path, suffix, columnKey, rowIndex) => {
-    const value = getValue(category, blockKey, path);
-    const numValue = typeof value === 'object' ? value?.value : value;
-    const confidence = typeof value === 'object' ? value?.confidence : null;
-    const source = typeof value === 'object' ? value?.source : '';
-    const isSelected = selection
-      && selection.columnKey === columnKey
-      && rowIndex >= Math.min(selection.start, selection.end)
-      && rowIndex <= Math.max(selection.start, selection.end);
-
-    const handleRangeSelect = (event) => {
-      if (event.shiftKey && selection?.columnKey === columnKey) {
-        setSelection({ columnKey, start: selection.start, end: rowIndex });
-        return;
-      }
-      setSelection({ columnKey, start: rowIndex, end: rowIndex });
-    };
-
-    const handleFillDown = (event) => {
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.key.toLowerCase() !== 'd') return;
-      event.preventDefault();
-      if (!selection || selection.columnKey !== columnKey) return;
-      const startIndex = Math.min(selection.start, selection.end);
-      const endIndex = Math.max(selection.start, selection.end);
-      if (startIndex === endIndex) return;
-      const sourceBlockKey = timeBlocks[startIndex]?.key;
-      if (!sourceBlockKey) return;
-      const sourceValue = getValue(category, sourceBlockKey, path);
-      const sourceNumValue = typeof sourceValue === 'object' ? sourceValue?.value : sourceValue;
-      if (sourceNumValue === undefined || Number.isNaN(sourceNumValue)) return;
-      for (let idx = startIndex + 1; idx <= endIndex; idx += 1) {
-        const targetBlockKey = timeBlocks[idx]?.key;
-        if (!targetBlockKey) continue;
-        onAssumptionChange(category, targetBlockKey, path, sourceNumValue);
-      }
-    };
-
-    return (
-      <div className={`assumption-cell${isSelected ? ' is-selected' : ''}`}>
-        <div className="input-row">
-          <input
-            type="number"
-            step="0.01"
-            value={
-              numValue === null || numValue === undefined || Number.isNaN(numValue)
-                ? ''
-                : (numValue * 100).toFixed(0)
-            }
-            onMouseDown={handleRangeSelect}
-            onKeyDown={handleFillDown}
-            onChange={(e) => {
-              if (e.target.value === '') {
-                onAssumptionChange(category, blockKey, path, null);
-                return;
-              }
-              const newValue = parseFloat(e.target.value) / 100;
-              if (!Number.isNaN(newValue)) {
-                onAssumptionChange(category, blockKey, path, newValue);
-              }
-            }}
-            style={{ width: '56px' }}
-          />
-          <span className="input-suffix">{suffix}</span>
-          {confidence && (
-            <span
-              className={`confidence-${confidence}`}
-              title={`Confidence: ${confidence}${source ? ` • ${source}` : ''}`}
-            >
-              {confidence === 'high' ? '●' : confidence === 'medium' ? '◐' : '○'}
-            </span>
-          )}
-        </div>
-      </div>
-    );
+  const isCellFocused = (tableId, row, col) => {
+    if (!sel || sel.t !== tableId) return false;
+    return row === sel.r1 && col === sel.c1;
   };
 
-  const renderYearRow = (block, columns, rowIndex) => (
-    <tr key={block.key}>
-      <td className="assumptions-label-cell assumptions-year-cell">
-        <div className="assumptions-row-title">{block.label}</div>
-        <div className="assumptions-row-help">{block.years}</div>
-      </td>
-      {columns.map((column) => {
-        const columnKey = `${column.category ?? column.type}:${column.path?.join('.') ?? column.valueKey}`;
-        const isSelected = selection
-          && selection.columnKey === columnKey
-          && rowIndex >= Math.min(selection.start, selection.end)
-          && rowIndex <= Math.max(selection.start, selection.end);
-        return (
-        <td
-          key={`${block.key}-${column.label}`}
-          className={`assumptions-input-cell${isSelected ? ' is-selected' : ''}`}
-        >
-          {column.type === 'metric'
-            ? (
-              <span className="assumptions-metric">
-                {column.format(efficiencySummary[block.key][column.valueKey])}
-              </span>
-            )
-            : renderInputCell(column.category, block.key, column.path, column.suffix, columnKey, rowIndex)}
-        </td>
-        );
-      })}
-    </tr>
-  );
+  /* ── Keyboard handler (Excel-style) ── */
+
+  const handleKeyDown = useCallback((e) => {
+    const input = e.target;
+    if (input.tagName !== 'INPUT') return;
+    const t = input.dataset.t;
+    const r = parseInt(input.dataset.r, 10);
+    const c = parseInt(input.dataset.c, 10);
+    if (!t || isNaN(r) || isNaN(c)) return;
+
+    const def = TABLE_DEFS[t];
+    if (!def) return;
+    const numCols = def.columns.length;
+    const s = selRef.current;
+
+    /* Arrow keys: navigate between cells */
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      e.preventDefault();
+      let nr = r, nc = c;
+      if (e.key === 'ArrowUp') nr = Math.max(0, r - 1);
+      if (e.key === 'ArrowDown') nr = Math.min(numRows - 1, r + 1);
+      if (e.key === 'ArrowLeft') nc = Math.max(0, c - 1);
+      if (e.key === 'ArrowRight') nc = Math.min(numCols - 1, c + 1);
+
+      if (focusCell(t, nr, nc)) {
+        if (e.shiftKey) {
+          setSel(prev => prev && prev.t === t
+            ? { ...prev, r1: nr, c1: nc }
+            : { t, r0: r, c0: c, r1: nr, c1: nc });
+        } else {
+          setSel({ t, r0: nr, c0: nc, r1: nr, c1: nc });
+        }
+      }
+      return;
+    }
+
+    /* Enter: move down */
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const nr = Math.min(numRows - 1, r + 1);
+      if (focusCell(t, nr, c)) {
+        setSel({ t, r0: nr, c0: c, r1: nr, c1: c });
+      }
+      return;
+    }
+
+    /* Tab: move right (shift+tab = left), wrap at row edges */
+    if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      let nc = c + (e.shiftKey ? -1 : 1);
+      let nr = r;
+      if (nc >= numCols) { nc = 0; nr = r + 1; }
+      if (nc < 0) { nc = numCols - 1; nr = r - 1; }
+      if (nr >= 0 && nr < numRows && nc >= 0 && nc < numCols) {
+        if (focusCell(t, nr, nc)) {
+          setSel({ t, r0: nr, c0: nc, r1: nr, c1: nc });
+        }
+      }
+      return;
+    }
+
+    /* Escape: clear selection */
+    if (e.key === 'Escape') {
+      setSel(null);
+      input.blur();
+      return;
+    }
+
+    const isMod = e.ctrlKey || e.metaKey;
+
+    /* Ctrl+C: copy active cell value */
+    if (isMod && e.key === 'c') {
+      const raw = getRawValue(t, c, r);
+      clipboardRef.current = raw;
+      /* Don't preventDefault — let browser copy text to system clipboard too */
+      return;
+    }
+
+    /* Ctrl+V: paste into selected cells (or just the active cell) */
+    if (isMod && e.key === 'v') {
+      e.preventDefault();
+      const raw = clipboardRef.current;
+      if (raw === null || raw === undefined) return;
+      if (s && s.t === t) {
+        const rect = {
+          minR: Math.min(s.r0, s.r1), maxR: Math.max(s.r0, s.r1),
+          minC: Math.min(s.c0, s.c1), maxC: Math.max(s.c0, s.c1),
+        };
+        for (let ri = rect.minR; ri <= rect.maxR; ri++) {
+          for (let ci = rect.minC; ci <= rect.maxC; ci++) {
+            setRawValue(t, ci, ri, raw);
+          }
+        }
+      } else {
+        setRawValue(t, c, r, raw);
+      }
+      return;
+    }
+
+    /* Ctrl+D: fill down (top row value → all rows below in selection) */
+    if (isMod && e.key.toLowerCase() === 'd') {
+      e.preventDefault();
+      if (!s || s.t !== t) return;
+      const rect = {
+        minR: Math.min(s.r0, s.r1), maxR: Math.max(s.r0, s.r1),
+        minC: Math.min(s.c0, s.c1), maxC: Math.max(s.c0, s.c1),
+      };
+      if (rect.minR === rect.maxR) return;
+      for (let ci = rect.minC; ci <= rect.maxC; ci++) {
+        const srcVal = getRawValue(t, ci, rect.minR);
+        if (srcVal === null || srcVal === undefined) continue;
+        for (let ri = rect.minR + 1; ri <= rect.maxR; ri++) {
+          setRawValue(t, ci, ri, srcVal);
+        }
+      }
+      return;
+    }
+
+    /* Ctrl+R: fill right (leftmost col value → all cols right in selection) */
+    if (isMod && e.key.toLowerCase() === 'r') {
+      e.preventDefault();
+      if (!s || s.t !== t) return;
+      const rect = {
+        minR: Math.min(s.r0, s.r1), maxR: Math.max(s.r0, s.r1),
+        minC: Math.min(s.c0, s.c1), maxC: Math.max(s.c0, s.c1),
+      };
+      if (rect.minC === rect.maxC) return;
+      for (let ri = rect.minR; ri <= rect.maxR; ri++) {
+        const srcVal = getRawValue(t, rect.minC, ri);
+        if (srcVal === null || srcVal === undefined) continue;
+        for (let ci = rect.minC + 1; ci <= rect.maxC; ci++) {
+          setRawValue(t, ci, ri, srcVal);
+        }
+      }
+      return;
+    }
+  }, [numRows, getRawValue, setRawValue, focusCell]);
+
+  /* ── Mouse handlers for cell selection + drag ── */
+
+  const handleCellMouseDown = useCallback((e, t, r, c) => {
+    /* Prevent text-selection on the page during drag, but let direct input clicks through */
+    if (e.target.tagName !== 'INPUT') {
+      e.preventDefault();
+    }
+    draggingRef.current = true;
+
+    if (e.shiftKey) {
+      const s = selRef.current;
+      if (s && s.t === t) {
+        setSel({ ...s, r1: r, c1: c });
+      } else {
+        setSel({ t, r0: r, c0: c, r1: r, c1: c });
+      }
+    } else {
+      setSel({ t, r0: r, c0: c, r1: r, c1: c });
+    }
+    focusCell(t, r, c);
+  }, [focusCell]);
+
+  const handleCellMouseEnter = useCallback((t, r, c) => {
+    if (!draggingRef.current) return;
+    const s = selRef.current;
+    if (s && s.t === t) {
+      setSel({ ...s, r1: r, c1: c });
+    }
+  }, []);
+
+  /* ── Efficiency summary (for Implied Token Efficiency metrics table) ── */
 
   const efficiencySummary = useMemo(() => {
     const calcStats = (blockKey) => {
@@ -153,17 +356,136 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     }, {});
   }, [assumptions, timeBlocks]);
 
+  /* ── Render: table header row ── */
+
   const renderHeaderRow = (columns, label = 'Year') => (
     <tr>
       <th className="assumptions-header-cell assumptions-header-label">{label}</th>
-      {columns.map((column) => (
-        <th key={column.label} className="assumptions-header-cell">
-          <div className="assumptions-col-title">{column.label}</div>
-          {column.help && <div className="assumptions-col-years">{column.help}</div>}
+      {columns.map(col => (
+        <th key={col.label} className="assumptions-header-cell">
+          <div className="assumptions-col-title">{col.label}</div>
+          {col.help && <div className="assumptions-col-years">{col.help}</div>}
         </th>
       ))}
     </tr>
   );
+
+  /* ── Render: editable table by ID ── */
+
+  const renderEditableTable = (tableId) => {
+    const def = TABLE_DEFS[tableId];
+    if (!def) return null;
+    const { category, columns } = def;
+
+    return (
+      <div className="assumptions-table-wrap">
+        <table className="assumptions-table">
+          <thead>{renderHeaderRow(columns)}</thead>
+          <tbody>
+            {timeBlocks.map((block, rowIdx) => (
+              <tr key={block.key}>
+                <td className="assumptions-label-cell assumptions-year-cell">
+                  <div className="assumptions-row-title">{block.label}</div>
+                  <div className="assumptions-row-help">{block.years}</div>
+                </td>
+                {columns.map((col, colIdx) => {
+                  const selected = isCellInSelection(tableId, rowIdx, colIdx);
+                  const focused = isCellFocused(tableId, rowIdx, colIdx);
+
+                  let value = assumptions?.[category]?.[block.key];
+                  for (const key of col.path) value = value?.[key];
+                  const numValue = typeof value === 'object' ? value?.value : value;
+                  const confidence = typeof value === 'object' ? value?.confidence : null;
+                  const source = typeof value === 'object' ? value?.source : '';
+
+                  const cellClasses = [
+                    'assumptions-input-cell',
+                    selected && 'is-selected',
+                    focused && 'is-focused',
+                  ].filter(Boolean).join(' ');
+
+                  return (
+                    <td
+                      key={col.label}
+                      className={cellClasses}
+                      onMouseDown={(e) => handleCellMouseDown(e, tableId, rowIdx, colIdx)}
+                      onMouseEnter={() => handleCellMouseEnter(tableId, rowIdx, colIdx)}
+                    >
+                      <div className="input-row">
+                        <input
+                          type="number"
+                          step="0.01"
+                          data-t={tableId}
+                          data-r={rowIdx}
+                          data-c={colIdx}
+                          value={
+                            numValue === null || numValue === undefined || Number.isNaN(numValue)
+                              ? ''
+                              : (numValue * 100).toFixed(0)
+                          }
+                          onFocus={(e) => e.target.select()}
+                          onKeyDown={handleKeyDown}
+                          onChange={(e) => {
+                            if (e.target.value === '') {
+                              onAssumptionChange(category, block.key, col.path, null);
+                              return;
+                            }
+                            const newValue = parseFloat(e.target.value) / 100;
+                            if (!Number.isNaN(newValue)) {
+                              onAssumptionChange(category, block.key, col.path, newValue);
+                            }
+                          }}
+                          style={{ width: '56px' }}
+                        />
+                        <span className="input-suffix">{col.suffix}</span>
+                        {confidence && (
+                          <span
+                            className={`confidence-${confidence}`}
+                            title={`Confidence: ${confidence}${source ? ` • ${source}` : ''}`}
+                          >
+                            {confidence === 'high' ? '●' : confidence === 'medium' ? '◐' : '○'}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  /* ── Render: read-only metrics table ── */
+
+  const renderMetricsTable = () => (
+    <div className="assumptions-table-wrap">
+      <table className="assumptions-table assumptions-table--metrics">
+        <thead>{renderHeaderRow(METRICS_COLUMNS)}</thead>
+        <tbody>
+          {timeBlocks.map(block => (
+            <tr key={block.key}>
+              <td className="assumptions-label-cell assumptions-year-cell">
+                <div className="assumptions-row-title">{block.label}</div>
+                <div className="assumptions-row-help">{block.years}</div>
+              </td>
+              {METRICS_COLUMNS.map(col => (
+                <td key={col.label} className="assumptions-input-cell">
+                  <span className="assumptions-metric">
+                    {col.format(efficiencySummary[block.key][col.valueKey])}
+                  </span>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  /* ── Main render ── */
 
   return (
     <div>
@@ -185,6 +507,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
       </div>
 
       <div className="assumptions-grid">
+        {/* ── Demand Growth ── */}
         <div className="assumption-block">
           <div className="assumption-block-header">
             <h3 className="assumption-block-title">Demand Growth</h3>
@@ -193,92 +516,26 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
 
           <div className="section">
             <h4 className="section-title">Inference Demand</h4>
-            {(() => {
-              const columns = [
-                { category: 'demand', path: ['inferenceGrowth', 'consumer'], label: 'Consumer', suffix: '%/yr' },
-                { category: 'demand', path: ['inferenceGrowth', 'enterprise'], label: 'Enterprise', suffix: '%/yr' },
-                { category: 'demand', path: ['inferenceGrowth', 'agentic'], label: 'Agentic', suffix: '%/yr', help: 'High uncertainty' }
-              ];
-              return (
-            <div className="assumptions-table-wrap">
-              <table className="assumptions-table">
-                <thead>{renderHeaderRow(columns)}</thead>
-                <tbody>
-                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
-                </tbody>
-              </table>
-            </div>
-              );
-            })()}
+            {renderEditableTable('inf-demand')}
           </div>
 
           <div className="section">
             <h4 className="section-title">Training Demand</h4>
-            {(() => {
-              const columns = [
-                { category: 'demand', path: ['trainingGrowth', 'frontier'], label: 'Frontier Runs', suffix: '%/yr' },
-                { category: 'demand', path: ['trainingGrowth', 'midtier'], label: 'Mid-tier Runs', suffix: '%/yr' }
-              ];
-              return (
-            <div className="assumptions-table-wrap">
-              <table className="assumptions-table">
-                <thead>{renderHeaderRow(columns)}</thead>
-                <tbody>
-                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
-                </tbody>
-              </table>
-            </div>
-              );
-            })()}
+            {renderEditableTable('train-demand')}
           </div>
 
           <div className="section">
             <h4 className="section-title">Continual Learning</h4>
-            {(() => {
-              const columns = [
-                { category: 'demand', path: ['continualLearning', 'computeGrowth'], label: 'Compute', suffix: '%/yr' },
-                { category: 'demand', path: ['continualLearning', 'dataStorageGrowth'], label: 'Data Storage', suffix: '%/yr' },
-                { category: 'demand', path: ['continualLearning', 'networkBandwidthGrowth'], label: 'Network BW', suffix: '%/yr' }
-              ];
-              return (
-            <div className="assumptions-table-wrap">
-              <table className="assumptions-table">
-                <thead>{renderHeaderRow(columns)}</thead>
-                <tbody>
-                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
-                </tbody>
-              </table>
-            </div>
-              );
-            })()}
+            {renderEditableTable('cont-learning')}
           </div>
 
           <div className="section">
             <h4 className="section-title">Inference Intensity</h4>
-            {(() => {
-              const columns = [
-                {
-                  category: 'demand',
-                  path: ['intensityGrowth'],
-                  label: 'Compute per Token',
-                  suffix: '%/yr',
-                  help: 'Context length + reasoning + agent loops'
-                }
-              ];
-              return (
-            <div className="assumptions-table-wrap">
-              <table className="assumptions-table">
-                <thead>{renderHeaderRow(columns)}</thead>
-                <tbody>
-                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
-                </tbody>
-              </table>
-            </div>
-              );
-            })()}
+            {renderEditableTable('inf-intensity')}
           </div>
         </div>
 
+        {/* ── Efficiency Improvements ── */}
         <div className="assumption-block">
           <div className="assumption-block-header">
             <h3 className="assumption-block-title">Efficiency Improvements</h3>
@@ -287,74 +544,17 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
 
           <div className="section">
             <h4 className="section-title">Model Efficiency (Compute/Token Reduction)</h4>
-            {(() => {
-              const columns = [
-                { category: 'efficiency', path: ['modelEfficiency', 'm_inference'], label: 'Inference', suffix: '%/yr' },
-                { category: 'efficiency', path: ['modelEfficiency', 'm_training'], label: 'Training', suffix: '%/yr' }
-              ];
-              return (
-            <div className="assumptions-table-wrap">
-              <table className="assumptions-table">
-                <thead>{renderHeaderRow(columns)}</thead>
-                <tbody>
-                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
-                </tbody>
-              </table>
-            </div>
-              );
-            })()}
+            {renderEditableTable('model-eff')}
           </div>
 
           <div className="section">
             <h4 className="section-title">Systems Throughput (Software Gains)</h4>
-            {(() => {
-              const columns = [
-                {
-                  category: 'efficiency',
-                  path: ['systemsEfficiency', 's_inference'],
-                  label: 'Inference',
-                  suffix: '%/yr',
-                  help: 'Batching, kernels, schedulers'
-                },
-                {
-                  category: 'efficiency',
-                  path: ['systemsEfficiency', 's_training'],
-                  label: 'Training',
-                  suffix: '%/yr',
-                  help: 'Distributed training optimizations'
-                }
-              ];
-              return (
-            <div className="assumptions-table-wrap">
-              <table className="assumptions-table">
-                <thead>{renderHeaderRow(columns)}</thead>
-                <tbody>
-                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
-                </tbody>
-              </table>
-            </div>
-              );
-            })()}
+            {renderEditableTable('sys-eff')}
           </div>
 
           <div className="section">
             <h4 className="section-title">Hardware Throughput (Chip Improvements)</h4>
-            {(() => {
-              const columns = [
-                { category: 'efficiency', path: ['hardwareEfficiency', 'h'], label: 'Accelerator Perf/$', suffix: '%/yr' },
-                { category: 'efficiency', path: ['hardwareEfficiency', 'h_memory'], label: 'Memory Bandwidth', suffix: '%/yr' }
-              ];
-              return (
-            <div className="assumptions-table-wrap">
-              <table className="assumptions-table">
-                <thead>{renderHeaderRow(columns)}</thead>
-                <tbody>
-                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
-                </tbody>
-              </table>
-            </div>
-              );
-            })()}
+            {renderEditableTable('hw-eff')}
           </div>
 
           <div className="section">
@@ -364,26 +564,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               log10 efficiency gain (e.g., 0.3 = 2×/year). Total OOM/year mirrors the
               combined efficiency improvement rate used in industry reporting.
             </p>
-            {(() => {
-              const columns = [
-                { type: 'metric', valueKey: 'inferenceGain', label: 'Inference eff. (x/yr)', format: (value) => value.toFixed(2) },
-                { type: 'metric', valueKey: 'inferenceOom', label: 'Inference OOM/yr', format: (value) => value.toFixed(2) },
-                { type: 'metric', valueKey: 'trainingGain', label: 'Training eff. (x/yr)', format: (value) => value.toFixed(2) },
-                { type: 'metric', valueKey: 'trainingOom', label: 'Training OOM/yr', format: (value) => value.toFixed(2) },
-                { type: 'metric', valueKey: 'totalGain', label: 'Total eff. (x/yr)', format: (value) => value.toFixed(2) },
-                { type: 'metric', valueKey: 'totalOom', label: 'Total OOM/yr', format: (value) => value.toFixed(2) }
-              ];
-              return (
-            <div className="assumptions-table-wrap">
-              <table className="assumptions-table assumptions-table--metrics">
-                <thead>{renderHeaderRow(columns)}</thead>
-                <tbody>
-                  {timeBlocks.map((block, index) => renderYearRow(block, columns, index))}
-                </tbody>
-              </table>
-            </div>
-              );
-            })()}
+            {renderMetricsTable()}
           </div>
         </div>
       </div>
