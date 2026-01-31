@@ -1,14 +1,14 @@
 /**
  * AI Infrastructure Supply Chain - Calculation Engine
  *
- * FINAL PRODUCTION VERSION (v24):
- * * ARCHITECTURE: Generic Gating + Single-Source Consumption + Availability Stocks.
- * * DIAGNOSTICS: Preflight checks for Dead Links, Missing Units, and Ghost Constraints.
- * * SAFETY: Throttled Runtime Warnings.
- * * STATUS: READY FOR CALIBRATION.
+ * FINAL CALIBRATED VERSION (v25):
+ * * SEMANTICS: Throughput/Queue nodes do not accumulate ghost backlog.
+ * * PHYSICALITY: Stock nodes enforce Delivered <= Available (Trap for unmapped constraints).
+ * * LOGIC: Split follows Plan. Expansion follows Baseline.
+ * * OPTIMIZATION: O(1) Node Lookups.
  */
 
-import { NODES, getNode } from '../data/nodes.js';
+import { NODES } from '../data/nodes.js';
 import {
   GLOBAL_PARAMS,
   DEMAND_ASSUMPTIONS,
@@ -20,8 +20,11 @@ import {
 } from '../data/assumptions.js';
 
 // ============================================
-// 1. ONTOLOGY DEFINITIONS
+// 1. ONTOLOGY & OPTIMIZATION
 // ============================================
+
+// O(1) Lookup
+const NODE_MAP = new Map(NODES.map(n => [n.id, n]));
 
 const STOCK_NODES = new Set([
   'gpu_datacenter', 'gpu_inference', 
@@ -56,7 +59,7 @@ const EXPECTED_UNITS = {
     'advanced_wafers': 'Wafers',
     'abf_substrate': 'Units',
     'cowos_capacity': 'Wafers/Month',
-    'server_assembly': 'Servers/Month', // Critical check
+    'server_assembly': 'Servers/Month', 
     'grid_interconnect': 'MW',
     'hybrid_bonding': 'Bonds/WaferOps'
 };
@@ -89,10 +92,6 @@ function deepMerge(target, source) {
     }
   }
   return result;
-}
-
-function resolveAssumptionValue(value, fallback) {
-  return value ?? fallback ?? 0;
 }
 
 function sma(values, window) {
@@ -156,14 +155,6 @@ function calculateNodeYield(node, month) {
    return calculateSimpleYield(node.yieldSimpleLoss || 0.03);
 }
 
-function calculateInferenceDemand(month, assumptions) {
-    const blockKey = getBlockKeyForMonth(month);
-    const block = assumptions?.[blockKey] || DEMAND_ASSUMPTIONS[blockKey];
-    const base = block?.workloadBase?.inferenceTokensPerMonth?.total || 50000;
-    const growth = Math.pow(1.035, month); 
-    return { total: base * growth }; 
-}
-
 // ============================================
 // 4. INTENSITY MAPPING & PREFLIGHT
 // ============================================
@@ -206,7 +197,7 @@ function runPreflightDiagnostics(map, warnings) {
     
     // 1. Check for Dead Links & Group A conflicts
     Object.keys(map).forEach(key => {
-        const node = NODES.find(n => n.id === key);
+        const node = NODE_MAP.get(key);
         
         if (!node) {
             warnings.push(`PREFLIGHT ERROR: Intensity Map references node '${key}' which is not in NODES.`);
@@ -251,7 +242,6 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const nodeIntensityMap = buildIntensityMap();
   runPreflightDiagnostics(nodeIntensityMap, results.warnings);
 
-  // Track runtime warnings to avoid spam
   const warnedNodes = new Set();
   const demandAssumptions = deepMerge(assumptions?.demand || DEMAND_ASSUMPTIONS, scenarioOverrides?.demand);
 
@@ -280,7 +270,6 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   for (let month = 0; month < months; month++) {
     results.months.push(month);
 
-    // 1. Core Drivers
     const requiredGpuBase = 2000000 * Math.pow(1.03, month); 
     const requiredDcBase = requiredGpuBase * 0.7; 
     const requiredInfBase = requiredGpuBase * 0.3; 
@@ -303,7 +292,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Master Scalar (Includes Paydown)
     const planDeployTotal = planDeployDc + planDeployInf + backlogPaydown;
     
-    // Baseline Plan (New Demand Only)
+    // Baseline Plan (Structural Demand)
     const baselinePlan = planDeployDc + planDeployInf;
 
     // =======================================================
@@ -332,7 +321,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // =======================================================
     
     // 1. GPU Fab Constraint
-    const gpuNode = NODES.find(n => n.id === 'gpu_datacenter');
+    const gpuNode = NODE_MAP.get('gpu_datacenter');
     const gpuCap = calculateCapacity(gpuNode, month, scenarioOverrides, gpuState.dynamicExpansions);
     const gpuEffCap = gpuCap * 0.95 * calculateNodeYield(gpuNode, month);
     const gpuAvailable = gpuState.inventory + gpuEffCap;
@@ -354,7 +343,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         }
     });
 
-    // SAFETY: Throttled "No Constraints" Warning (Annual check)
+    // SAFETY: Throttled Warning (Annual)
     if (constraintCount === 0 && (month === 0 || month % 12 === 0)) {
         results.warnings.push(`Warning (Month ${month}): No active component constraints found. System running unconstrained.`);
         maxSupported = Infinity; 
@@ -386,12 +375,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         gpuState.inventory = 0;
     }
 
-    // CLEAN BACKLOG
+    // CLEAN BACKLOG: New = Old + Baseline - Actual (Implicit paydown)
     gpuState.backlog = Math.max(0, oldGpuBacklog + baselinePlan - actualDeployTotal);
     
-    // Installed Base Update
-    const totalReqBase = requiredDcBase + requiredInfBase;
-    const shareDc = totalReqBase > 0 ? (requiredDcBase / totalReqBase) : 0.7;
+    // Installed Base Update (LOGIC FIX: Split by Plan, not RequiredBase)
+    const shareDc = planDeployTotal > EPSILON ? (planDeployDc / planDeployTotal) : 0.7;
     const actualDc = actualDeployTotal * shareDc;
     const actualInf = actualDeployTotal * (1 - shareDc);
 
@@ -399,8 +387,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     infState.installedBase = Math.max(0, infState.installedBase + actualInf - infRetirements);
 
     // --- GPU EXPANSION LOGIC ---
-    // Trigger off Flow (Plan)
-    const gpuTotalLoad = planDeployTotal; 
+    // LOGIC FIX: Trigger off Baseline Plan (Steady State Demand)
+    const gpuTotalLoad = baselinePlan; 
     const gpuPotential = preUpdateGpuInventory + gpuEffCap;
     const gpuTightness = gpuTotalLoad / Math.max(gpuPotential, EPSILON);
     
@@ -429,7 +417,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         res.backlog.push(gpuState.backlog * share);
         res.installedBase.push(state.installedBase);
         res.consumption.push(actualDeployTotal * share);
-        res.tightness.push(gpuTightness); // REPORTING FIX
+        res.tightness.push(gpuTightness); 
         res.shortage.push(gpuState.backlog > 0 ? 1 : 0);
     });
 
@@ -460,23 +448,25 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
             const production = Math.min(effectiveCapacity, prodNeed);
             
             const available = state.inventory + production;
-            delivered = consumption; 
+            
+            // PHYSICALITY CHECK: Delivered cannot exceed Available
+            delivered = Math.min(consumption, available); 
+            
+            // Trap Unmapped Constraints
+            if (delivered < consumption - 1e-6) {
+                 if (!warnedNodes.has(node.id)) {
+                    results.warnings.push(`Logic Error: Unmapped Constraint in ${node.id}. Consumption > Available.`);
+                    warnedNodes.add(node.id);
+                 }
+            }
             
             state.inventory = available - delivered;
             state.backlog = 0; 
             
-            // SAFETY: Inventory Clamp
-            if (state.inventory < -1e-6) {
-                if (!warnedNodes.has(node.id)) {
-                    results.warnings.push(`Clamp: Negative Inventory in ${node.id} (Month ${month})`);
-                    warnedNodes.add(node.id);
-                }
-                state.inventory = 0;
-            }
-            
         } else {
+            // THROUGHPUT: No Ghost Backlog
             delivered = consumption;
-            state.backlog = Math.max(0, state.backlog + demand - delivered);
+            state.backlog = 0; // SEMANTIC FIX: Throughput nodes don't accumulate plan backlog
             state.inventory = 0;
         }
 
@@ -505,7 +495,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         nodeRes.backlog.push(state.backlog);
         nodeRes.tightness.push(tightness);
         
-        const isShort = (state.type === 'STOCK') ? (tightness > 1.05) : (state.backlog > 0);
+        // Shortage Flag: Unified Metric
+        const isShort = tightness > 1.05;
         nodeRes.shortage.push(isShort ? 1 : 0);
     });
 
@@ -523,7 +514,7 @@ function analyzeResults(results) {
   const shortagePersistence = 3;
 
   Object.entries(results.nodes).forEach(([nodeId, data]) => {
-    const node = getNode(nodeId);
+    const node = NODE_MAP.get(nodeId);
     if (!node || node.group === 'A') return;
 
     let shortageStart = null, peakTightness = 0, shortageDuration = 0, consecShort = 0;
