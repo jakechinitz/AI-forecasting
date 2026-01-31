@@ -20,18 +20,20 @@ import MarketClearingTab from './components/MarketClearingTab.jsx';
 import AnalysisTab from './components/AnalysisTab.jsx';
 import ChartsTab from './components/ChartsTab.jsx';
 import ScenarioTab from './components/ScenarioTab.jsx';
+import GrowthRatesTab from './components/GrowthRatesTab.jsx';
 
 import './styles/app.css';
 
 const TABS = [
-  { id: 'assumptions', label: 'Assumptions', icon: '⚙️' },
-  { id: 'nodes', label: 'Node Library', icon: '🔗' },
-  { id: 'demand', label: 'Demand Engine', icon: '📈' },
-  { id: 'supply', label: 'Supply Engine', icon: '🏭' },
-  { id: 'market', label: 'Market Clearing', icon: '⚖️' },
-  { id: 'analysis', label: 'Shortage/Glut', icon: '🔍' },
-  { id: 'charts', label: 'Charts', icon: '📊' },
-  { id: 'scenarios', label: 'Scenarios', icon: '🎭' }
+  { id: 'assumptions', label: 'Assumptions', icon: '⚙️', description: 'Inputs & efficiencies' },
+  { id: 'nodes', label: 'Node Library', icon: '🔗', description: 'Supply chain map' },
+  { id: 'demand', label: 'Demand Drivers', icon: '📈', description: 'Workload demand' },
+  { id: 'supply', label: 'Supply Buildout', icon: '🏭', description: 'Capacity growth' },
+  { id: 'market', label: 'Market Clearing', icon: '⚖️', description: 'Tightness & pricing' },
+  { id: 'analysis', label: 'Market Stress', icon: '🚦', description: 'Shortages & gluts' },
+  { id: 'growth', label: 'YoY Growth', icon: '📅', description: 'Demand vs supply' },
+  { id: 'charts', label: 'Node Trends', icon: '📊', description: 'Detailed charts' },
+  { id: 'scenarios', label: 'Scenarios', icon: '🎭', description: 'Compare cases' }
 ];
 
 function App() {
@@ -175,6 +177,17 @@ function App() {
             selectedNode={selectedNode}
             onSelectNode={setSelectedNode}
             scenario={selectedScenario}
+          />
+        );
+
+      case 'growth':
+        return (
+          <GrowthRatesTab
+            results={simulationResults}
+            onSelectNode={(nodeId) => {
+              setSelectedNode(nodeId);
+              setActiveTab('charts');
+            }}
           />
         );
 

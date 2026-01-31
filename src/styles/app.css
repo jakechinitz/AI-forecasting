@@ -182,6 +182,26 @@
   text-align: center;
 }
 
+.sidebar-item-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.sidebar-item-label {
+  font-size: 0.875rem;
+}
+
+.sidebar-item-description {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.sidebar-item.active .sidebar-item-description {
+  color: rgba(255, 255, 255, 0.75);
+}
+
 .sidebar-divider {
   height: 1px;
   background: var(--bg-tertiary);
@@ -283,12 +303,19 @@
 }
 
 /* Assumption blocks */
+.assumptions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: var(--space-lg);
+}
+
 .assumption-block {
   background: var(--bg-primary);
   border-radius: var(--radius-lg);
   padding: var(--space-lg);
   border: 1px solid var(--border-color);
   box-shadow: var(--shadow-sm);
+  overflow-x: auto;
 }
 
 .assumption-block-header {
@@ -310,6 +337,113 @@
   background: var(--bg-tertiary);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
+}
+
+.assumptions-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.assumptions-row-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.assumptions-row-help {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.assumptions-table-wrap {
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.assumptions-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.assumptions-table th,
+.assumptions-table td {
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--border-color-light);
+  text-align: center;
+  vertical-align: middle;
+}
+
+.assumptions-table th {
+  background: var(--bg-tertiary);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.assumptions-table tr:last-child td {
+  border-bottom: none;
+}
+
+.assumptions-header-cell {
+  min-width: 120px;
+}
+
+.assumptions-header-label {
+  text-align: left;
+  min-width: 140px;
+}
+
+.assumptions-label-cell {
+  text-align: left;
+  background: var(--bg-primary);
+}
+
+.assumptions-input-cell {
+  background: var(--bg-secondary);
+}
+
+.assumptions-table--metrics td {
+  background: var(--bg-tertiary);
+}
+
+.assumptions-year-cell {
+  width: 160px;
+}
+
+.assumptions-metric {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.section-description {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: var(--space-sm);
+}
+
+.formula-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--space-lg);
+}
+
+.formula-grid h4 {
+  font-size: 0.875rem;
+  margin-bottom: var(--space-sm);
+}
+
+.formula-grid code {
+  display: block;
+  padding: var(--space-sm);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
 }
 
 /* Node cards */

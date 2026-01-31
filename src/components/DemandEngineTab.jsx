@@ -82,7 +82,7 @@ function DemandEngineTab({ results, assumptions }) {
     <div>
       <div className="tab-header">
         <div>
-          <h1 className="tab-title">Demand Engine</h1>
+          <h1 className="tab-title">Demand Drivers</h1>
           <p className="tab-description">
             Computes monthly workload demand: training compute (frontier + mid-tier runs) and
             inference tokens (consumer, enterprise, agentic). Applies efficiency multipliers

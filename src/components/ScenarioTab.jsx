@@ -34,7 +34,7 @@ function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results })
     <div>
       <div className="tab-header">
         <div>
-          <h1 className="tab-title">Scenario Manager</h1>
+          <h1 className="tab-title">Scenario Comparison</h1>
           <p className="tab-description">
             Compare different demand, efficiency, and supply scenarios. Select a scenario to
             run the simulation with adjusted assumptions.

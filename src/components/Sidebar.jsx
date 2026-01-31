@@ -11,7 +11,12 @@ function Sidebar({ tabs, activeTab, onTabChange }) {
             onClick={() => onTabChange(tab.id)}
           >
             <span className="sidebar-item-icon">{tab.icon}</span>
-            <span>{tab.label}</span>
+            <span className="sidebar-item-text">
+              <span className="sidebar-item-label">{tab.label}</span>
+              {tab.description && (
+                <span className="sidebar-item-description">{tab.description}</span>
+              )}
+            </span>
           </button>
         ))}
       </nav>
