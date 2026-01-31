@@ -535,7 +535,9 @@ const BASE_NODES = [
     description: 'TSMC CoWoS 2.5D packaging for AI chips',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.3,  // ~0.3 CoWoS wafer-equiv per GPU (~3.3 GPUs per wafer-equiv)
+    // Conversion handled in TRANSLATION_INTENSITIES.gpuToComponents.cowosWaferEquivPerGpu
+    // to avoid double-counting wafer-equivalent demand.
+    inputIntensity: 1.0,
     parentNodeIds: ['gpu_datacenter'],
 
     // TSMC CoWoS: 75-80k wafer-equiv/month end-2025, to 115k end-2026 (sold out)
