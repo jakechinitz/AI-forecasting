@@ -939,7 +939,6 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuResults = results.nodes['gpu_datacenter'];
     let gpuBacklogIn = 0;
     let gpuInventoryIn = 0;
-    let gpuAvailableSupply = 0;
 
     // Calculate GPU capacity and raw shipments (before gating)
     const gpuCapacity = calculateCapacity(gpuNode, month, scenarioOverrides, gpuState.dynamicExpansions);
@@ -954,7 +953,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuDemand = gpuGap + gpuRetirements;
 
     // OPTION 3: Component demand driven by production requirement
-    const gpuProductionRequirement = gpuDemand + (gpuState?.backlog ?? 0);
+    const gpuProductionRequirement = gpuDemand + gpuState.backlog;
     const deploymentVelocityCap = calculateDeploymentVelocityCap(month, scenarioOverrides, nodeState);
     const gpuPurchasesThisMonth = Math.min(gpuProductionRequirement, deploymentVelocityCap);
 
@@ -1060,12 +1059,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const maxByCoWoS = componentSupply.cowos_capacity / cowosUnitsPerGPU;
     const maxByPower = componentSupply.datacenter_mw / MWperGPU;
 
-    gpuBacklogIn = gpuState?.backlog ?? 0;
-    gpuInventoryIn = gpuState?.inventory ?? 0;
-    gpuAvailableSupply = gpuShipmentsRaw + gpuInventoryIn;
+    // GPU delivered = min of production and all gating components
     const gpuAvailableToShip = Math.min(
-      gpuAvailableSupply,
-      gpuDemand + gpuBacklogIn,
+      gpuShipmentsRaw + gpuState.inventory,
+      gpuDemand + gpuState.backlog,
       deploymentVelocityCap
     );
     const gpuDelivered = Math.min(gpuAvailableToShip, maxByHBM, maxByCoWoS, maxByPower);
