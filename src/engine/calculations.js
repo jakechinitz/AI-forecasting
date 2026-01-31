@@ -128,6 +128,10 @@ const CALIBRATION = {
   // Below required base = real-world GPU shortage at month 0
   // Gap of 500K represents the backlog/shortage visible in Jan 2026
   startingInstalledBaseGpuDc: 1500000,  // 1.5M GPUs actually installed
+  startingInstalledBaseGpuInference: 300000,  // ~20% of DC installed base
+
+  // Share of total workload allocated to inference accelerators vs datacenter GPUs
+  inferenceShare: 0.30,
 
   targetUtilization: 0.70,
   // This will be computed at simulation start
@@ -853,7 +857,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // STOCK VS FLOW FIX: Track installed base for GPU nodes
     const isStockNode = ['gpu_datacenter', 'gpu_inference'].includes(node.id);
     // Initialize with ACTUAL installed base (below required base = shortage)
-    const startingInstalledBase = isStockNode ? CALIBRATION.startingInstalledBaseGpuDc : 0;
+    let startingInstalledBase = 0;
+    if (node.id === 'gpu_datacenter') startingInstalledBase = CALIBRATION.startingInstalledBaseGpuDc;
+    else if (node.id === 'gpu_inference') startingInstalledBase = CALIBRATION.startingInstalledBaseGpuInference;
     const lifetimeMonths = node.lifetimeMonths || 48; // 4 year default lifetime
 
     nodeState[node.id] = {
@@ -931,38 +937,68 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Translate to GPU REQUIRED BASE (stock needed to run workloads)
     const requiredGpuBase = accelHoursToRequiredGpuBase(totalAccelHours);
 
+    // Split required base between datacenter and inference (no double-counting)
+    const inferenceShare = CALIBRATION.inferenceShare;
+    const requiredDcBase = requiredGpuBase * (1 - inferenceShare);
+    const requiredInfBase = requiredGpuBase * inferenceShare;
+
     // ============================================
     // PHASE 1: Calculate GPU raw production and demands
+    //          (both datacenter and inference segments)
     // ============================================
+
+    // --- Datacenter GPUs ---
     const gpuNode = NODES.find(n => n.id === 'gpu_datacenter');
     const gpuState = nodeState['gpu_datacenter'];
     const gpuResults = results.nodes['gpu_datacenter'];
     const gpuBacklogIn = gpuState.backlog;
     const gpuInventoryIn = gpuState.inventory;
 
-    // Calculate GPU capacity and raw shipments (before gating)
     const gpuCapacity = calculateCapacity(gpuNode, month, scenarioOverrides, gpuState.dynamicExpansions);
     const gpuYield = calculateNodeYield(gpuNode, month);
     const gpuMaxUtil = gpuNode.maxCapacityUtilization || 0.95;
     const gpuShipmentsRaw = gpuCapacity * gpuMaxUtil * gpuYield;
 
-    // Calculate GPU purchase demand
-    // Demand = current shortfall (gap) + replacement demand (retirements)
     const gpuRetirements = gpuState.installedBase / gpuState.lifetimeMonths;
-    const gpuGap = Math.max(0, requiredGpuBase - gpuState.installedBase);
+    const gpuGap = Math.max(0, requiredDcBase - gpuState.installedBase);
     const gpuDemand = gpuGap + gpuRetirements;
 
-    // OPTION 3: Component demand driven by production requirement
-    const gpuProductionRequirement = gpuDemand + gpuBacklogIn;
+    // --- Inference accelerators ---
+    const infNode = NODES.find(n => n.id === 'gpu_inference');
+    const infState = nodeState['gpu_inference'];
+    const infResults = results.nodes['gpu_inference'];
+    const infBacklogIn = infState.backlog;
+    const infInventoryIn = infState.inventory;
+
+    const infCapacity = calculateCapacity(infNode, month, scenarioOverrides, infState.dynamicExpansions);
+    const infYield = calculateNodeYield(infNode, month);
+    const infMaxUtil = infNode.maxCapacityUtilization || 0.95;
+    const infShipmentsRaw = infCapacity * infMaxUtil * infYield;
+
+    const infRetirements = infState.installedBase / infState.lifetimeMonths;
+    const infGap = Math.max(0, requiredInfBase - infState.installedBase);
+    const infDemand = infGap + infRetirements;
+
+    // --- Combined production requirement and deployment velocity cap ---
+    const dcProdReq = gpuDemand + gpuBacklogIn;
+    const infProdReq = infDemand + infBacklogIn;
+    const totalProdReq = dcProdReq + infProdReq;
+
     const deploymentVelocityCap = calculateDeploymentVelocityCap(month, scenarioOverrides, nodeState);
-    const gpuPurchasesThisMonth = Math.min(gpuProductionRequirement, deploymentVelocityCap);
+    const totalPurchasesCap = Math.min(totalProdReq, deploymentVelocityCap);
+
+    // Allocate purchases proportionally by share of requirement
+    const dcPurchases = totalProdReq > 0
+      ? totalPurchasesCap * (dcProdReq / totalProdReq) : 0;
+    const infPurchases = totalProdReq > 0
+      ? totalPurchasesCap * (infProdReq / totalProdReq) : 0;
 
     // Calculate effective HBM per GPU (increases with continual learning adoption)
     const effectiveHbmPerGpuThisMonth = calculateEffectiveHbmPerGpu(month, demandAssumptions);
 
-    // Compute component demands from GPU production requirement
+    // Compute component demands from COMBINED production requirement
     const componentDemands = gpuToComponentDemands(
-      gpuPurchasesThisMonth,
+      dcPurchases + infPurchases,
       month,
       effectiveHbmPerGpuThisMonth
     );
@@ -1046,58 +1082,76 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     // ============================================
     // PHASE 3: Hard-gate GPU deliveries by bottlenecks
+    //          Allocate shared components proportionally
     // ============================================
-    // Calculate max deliverable GPUs by each component
-    // Continual learning increases HBM demand per GPU
     const effectiveStacksPerGPU = calculateEffectiveHbmPerGpu(month, demandAssumptions);
     const { cowosWaferEquivPerGpu } = getGpuToComponentIntensities();
     const { kwPerGpu, pue } = getServerInfraIntensities();
     const cowosUnitsPerGPU = cowosWaferEquivPerGpu;
     const MWperGPU = (kwPerGpu * pue) / 1000;
 
-    const maxByHBM = componentSupply.hbm_stacks / effectiveStacksPerGPU;
-    const maxByCoWoS = componentSupply.cowos_capacity / cowosUnitsPerGPU;
-    const maxByPower = componentSupply.datacenter_mw / MWperGPU;
+    // Proportional share for component allocation (by production requirement)
+    const shareDc = totalProdReq > 0 ? dcProdReq / totalProdReq : 1;
+    const shareInf = 1 - shareDc;
 
-    // GPU delivered = min of production and all gating components
+    // Allocate component budgets to each GPU segment
+    const hbmForDc = componentSupply.hbm_stacks * shareDc;
+    const cowosForDc = componentSupply.cowos_capacity * shareDc;
+    const powerForDc = componentSupply.datacenter_mw * shareDc;
+
+    const hbmForInf = componentSupply.hbm_stacks * shareInf;
+    const cowosForInf = componentSupply.cowos_capacity * shareInf;
+    const powerForInf = componentSupply.datacenter_mw * shareInf;
+
+    // --- Datacenter GPU gating ---
+    const dcMaxByHBM = hbmForDc / effectiveStacksPerGPU;
+    const dcMaxByCoWoS = cowosForDc / cowosUnitsPerGPU;
+    const dcMaxByPower = powerForDc / MWperGPU;
+
     const gpuAvailableSupply = gpuShipmentsRaw + gpuInventoryIn;
     const gpuDelivered = Math.min(
       gpuAvailableSupply,
       gpuDemand + gpuBacklogIn,
-      deploymentVelocityCap,
-      maxByHBM,
-      maxByCoWoS,
-      maxByPower
+      dcMaxByHBM,
+      dcMaxByCoWoS,
+      dcMaxByPower
     );
-
-    // Idle GPUs = produced/shipped but blocked by component constraints
     const idleGpus = Math.max(0, gpuAvailableSupply - gpuDelivered);
 
+    // --- Inference accelerator gating ---
+    const infMaxByHBM = hbmForInf / effectiveStacksPerGPU;
+    const infMaxByCoWoS = cowosForInf / cowosUnitsPerGPU;
+    const infMaxByPower = powerForInf / MWperGPU;
+
+    const infAvailableSupply = infShipmentsRaw + infInventoryIn;
+    const infDelivered = Math.min(
+      infAvailableSupply,
+      infDemand + infBacklogIn,
+      infMaxByHBM,
+      infMaxByCoWoS,
+      infMaxByPower
+    );
+    const infIdleGpus = Math.max(0, infAvailableSupply - infDelivered);
+
     // ============================================
-    // PHASE 4: Finalize GPU node results
+    // PHASE 4: Finalize GPU node results (both segments)
     // ============================================
-    // Calculate tightness based on fulfilled GPUs
+
+    // --- Datacenter GPU results ---
     const gpuTightness = (gpuDemand + gpuBacklogIn) / Math.max(gpuDelivered, EPSILON);
-
-    // Update installed base with DELIVERED GPUs (not raw shipments)
     gpuState.installedBase = Math.max(0, gpuState.installedBase + gpuDelivered - gpuRetirements);
-
-    // Update price history
     gpuState.priceHistory.push(calculatePriceIndex(gpuTightness));
 
-    // Update inventory (deliverable inventory only; idle tracked separately)
-    // Backlog is demand not met
     const gpuInventoryOut = Math.max(0, gpuAvailableSupply - gpuDelivered);
     const gpuBacklogOut = Math.max(0, gpuDemand + gpuBacklogIn - gpuDelivered);
     gpuState.inventory = gpuInventoryOut;
     gpuState.backlog = gpuBacklogOut;
 
-    // Store GPU results
     gpuResults.demand.push(gpuDemand);
-    gpuResults.supply.push(gpuDelivered);                 // Fulfilled GPU deliveries
-    gpuResults.supplyPotential.push(gpuShipmentsRaw);     // Max producible
-    gpuResults.gpuDelivered.push(gpuDelivered);           // Actually usable after gating
-    gpuResults.idleGpus.push(idleGpus);                   // Blocked by components
+    gpuResults.supply.push(gpuDelivered);
+    gpuResults.supplyPotential.push(gpuShipmentsRaw);
+    gpuResults.gpuDelivered.push(gpuDelivered);
+    gpuResults.idleGpus.push(idleGpus);
     gpuResults.capacity.push(gpuCapacity);
     gpuResults.yield.push(gpuYield);
     gpuResults.tightness.push(gpuTightness);
@@ -1105,25 +1159,50 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     gpuResults.inventory.push(gpuState.inventory);
     gpuResults.backlog.push(gpuState.backlog);
     gpuResults.installedBase.push(gpuState.installedBase);
-    gpuResults.requiredBase.push(requiredGpuBase);
-    gpuResults.gpuPurchases.push(gpuPurchasesThisMonth);
+    gpuResults.requiredBase.push(requiredDcBase);
+    gpuResults.gpuPurchases.push(dcPurchases);
 
-    // Track tightness history for persistence-based detection
     gpuState.tightnessHistory.push(gpuTightness);
 
-    // Persistence-based shortage/glut detection
     const gpuIsShortage = gpuBacklogOut > 0 || gpuTightness > 1.05;
     const gpuIsGlut = gpuInventoryOut > 0 && gpuTightness < 0.95;
     gpuResults.shortage.push(gpuIsShortage ? 1 : 0);
     gpuResults.glut.push(gpuIsGlut ? 1 : 0);
 
-    // Remaining component supply after datacenter GPU deliveries (for inference accelerator gating)
-    const remainingHBM = Math.max(0, componentSupply.hbm_stacks - gpuDelivered * effectiveStacksPerGPU);
-    const remainingCoWoS = Math.max(0, componentSupply.cowos_capacity - gpuDelivered * cowosUnitsPerGPU);
-    const remainingPower = Math.max(0, componentSupply.datacenter_mw - gpuDelivered * MWperGPU);
+    // --- Inference accelerator results ---
+    const infTightness = (infDemand + infBacklogIn) / Math.max(infDelivered, EPSILON);
+    infState.installedBase = Math.max(0, infState.installedBase + infDelivered - infRetirements);
+    infState.priceHistory.push(calculatePriceIndex(infTightness));
 
-    // Process all other nodes (skip already processed: gpu_datacenter, hbm_stacks, cowos_capacity, datacenter_mw)
-    const processedNodes = ['gpu_datacenter', 'hbm_stacks', 'cowos_capacity', 'grid_interconnect', 'datacenter_mw'];
+    const infInventoryOut = Math.max(0, infAvailableSupply - infDelivered);
+    const infBacklogOut = Math.max(0, infDemand + infBacklogIn - infDelivered);
+    infState.inventory = infInventoryOut;
+    infState.backlog = infBacklogOut;
+
+    infResults.demand.push(infDemand);
+    infResults.supply.push(infDelivered);
+    infResults.supplyPotential.push(infShipmentsRaw);
+    infResults.gpuDelivered.push(infDelivered);
+    infResults.idleGpus.push(infIdleGpus);
+    infResults.capacity.push(infCapacity);
+    infResults.yield.push(infYield);
+    infResults.tightness.push(infTightness);
+    infResults.priceIndex.push(infState.priceHistory[infState.priceHistory.length - 1]);
+    infResults.inventory.push(infState.inventory);
+    infResults.backlog.push(infState.backlog);
+    infResults.installedBase.push(infState.installedBase);
+    infResults.requiredBase.push(requiredInfBase);
+    infResults.gpuPurchases.push(infPurchases);
+
+    infState.tightnessHistory.push(infTightness);
+
+    const infIsShortage = infBacklogOut > 0 || infTightness > 1.05;
+    const infIsGlut = infInventoryOut > 0 && infTightness < 0.95;
+    infResults.shortage.push(infIsShortage ? 1 : 0);
+    infResults.glut.push(infIsGlut ? 1 : 0);
+
+    // Process all other nodes (skip already processed GPU and gating component nodes)
+    const processedNodes = ['gpu_datacenter', 'gpu_inference', 'hbm_stacks', 'cowos_capacity', 'grid_interconnect', 'datacenter_mw'];
     NODES.filter(n => !processedNodes.includes(n.id)).forEach(node => {
       const state = nodeState[node.id];
       const nodeResults = results.nodes[node.id];
@@ -1174,20 +1253,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // No generic parent-based fallthrough for supply chain nodes
       let demand = 0;
       const powerDemands = dcMwToPowerDemands(componentDemands.powerMw);
-      let inferenceRetirements = 0;
-      let isInferenceNode = false;
-      let inferenceRequiredBase = 0;
-
-      if (node.id === 'gpu_inference') {
-        // Similar to datacenter but smaller scale
-        inferenceRetirements = state.installedBase / state.lifetimeMonths;
-        inferenceRequiredBase = requiredGpuBase * 0.3;  // 30% of workload
-        const gap = Math.max(0, inferenceRequiredBase - state.installedBase);
-        demand = gap + inferenceRetirements;
-        isInferenceNode = true;
 
       // --- Semiconductor components (derived from GPU production requirement) ---
-      } else if (node.id === 'advanced_wafers') {
+      if (node.id === 'advanced_wafers') {
         demand = componentDemands.advancedWafers;
         nodeResults.installedBase.push(0);
       } else if (node.id === 'hybrid_bonding') {
@@ -1311,16 +1379,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         demand *= (1 - state.subShare);
       }
 
-      let fulfilled = Math.min(availableSupply, demand + backlogIn);
-
-      // Inference accelerators: gate deliveries by remaining components (HBM, CoWoS, power)
-      if (isInferenceNode) {
-        const maxByRemainingHBM = remainingHBM / effectiveStacksPerGPU;
-        const maxByRemainingCoWoS = remainingCoWoS / cowosUnitsPerGPU;
-        const maxByRemainingPower = remainingPower / MWperGPU;
-        fulfilled = Math.min(fulfilled, maxByRemainingHBM, maxByRemainingCoWoS, maxByRemainingPower);
-      }
-
+      const fulfilled = Math.min(availableSupply, demand + backlogIn);
       const inventoryOut = Math.max(0, availableSupply - fulfilled);
       const backlogOut = Math.max(0, demand + backlogIn - fulfilled);
       const tightness = (demand + backlogIn) / Math.max(fulfilled, EPSILON);
@@ -1329,26 +1388,20 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       state.inventory = isNonInventoriable(node) ? 0 : inventoryOut;
       state.backlog = backlogOut;
 
-      if (isInferenceNode) {
-        state.installedBase = Math.max(0, state.installedBase + fulfilled - inferenceRetirements);
-        nodeResults.installedBase.push(state.installedBase);
-      }
-
       // Store results
-      // FIX: supply = actualShipments (cleared), supplyPotential = max producible
       nodeResults.demand.push(demand);
-      nodeResults.supply.push(fulfilled);                 // What actually shipped (cleared)
-      nodeResults.supplyPotential.push(shipments);        // Max producible capacity
-      nodeResults.gpuDelivered.push(isInferenceNode ? fulfilled : 0);
-      nodeResults.idleGpus.push(isInferenceNode ? Math.max(0, availableSupply - fulfilled) : 0);
+      nodeResults.supply.push(fulfilled);
+      nodeResults.supplyPotential.push(shipments);
+      nodeResults.gpuDelivered.push(0);
+      nodeResults.idleGpus.push(0);
       nodeResults.capacity.push(capacity);
       nodeResults.yield.push(nodeYield);
       nodeResults.tightness.push(tightness);
       nodeResults.priceIndex.push(state.priceHistory[state.priceHistory.length - 1]);
       nodeResults.inventory.push(state.inventory);
       nodeResults.backlog.push(state.backlog);
-      nodeResults.requiredBase.push(isInferenceNode ? inferenceRequiredBase : 0);
-      nodeResults.gpuPurchases.push(isInferenceNode ? demand : 0);
+      nodeResults.requiredBase.push(0);
+      nodeResults.gpuPurchases.push(0);
 
       // Track tightness history for persistence-based detection
       state.tightnessHistory.push(tightness);
@@ -1416,24 +1469,40 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         forecastContinual.accelHours) * CALIBRATION.globalAccelHoursMultiplier;
       const forecastRequiredGpuBase = accelHoursToRequiredGpuBase(forecastTotalAccelHours);
 
+      // Split forecast required base between DC and inference (same as Phase 1)
+      const forecastRequiredDcBase = forecastRequiredGpuBase * (1 - CALIBRATION.inferenceShare);
+      const forecastRequiredInfBase = forecastRequiredGpuBase * CALIBRATION.inferenceShare;
+
+      // --- Forecast DC demand ---
       const forecastGpuState = nodeState['gpu_datacenter'];
       const forecastGpuRetirements = forecastGpuState.installedBase / forecastGpuState.lifetimeMonths;
-      const forecastGpuGap = Math.max(0, forecastRequiredGpuBase - forecastGpuState.installedBase);
+      const forecastGpuGap = Math.max(0, forecastRequiredDcBase - forecastGpuState.installedBase);
       const forecastGpuDemand = forecastGpuGap + forecastGpuRetirements;
-      const forecastGpuProductionRequirement = forecastGpuDemand + forecastGpuState.backlog;
+      const forecastDcProdReq = forecastGpuDemand + forecastGpuState.backlog;
+
+      // --- Forecast inference demand ---
+      const forecastInfState = nodeState['gpu_inference'];
+      const forecastInfRetirements = forecastInfState.installedBase / forecastInfState.lifetimeMonths;
+      const forecastInfGap = Math.max(0, forecastRequiredInfBase - forecastInfState.installedBase);
+      const forecastInfDemand = forecastInfGap + forecastInfRetirements;
+      const forecastInfProdReq = forecastInfDemand + forecastInfState.backlog;
+
+      // --- Combined forecast production requirement ---
+      const forecastTotalProdReq = forecastDcProdReq + forecastInfProdReq;
       const forecastDeploymentCap = calculateDeploymentVelocityCap(
         forecastMonth,
         scenarioOverrides,
         nodeState
       );
-      const cappedForecastGpuProductionRequirement = Math.min(
-        forecastGpuProductionRequirement,
-        forecastDeploymentCap
-      );
+      const cappedForecastTotalProdReq = Math.min(forecastTotalProdReq, forecastDeploymentCap);
+      const forecastDcPurchases = forecastTotalProdReq > 0
+        ? cappedForecastTotalProdReq * (forecastDcProdReq / forecastTotalProdReq) : 0;
+      const forecastInfPurchases = forecastTotalProdReq > 0
+        ? cappedForecastTotalProdReq * (forecastInfProdReq / forecastTotalProdReq) : 0;
 
       const forecastEffectiveHbmPerGpu = calculateEffectiveHbmPerGpu(forecastMonth, demandAssumptions);
       const forecastComponentDemands = gpuToComponentDemands(
-        cappedForecastGpuProductionRequirement,
+        forecastDcPurchases + forecastInfPurchases,
         forecastMonth,
         forecastEffectiveHbmPerGpu
       );
@@ -1455,13 +1524,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
         let forecastDemand = 0;
         if (node.id === 'gpu_datacenter') {
-          forecastDemand = cappedForecastGpuProductionRequirement;
+          forecastDemand = forecastDcProdReq;
         } else if (node.id === 'gpu_inference') {
-          const inferenceState = nodeState['gpu_inference'];
-          const retirements = inferenceState.installedBase / inferenceState.lifetimeMonths;
-          const inferenceRequiredBase = forecastRequiredGpuBase * 0.3;
-          const gap = Math.max(0, inferenceRequiredBase - inferenceState.installedBase);
-          forecastDemand = gap + retirements;
+          forecastDemand = forecastInfProdReq;
         } else if (node.id === 'hbm_stacks') {
           forecastDemand = forecastComponentDemands.hbmStacks;
         } else if (node.id === 'cowos_capacity') {
