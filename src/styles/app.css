@@ -767,6 +767,7 @@
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
+  isolation: isolate;
 }
 
 .yoy-table th,
@@ -806,13 +807,12 @@
   left: 0;
   background: var(--bg-primary);
   text-align: left;
-  z-index: 5;
-  font-weight: 500;
-  box-shadow: 1px 0 0 var(--border-color-light);
+  z-index: 6;
+  box-shadow: 2px 0 0 var(--bg-tertiary);
 }
 
 .yoy-table thead .sticky-col {
-  z-index: 3;
+  z-index: 7;
 }
 
 .tightness-cell {
