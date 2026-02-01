@@ -464,18 +464,37 @@ export const TRANSLATION_INTENSITIES = {
   // Workloads → Accelerators
   compute: {
     /**
-     * flopsPerToken:
-     * - Used only if the demand engine reads it (recommended).
-     * - If calculations.js uses its own constants, keep this aligned to avoid confusion.
+     * effectiveTokensPerSecPerGpu:
+     * The PRIMARY inference demand primitive. Reflects real-world serving throughput
+     * (memory/bandwidth/KV-cache/latency-SLA constrained), NOT theoretical peak FLOPs.
+     *
+     * Sanity ranges:
+     *   Frontier models, latency-constrained:     ~10-50 tok/s/GPU
+     *   Smaller models, high-batch throughput:     ~50-300 tok/s/GPU
+     *
+     * tokens_per_gpu_month = tok/s/GPU × 2.6e6 s/month
+     *   consumer @40 → ~104M tok/GPU-month
+     *   enterprise @25 → ~65M tok/GPU-month
+     *   agentic @15 → ~39M tok/GPU-month
+     */
+    effectiveTokensPerSecPerGpu: {
+      consumer: { value: 40, confidence: 'medium', source: 'Blended model mix (frontier + mid-size), moderate latency', historicalRange: [20, 80] },
+      enterprise: { value: 25, confidence: 'medium', source: 'Frontier models, strict enterprise latency SLAs', historicalRange: [10, 50] },
+      agentic: { value: 15, confidence: 'low', source: 'Multi-step reasoning, long context, tool use', historicalRange: [5, 40] }
+    },
+    /**
+     * flopsPerToken: DEPRECATED for inference GPU demand calculation.
+     * Kept for reference and potential use in cost/energy modeling.
+     * Inference demand now uses effectiveTokensPerSecPerGpu (above).
      */
     flopsPerToken: {
       value: 140e9,
       confidence: 'medium',
-      source: 'Reasoning-heavy inference mix; adjust as model changes',
+      source: 'Reasoning-heavy inference mix (reference only, not used for GPU demand)',
       historicalRange: [2e9, 2e12]
     },
     gpuUtilization: {
-      inference: 0.60,
+      // inference utilization is now baked into effectiveTokensPerSecPerGpu
       training: 0.85
     },
     acceleratorHoursPerGpu: {

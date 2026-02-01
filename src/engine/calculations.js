@@ -30,9 +30,17 @@ import {
 // ============================================
 
 const PHYSICS_DEFAULTS = {
-  flopsPerToken: 140e9,    // token -> FLOPs (very rough)
-  flopsPerGpu: 2e15,       // GPU FLOPs/s (rough “effective”)
-  utilizationInference: 0.35,
+  // Inference: effective tokens/sec per GPU by workload segment.
+  // These reflect REAL-WORLD serving throughput (memory/bandwidth/KV-cache/latency-constrained),
+  // NOT theoretical peak FLOPs. Already accounts for utilization, batching overhead, and latency SLAs.
+  //   Frontier-ish models, latency-constrained: ~10-50 tok/s/GPU
+  //   Smaller models / high-batch throughput:    ~50-300 tok/s/GPU
+  effectiveTokensPerSecPerGpu: {
+    consumer: 40,     // blended model mix, moderate latency requirements
+    enterprise: 25,   // frontier models, strict enterprise latency SLAs
+    agentic: 15       // multi-step reasoning, long context, tool use
+  },
+  // Training: accelerator-hours model (training IS compute-limited, FLOPs matter)
   utilizationTraining: 0.50,
   secondsPerMonth: 2.6e6,
   hoursPerMonth: 720
@@ -416,37 +424,65 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   const inferenceDemand = calculateInferenceDemand(month, trajectories);
   const trainingDemand = calculateTrainingDemand(month, trajectories);
 
-  // Apply persistent scale to workloads (fixes "49k GPUs in 2026" class issues)
-  const totalTokens = inferenceDemand.total * demandScale;
+  const computeCfg = TRANSLATION_INTENSITIES?.compute || {};
+  const secondsPerMonth = PHYSICS_DEFAULTS.secondsPerMonth;
 
+  const eff = getEfficiencyMultipliers(month, efficiencyAssumptions, effCache, warnings, warnedSet);
+
+  // ==========================================================
+  // INFERENCE: tokens/sec/GPU model
+  //
+  // Real-world inference is memory/bandwidth/KV-cache/latency-SLA constrained,
+  // NOT theoretical-FLOP-limited. Using "effective tokens/sec per GPU" directly
+  // reflects the bottleneck:
+  //   tokens_per_gpu_month = tok/s/GPU × 2.6e6 s/month
+  //   required_gpus = total_tokens / tokens_per_gpu_month
+  //
+  // Efficiency adjustments:
+  //   M_inference decays (less compute/token → more tok/s per GPU)
+  //   S_inference, H grow (system/hardware throughput gains)
+  //   efficiencyGain = (1/M) × S × H  (all > 1 over time)
+  // ==========================================================
+  const tokPerSecCfg = computeCfg.effectiveTokensPerSecPerGpu || {};
+  const consumerTokPerSec = resolveAssumptionValue(
+    tokPerSecCfg.consumer?.value ?? tokPerSecCfg.consumer,
+    PHYSICS_DEFAULTS.effectiveTokensPerSecPerGpu.consumer
+  );
+  const enterpriseTokPerSec = resolveAssumptionValue(
+    tokPerSecCfg.enterprise?.value ?? tokPerSecCfg.enterprise,
+    PHYSICS_DEFAULTS.effectiveTokensPerSecPerGpu.enterprise
+  );
+  const agenticTokPerSec = resolveAssumptionValue(
+    tokPerSecCfg.agentic?.value ?? tokPerSecCfg.agentic,
+    PHYSICS_DEFAULTS.effectiveTokensPerSecPerGpu.agentic
+  );
+
+  // Efficiency gain: M decays (models get cheaper → more tok/s), S and H grow throughput
+  const efficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference * eff.H;
+
+  // Per-segment GPU demand (with demandScale applied to token volumes)
+  const consumerTokens = (inferenceDemand.consumer || 0) * demandScale;
+  const enterpriseTokens = (inferenceDemand.enterprise || 0) * demandScale;
+  const agenticTokens = (inferenceDemand.agentic || 0) * demandScale;
+
+  const consumerGpus = consumerTokens / Math.max(consumerTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
+  const enterpriseGpus = enterpriseTokens / Math.max(enterpriseTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
+  const agenticGpus = agenticTokens / Math.max(agenticTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
+
+  const requiredInference = consumerGpus + enterpriseGpus + agenticGpus;
+
+  // ==========================================================
+  // TRAINING: accelerator-hours model (training IS compute-limited)
+  // ==========================================================
   const hoursFrontier = resolveAssumptionValue(block?.workloadBase?.trainingComputePerRun?.frontier, 50e6);
   const hoursMidtier = resolveAssumptionValue(block?.workloadBase?.trainingComputePerRun?.midtier, 200000);
 
   const frontierRuns = (trainingDemand.frontier || 0) * demandScale;
   const midtierRuns = (trainingDemand.midtier || 0) * demandScale;
 
-  // Physics constants
-  const computeCfg = TRANSLATION_INTENSITIES?.compute || {};
-  const flopsPerToken = resolveAssumptionValue(computeCfg.flopsPerToken?.value, PHYSICS_DEFAULTS.flopsPerToken);
-  const flopsPerGpu = PHYSICS_DEFAULTS.flopsPerGpu;
-
-  // Fix: read gpuUtilization from TRANSLATION_INTENSITIES correctly (plain numbers, not {value} objects)
-  const utilInf = computeCfg.gpuUtilization?.inference ?? PHYSICS_DEFAULTS.utilizationInference;
   const utilTrn = computeCfg.gpuUtilization?.training ?? PHYSICS_DEFAULTS.utilizationTraining;
-
-  const secondsPerMonth = PHYSICS_DEFAULTS.secondsPerMonth;
   const hoursPerMonth = PHYSICS_DEFAULTS.hoursPerMonth;
 
-  const eff = getEfficiencyMultipliers(month, efficiencyAssumptions, effCache, warnings, warnedSet);
-
-  // Inference: required = (tokens * flops/token * M) / (flops/gpu-month * S * H)
-  const effectiveFlopsPerToken = flopsPerToken * eff.M_inference;
-  const rawFlopsPerGpuMonth = flopsPerGpu * utilInf * secondsPerMonth;
-  const effectiveThroughputInf = rawFlopsPerGpuMonth * eff.S_inference * eff.H;
-
-  const requiredInference = (totalTokens * effectiveFlopsPerToken) / Math.max(effectiveThroughputInf, EPSILON);
-
-  // Training: required = (totalAccelHours * M) / (hours/month * util * S * H)
   const totalTrainingHours = (frontierRuns * hoursFrontier) + (midtierRuns * hoursMidtier);
   const denomTraining = hoursPerMonth * utilTrn * eff.S_training * eff.H;
   const requiredTraining = (totalTrainingHours * eff.M_training) / Math.max(denomTraining, EPSILON);
