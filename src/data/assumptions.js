@@ -194,7 +194,7 @@ const WORKLOAD_BASE_DEFAULT = {
     agentic: 1e12
   },
   trainingRunsPerMonth: {
-    frontier: 1.2,
+    frontier: 2,
     midtier: 150
   },
   // Assumption is accelerator-hours per run (not tokens)
@@ -216,14 +216,14 @@ const DEMAND_TEMPLATE_YEAR1 = {
   workloadBase: cloneBlock(WORKLOAD_BASE_DEFAULT),
 
   inferenceGrowth: {
-    consumer: { value: 2.00, confidence: 'medium', source: 'Usage growth + consumer adoption', historicalRange: [0.25, 0.60] },
-    enterprise: { value: 3.00, confidence: 'medium', source: 'Enterprise AI adoption + cloud earnings', historicalRange: [0.35, 0.80] },
-    agentic: { value: 2.50, confidence: 'low', source: 'Emerging category', historicalRange: [0.50, 2.00] }
+    consumer: { value: 0.80, confidence: 'medium', source: 'Usage growth + consumer adoption', historicalRange: [0.25, 1.50] },
+    enterprise: { value: 1.00, confidence: 'medium', source: 'Enterprise AI adoption + cloud earnings', historicalRange: [0.35, 1.50] },
+    agentic: { value: 1.50, confidence: 'low', source: 'Emerging category, rapid adoption from small base', historicalRange: [0.50, 3.00] }
   },
 
   trainingGrowth: {
-    frontier: { value: 3.00, confidence: 'medium', source: 'Supply-constrained demand unlocking', historicalRange: [0.10, 3.00] },
-    midtier: { value: 3.00, confidence: 'low', source: 'Supply-constrained demand unlocking', historicalRange: [0.30, 3.00] }
+    frontier: { value: 0.50, confidence: 'medium', source: 'Supply-constrained demand unlocking', historicalRange: [0.10, 1.00] },
+    midtier: { value: 0.80, confidence: 'low', source: 'Fine-tuning proliferation', historicalRange: [0.30, 1.50] }
   },
 
   contextLength: {
@@ -267,29 +267,33 @@ const buildDemandBlocks = () => {
   });
 
   // Targeted tweaks (only the values that should change by period)
-  // Year 2
-  blocks.year2.inferenceGrowth.consumer.value = 2.00;
-  blocks.year2.inferenceGrowth.enterprise.value = 3.00;
-  blocks.year2.inferenceGrowth.agentic.value = 2.00;
-  blocks.year2.trainingGrowth.frontier.value = 2.00;
-  blocks.year2.trainingGrowth.midtier.value = 2.00;
+  // Year 2: Still high growth but decelerating
+  blocks.year2.inferenceGrowth.consumer.value = 0.60;
+  blocks.year2.inferenceGrowth.enterprise.value = 0.80;
+  blocks.year2.inferenceGrowth.agentic.value = 1.20;
+  blocks.year2.trainingGrowth.frontier.value = 0.40;
+  blocks.year2.trainingGrowth.midtier.value = 0.60;
 
-  // Year 3
-  blocks.year3.inferenceGrowth.consumer.value = 1.00;
-  blocks.year3.inferenceGrowth.enterprise.value = 3.00;
-  blocks.year3.inferenceGrowth.agentic.value = 1.50;
-  blocks.year3.trainingGrowth.frontier.value = 1.00;
-  blocks.year3.trainingGrowth.midtier.value = 1.00;
+  // Year 3: Growth moderating as market matures
+  blocks.year3.inferenceGrowth.consumer.value = 0.40;
+  blocks.year3.inferenceGrowth.enterprise.value = 0.50;
+  blocks.year3.inferenceGrowth.agentic.value = 0.80;
+  blocks.year3.trainingGrowth.frontier.value = 0.30;
+  blocks.year3.trainingGrowth.midtier.value = 0.40;
 
-  // Year 4
-  blocks.year4.inferenceGrowth.consumer.value = 0.60;
-  blocks.year4.inferenceGrowth.enterprise.value = 1.00;
-  blocks.year4.inferenceGrowth.agentic.value = 0.90;
+  // Year 4: Supply catching up, growth normalizing
+  blocks.year4.inferenceGrowth.consumer.value = 0.30;
+  blocks.year4.inferenceGrowth.enterprise.value = 0.35;
+  blocks.year4.inferenceGrowth.agentic.value = 0.50;
+  blocks.year4.trainingGrowth.frontier.value = 0.20;
+  blocks.year4.trainingGrowth.midtier.value = 0.30;
 
-  // Year 5
-  blocks.year5.inferenceGrowth.consumer.value = 0.50;
-  blocks.year5.inferenceGrowth.enterprise.value = 1.00;
-  blocks.year5.inferenceGrowth.agentic.value = 0.70;
+  // Year 5: Maturing market
+  blocks.year5.inferenceGrowth.consumer.value = 0.20;
+  blocks.year5.inferenceGrowth.enterprise.value = 0.25;
+  blocks.year5.inferenceGrowth.agentic.value = 0.35;
+  blocks.year5.trainingGrowth.frontier.value = 0.15;
+  blocks.year5.trainingGrowth.midtier.value = 0.20;
 
   // Years 6-10
   blocks.years6_10.inferenceGrowth.consumer.value = 0.25;
