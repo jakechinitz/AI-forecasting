@@ -628,8 +628,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // Precompute demand trajectories (block-chained, no discontinuities)
   const demandTrajectories = precomputeDemandTrajectories(months, demandAssumptions);
 
-  // Precompute supply growth multipliers per category
-  const supplyMultipliers = precomputeSupplyMultipliers(months, supplyAssumptions);
+  // Note: Organic supply multipliers are NOT applied to starting capacity.
+  // Capacity grows through committed expansions (announced projects) and
+  // demand-responsive dynamic expansions only. Supply expansion rates from
+  // SUPPLY_ASSUMPTIONS cap how fast dynamic expansions can be per category.
 
   // Glut thresholds
   const glutThresholds = GLOBAL_PARAMS.glutThresholds || { soft: 0.95, hard: 0.80 };
@@ -698,11 +700,13 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
   let demandScale = scenarioOverrides?.calibration?.demandScale ?? null;
 
-  // Helper: get supply multiplier for a node at a given month
-  const getSupplyMult = (nodeId, month) => {
+  // Helper: get the supply expansion rate for a node's category at a given month
+  const getExpansionRate = (nodeId, month) => {
     const cat = SUPPLY_CATEGORY_MAP[nodeId];
-    if (!cat || !supplyMultipliers[cat]) return 1;
-    return supplyMultipliers[cat][month] || 1;
+    if (!cat) return 0.15; // fallback for unmapped nodes
+    const blockKey = getBlockKeyForMonth(month);
+    const block = supplyAssumptions?.[blockKey];
+    return resolveAssumptionValue(block?.expansionRates?.[cat]?.value, 0.15);
   };
 
   for (let month = 0; month < months; month++) {
@@ -793,7 +797,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const baselinePlan = planDeployDc + planDeployInf;
 
     // =======================================================
-    // STEP 1: POTENTIALS (with supply growth multipliers)
+    // STEP 1: POTENTIALS (startingCapacity + committed + dynamic expansions)
     // =======================================================
     const potentials = {};
     for (const node of NODES) {
@@ -801,8 +805,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       if (node.group === 'A') continue;
 
       const state = nodeState[node.id];
-      const sMult = getSupplyMult(node.id, month);
-      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);
+      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
       const y = calculateNodeYield(node, month);
       const effCap = cap * (node.maxCapacityUtilization || 0.95) * y;
 
@@ -942,8 +945,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const planDemand = planDeployTotal * intensity;
       const actualConsumption = actualDeployTotal * intensity;
 
-      const sMult = getSupplyMult(node.id, month);
-      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);
+      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
       const y = calculateNodeYield(node, month);
       const effCap = cap * (node.maxCapacityUtilization || 0.95) * y;
 
@@ -989,13 +991,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         const growthRatio = getDemandGrowthRatio(compLeadTime);
         const forecastDemand = planDemand * growthRatio;
         const compFutureMonth = Math.min(month + compLeadTime, months - 1);
-        const futureSMult = getSupplyMult(node.id, compFutureMonth);
-        const futureCap = calculateCapacity(node, compFutureMonth, scenarioOverrides, state.dynamicExpansions, futureSMult);
+        const futureCap = calculateCapacity(node, compFutureMonth, scenarioOverrides, state.dynamicExpansions);
         const futureEffCap = futureCap * (node.maxCapacityUtilization || 0.95) * calculateNodeYield(node, compFutureMonth);
 
         if (forecastDemand > futureEffCap) {
           const gap = forecastDemand - futureEffCap;
-          const expansionAmount = Math.min(gap * 0.5, cap * 0.30);
+          // Cap expansion by supply category's annual expansion rate
+          const expRate = getExpansionRate(node.id, month);
+          const maxDynamic = (node.startingCapacity || cap) * Math.min(expRate, 0.50);
+          const expansionAmount = Math.min(gap * 0.5, maxDynamic);
           state.dynamicExpansions.push({
             month: month + compLeadTime,
             capacityAdd: Math.max(expansionAmount, cap * 0.05)
