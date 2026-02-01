@@ -410,7 +410,7 @@ const NODES_BASE = [
     description: 'DDR5 server memory modules for AI servers',
 
     demandDriverType: 'derived',
-    inputIntensity: 64,
+    inputIntensity: 128,
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
     startingCapacity: 34000000,
@@ -454,7 +454,7 @@ const NODES_BASE = [
     description: 'Enterprise NVMe SSDs for AI storage',
 
     demandDriverType: 'derived',
-    inputIntensity: 1,
+    inputIntensity: 2,
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
     startingCapacity: 540000,

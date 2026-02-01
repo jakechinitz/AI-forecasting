@@ -494,7 +494,7 @@ export const TRANSLATION_INTENSITIES = {
     hybridBondingAdoption: { initial: 0.02, target: 0.25, halflifeMonths: 36, confidence: 'low', source: 'Adoption curve' },
 
     advancedWafersPerGpu: { value: 0.3, confidence: 'high', source: 'Reticle/multi-die normalization' },
-    serverDramGbPerGpu: { value: 64, confidence: 'medium', source: 'System DRAM per GPU' }
+    serverDramGbPerGpu: { value: 128, confidence: 'medium', source: 'System DRAM per GPU (DDR5, 8-channel)' }
   },
 
   // Servers → Infrastructure
