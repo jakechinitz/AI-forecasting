@@ -483,6 +483,8 @@ function buildIntensityMap() {
   );
 
   map['cowos_capacity'] = resolveAssumptionValue(gpuToComp.cowosWaferEquivPerGpu?.value, 0.3);
+  map['dram_server'] = resolveAssumptionValue(gpuToComp.serverDramGbPerGpu?.value, 128);
+  map['ssd_datacenter'] = 2;  // TB per GPU
 
   const hbIntensity = resolveAssumptionValue(gpuToComp.hybridBondingPerGpu?.value, 0.35);
   const hbShare = resolveAssumptionValue(gpuToComp.hybridBondingPackageShare?.value, 0.2);
@@ -601,8 +603,22 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const nodeState = {};
   const startOverrides = scenarioOverrides?.startingState || {};
 
-  const defaultDcInstalled = 1200000;
-  const defaultInfInstalled = 300000;
+  // Realistic 2026 installed base: ~5M datacenter GPUs, ~1.5M inference accelerators
+  const defaultDcInstalled = 5000000;
+  const defaultInfInstalled = 1500000;
+
+  // Default starting backlogs for base case: reflects current massive shortage
+  // GPU backlog ~2M units, components scaled by their per-GPU intensity
+  const DEFAULT_STARTING_BACKLOGS = {
+    gpu_datacenter: 2000000,
+    hbm_stacks: 16000000,    // 8 stacks/GPU * 2M
+    cowos_capacity: 600000,   // 0.3 wafer-equiv/GPU * 2M
+    advanced_wafers: 600000,  // 0.3 wafers/GPU * 2M
+    dram_server: 256000000,   // 128 GB/GPU * 2M
+    ssd_datacenter: 4000000,  // 2 TB/GPU * 2M
+    server_assembly: 250000,  // (1/8 server/GPU) * 2M
+    datacenter_mw: 2600       // 0.0013 MW/GPU * 2M
+  };
 
   const dcInstalledOverride = startOverrides.datacenterInstalledBase ?? startOverrides.installedBaseDatacenter ?? startOverrides.installedBase;
   const infInstalledOverride = startOverrides.inferenceInstalledBase ?? startOverrides.installedBaseInference;
@@ -615,7 +631,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     if (node.id === 'gpu_inference') installedBase = (infInstalledOverride !== undefined) ? infInstalledOverride : defaultInfInstalled;
 
     const overrideBacklog = startOverrides.backlogByNode?.[node.id];
-    const initialBacklog = (overrideBacklog !== undefined) ? overrideBacklog : (node.startingBacklog || 0);
+    const initialBacklog = (overrideBacklog !== undefined) ? overrideBacklog : (DEFAULT_STARTING_BACKLOGS[node.id] ?? node.startingBacklog ?? 0);
 
     nodeState[node.id] = {
       type,
@@ -639,7 +655,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // --- calibration ---
   const calibrationCfg = {
     enabled: scenarioOverrides?.calibration?.enabled ?? true,
-    targetRatio: scenarioOverrides?.calibration?.targetRatio ?? 1.0,
+    targetRatio: scenarioOverrides?.calibration?.targetRatio ?? 1.15,
     minScale: scenarioOverrides?.calibration?.minScale ?? 0.02,
     maxScale: scenarioOverrides?.calibration?.maxScale ?? 50
   };
