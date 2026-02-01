@@ -59,7 +59,11 @@ function PrintoutTab({ results, scenario }) {
       const nodeData = results.nodes[node.id];
       if (!nodeData) return;
 
-      const metrics = METRIC_DEFINITIONS.filter(metric => Array.isArray(nodeData[metric.key]));
+      // Only include metrics that have at least one non-null value for this node
+      const metrics = METRIC_DEFINITIONS.filter(metric => {
+        const arr = nodeData[metric.key];
+        return Array.isArray(arr) && arr.some(v => v !== null && v !== undefined);
+      });
       const headerKeys = metrics.map(metric => metric.downloadKey || metric.key);
 
       lines.push(`## Node: ${node.name} (${node.id})`);
@@ -137,7 +141,11 @@ function PrintoutTab({ results, scenario }) {
             const nodeData = results?.nodes?.[node.id];
             if (!nodeData) return null;
 
-            const metrics = METRIC_DEFINITIONS.filter(metric => Array.isArray(nodeData[metric.key]));
+            // Only include metrics that have at least one non-null value for this node
+            const metrics = METRIC_DEFINITIONS.filter(metric => {
+              const arr = nodeData[metric.key];
+              return Array.isArray(arr) && arr.some(v => v !== null && v !== undefined);
+            });
 
             return (
               <div key={node.id} className="printout-card">
