@@ -18,6 +18,7 @@ import {
   GLOBAL_PARAMS,
   DEMAND_ASSUMPTIONS,
   EFFICIENCY_ASSUMPTIONS,
+  SUPPLY_ASSUMPTIONS,
   TRANSLATION_INTENSITIES,
   getBlockKeyForMonth,
   calculateStackedYield,
@@ -51,7 +52,7 @@ const STOCK_NODES = new Set([
 
 const THROUGHPUT_NODES = new Set([
   'cowos_capacity',
-  'osat_capacity',
+  'osat_test',
   'server_assembly',
   'hybrid_bonding',
   'liquid_cooling',
@@ -61,19 +62,44 @@ const THROUGHPUT_NODES = new Set([
 
 const QUEUE_NODES = new Set([
   'grid_interconnect',
-  'dc_ops_staff',
-  'ml_engineers'
+  'dc_ops_staff'
 ]);
 
+/**
+ * Maps supply chain nodes to supply assumption categories.
+ * Nodes in this map get organic capacity growth from SUPPLY_ASSUMPTIONS.
+ * Nodes NOT in this map rely on committed + dynamic expansions only.
+ */
+const SUPPLY_CATEGORY_MAP = {
+  cowos_capacity: 'packaging',
+  hybrid_bonding: 'packaging',
+  abf_substrate: 'packaging',
+  osat_test: 'packaging',
+  advanced_wafers: 'foundry',
+  euv_tools: 'foundry',
+  hbm_stacks: 'memory',
+  dram_server: 'memory',
+  ssd_datacenter: 'memory',
+  datacenter_mw: 'datacenter',
+  server_assembly: 'datacenter',
+  rack_pdu: 'datacenter',
+  liquid_cooling: 'datacenter',
+  grid_interconnect: 'power',
+  transformers_lpt: 'power',
+  power_generation: 'power',
+  backup_power: 'power',
+  dc_construction: 'power',
+  dc_ops_staff: 'power'
+};
+
 const EXPECTED_UNITS = {
-  'hbm_stacks': 'Stacks',
+  'hbm_stacks': 'stacks/month',
   'datacenter_mw': 'MW',
-  'advanced_wafers': 'Wafers',
-  'abf_substrate': 'Units',
-  'cowos_capacity': 'Wafers/Month',
-  'server_assembly': 'Servers/Month',
-  'grid_interconnect': 'MW',
-  'hybrid_bonding': 'Bonds/WaferOps'
+  'advanced_wafers': 'wafers/month',
+  'cowos_capacity': 'wafer-equiv/month',
+  'server_assembly': 'servers/month',
+  'grid_interconnect': 'MW-approved/month',
+  'hybrid_bonding': 'wafer-equiv/month'
 };
 
 function getNodeType(nodeId) {
@@ -146,21 +172,98 @@ function getDemandBlockForMonth(month, assumptions) {
   return assumptions?.[blockKey] || DEMAND_ASSUMPTIONS?.[blockKey] || DEMAND_ASSUMPTIONS?.base || {};
 }
 
-function calculateInferenceDemand(month, demandBlock) {
-  const segments = ['consumer', 'enterprise', 'agentic'];
+/**
+ * Precompute demand trajectories with proper block-chained compounding.
+ * Each month compounds from the PREVIOUS month's value using that block's
+ * growth rate, ensuring smooth transitions at block boundaries.
+ *
+ * Old approach: base * (1+g)^(month/12) caused discontinuities when g changed
+ * between blocks (e.g., demand could jump or drop 50%+ overnight).
+ */
+/**
+ * Resolve a growth rate value that may be either a plain number (from scenario overrides)
+ * or an object with { value: number } (from assumption blocks).
+ */
+function resolveGrowthRate(raw, fallback) {
+  if (typeof raw === 'number') return raw;
+  if (raw && typeof raw === 'object' && raw.value !== undefined) return raw.value;
+  return fallback ?? 0;
+}
 
-  const out = { total: 0 };
-  for (const seg of segments) {
-    const base = resolveAssumptionValue(demandBlock?.workloadBase?.inferenceTokensPerMonth?.[seg], 0);
-    const growth = resolveAssumptionValue(demandBlock?.inferenceGrowth?.[seg]?.value, 0);
-    const value = base * Math.pow(1 + growth, month / 12);
-    out[seg] = value;
-    out.total += value;
+function precomputeDemandTrajectories(totalMonths, demandAssumptions) {
+  const inferenceSegs = ['consumer', 'enterprise', 'agentic'];
+  const trainingSegs = ['frontier', 'midtier'];
+  const block0 = getDemandBlockForMonth(0, demandAssumptions);
+
+  const inference = {};
+  for (const seg of inferenceSegs) {
+    const base = resolveAssumptionValue(block0?.workloadBase?.inferenceTokensPerMonth?.[seg], 0);
+    const arr = new Array(totalMonths);
+    arr[0] = Math.max(base, 0);
+    for (let m = 1; m < totalMonths; m++) {
+      const block = getDemandBlockForMonth(m, demandAssumptions);
+      const annualGrowth = resolveGrowthRate(block?.inferenceGrowth?.[seg], 0);
+      const monthlyFactor = Math.pow(1 + annualGrowth, 1 / 12);
+      arr[m] = arr[m - 1] * monthlyFactor;
+    }
+    inference[seg] = arr;
   }
+
+  const training = {};
+  for (const seg of trainingSegs) {
+    const base = resolveAssumptionValue(block0?.workloadBase?.trainingRunsPerMonth?.[seg], 0);
+    const arr = new Array(totalMonths);
+    arr[0] = Math.max(base, 0);
+    for (let m = 1; m < totalMonths; m++) {
+      const block = getDemandBlockForMonth(m, demandAssumptions);
+      const annualGrowth = resolveGrowthRate(block?.trainingGrowth?.[seg], 0);
+      const monthlyFactor = Math.pow(1 + annualGrowth, 1 / 12);
+      arr[m] = arr[m - 1] * monthlyFactor;
+    }
+    training[seg] = arr;
+  }
+
+  return { inference, training };
+}
+
+/**
+ * Precompute supply growth multipliers per supply category.
+ * These represent organic capacity expansion from SUPPLY_ASSUMPTIONS,
+ * chained across time blocks for smooth transitions.
+ */
+function precomputeSupplyMultipliers(totalMonths, supplyAssumptions) {
+  const categories = ['packaging', 'foundry', 'memory', 'datacenter', 'power'];
+  const multipliers = {};
+
+  for (const cat of categories) {
+    const arr = new Array(totalMonths);
+    arr[0] = 1.0;
+    for (let m = 1; m < totalMonths; m++) {
+      const blockKey = getBlockKeyForMonth(m);
+      const block = supplyAssumptions?.[blockKey];
+      const annualRate = resolveAssumptionValue(block?.expansionRates?.[cat]?.value, 0);
+      const monthlyFactor = Math.pow(1 + annualRate, 1 / 12);
+      arr[m] = arr[m - 1] * monthlyFactor;
+    }
+    multipliers[cat] = arr;
+  }
+
+  return multipliers;
+}
+
+function calculateInferenceDemand(month, trajectories) {
+  if (!trajectories) return { consumer: 1e12, enterprise: 0, agentic: 0, total: 1e12 };
+  const out = {
+    consumer: trajectories.inference.consumer[month] || 0,
+    enterprise: trajectories.inference.enterprise[month] || 0,
+    agentic: trajectories.inference.agentic[month] || 0,
+    total: 0
+  };
+  out.total = out.consumer + out.enterprise + out.agentic;
 
   // Hard fallback so charts never go to 0 unless explicitly configured that way
   if (!Number.isFinite(out.total) || out.total <= 0) {
-    const fallback = 1e12; // 1T tokens/month “floor” to keep plots sane
+    const fallback = 1e12;
     out.consumer = fallback;
     out.enterprise = 0;
     out.agentic = 0;
@@ -170,19 +273,17 @@ function calculateInferenceDemand(month, demandBlock) {
   return out;
 }
 
-function calculateTrainingDemand(month, demandBlock) {
-  const segments = ['frontier', 'midtier'];
-  const out = {};
-  for (const seg of segments) {
-    const base = resolveAssumptionValue(demandBlock?.workloadBase?.trainingRunsPerMonth?.[seg], 0);
-    const growth = resolveAssumptionValue(demandBlock?.trainingGrowth?.[seg]?.value, 0);
-    out[seg] = base * Math.pow(1 + growth, month / 12);
-  }
-  return out;
+function calculateTrainingDemand(month, trajectories) {
+  if (!trajectories) return { frontier: 0, midtier: 0 };
+  return {
+    frontier: trajectories.training.frontier[month] || 0,
+    midtier: trajectories.training.midtier[month] || 0
+  };
 }
 
-export function calculateCapacity(node, month, scenarioOverrides = {}, dynamicExpansions = []) {
-  let capacity = node?.startingCapacity || 0;
+export function calculateCapacity(node, month, scenarioOverrides = {}, dynamicExpansions = [], supplyMultiplier = 1) {
+  // Base capacity grows organically with supply expansion rates
+  let capacity = (node?.startingCapacity || 0) * supplyMultiplier;
 
   (node?.committedExpansions || []).forEach(expansion => {
     const onlineMonth = dateToMonth(expansion.date) + (expansion.leadTimeMonths || 0);
@@ -207,12 +308,18 @@ export function calculateCapacity(node, month, scenarioOverrides = {}, dynamicEx
     }
   });
 
-  // Optional supply shock
+  // Supply shock with gradual recovery (not a cliff)
   if (scenarioOverrides?.supply?.affectedNodes?.includes(node.id)) {
     const shockMonth = scenarioOverrides.supply.shockMonth || 24;
     const reduction = scenarioOverrides.supply.capacityReduction || 0.5;
-    if (month >= shockMonth && month < shockMonth + 12) {
-      capacity *= (1 - reduction);
+    const recoveryMonths = scenarioOverrides.supply.recoveryMonths || 36;
+    if (month >= shockMonth) {
+      const monthsSinceShock = month - shockMonth;
+      if (monthsSinceShock < recoveryMonths) {
+        const recoveryProgress = monthsSinceShock / recoveryMonths;
+        const currentReduction = reduction * (1 - recoveryProgress);
+        capacity *= (1 - currentReduction);
+      }
     }
   }
 
@@ -261,13 +368,14 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
   const blockKey = getBlockKeyForMonth(month);
   const block = assumptions?.[blockKey] || EFFICIENCY_ASSUMPTIONS?.[blockKey] || EFFICIENCY_ASSUMPTIONS?.base || {};
 
-  const mInfAnnual = resolveAssumptionValue(block?.modelEfficiency?.m_inference?.value, 0.18);
-  const mTrnAnnual = resolveAssumptionValue(block?.modelEfficiency?.m_training?.value, 0.10);
+  // Handle both { value: number } objects and plain numbers (from scenario overrides)
+  const mInfAnnual = resolveGrowthRate(block?.modelEfficiency?.m_inference, 0.18);
+  const mTrnAnnual = resolveGrowthRate(block?.modelEfficiency?.m_training, 0.10);
 
-  const sInfAnnual = resolveAssumptionValue(block?.systemsEfficiency?.s_inference?.value, 0.10);
-  const sTrnAnnual = resolveAssumptionValue(block?.systemsEfficiency?.s_training?.value, 0.08);
+  const sInfAnnual = resolveGrowthRate(block?.systemsEfficiency?.s_inference, 0.10);
+  const sTrnAnnual = resolveGrowthRate(block?.systemsEfficiency?.s_training, 0.08);
 
-  const hAnnual = resolveAssumptionValue(block?.hardwareEfficiency?.h?.value, 0.15);
+  const hAnnual = resolveGrowthRate(block?.hardwareEfficiency?.h, 0.15);
 
   const decayInf = Math.pow(1 - mInfAnnual, 1 / 12);
   const decayTrn = Math.pow(1 - mTrnAnnual, 1 / 12);
@@ -302,13 +410,13 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
  * Compute required GPUs for month given demand + efficiency, with a persistent demandScale.
  * Returns inference/training components so we can split installed base sensibly.
  */
-function computeRequiredGpus(month, demandAssumptions, efficiencyAssumptions, effCache, warnings, warnedSet, demandScale = 1) {
+function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyAssumptions, effCache, warnings, warnedSet, demandScale = 1) {
   const block = getDemandBlockForMonth(month, demandAssumptions);
 
-  const inferenceDemand = calculateInferenceDemand(month, block);
-  const trainingDemand = calculateTrainingDemand(month, block);
+  const inferenceDemand = calculateInferenceDemand(month, trajectories);
+  const trainingDemand = calculateTrainingDemand(month, trajectories);
 
-  // Apply persistent scale to workloads (fixes “49k GPUs in 2026” class issues)
+  // Apply persistent scale to workloads (fixes "49k GPUs in 2026" class issues)
   const totalTokens = inferenceDemand.total * demandScale;
 
   const hoursFrontier = resolveAssumptionValue(block?.workloadBase?.trainingComputePerRun?.frontier, 50e6);
@@ -317,22 +425,23 @@ function computeRequiredGpus(month, demandAssumptions, efficiencyAssumptions, ef
   const frontierRuns = (trainingDemand.frontier || 0) * demandScale;
   const midtierRuns = (trainingDemand.midtier || 0) * demandScale;
 
-  // Physics constants (allow optional overrides via TRANSLATION_INTENSITIES.compute)
+  // Physics constants
   const computeCfg = TRANSLATION_INTENSITIES?.compute || {};
   const flopsPerToken = resolveAssumptionValue(computeCfg.flopsPerToken?.value, PHYSICS_DEFAULTS.flopsPerToken);
-  const flopsPerGpu = resolveAssumptionValue(computeCfg.flopsPerGpu?.value, PHYSICS_DEFAULTS.flopsPerGpu);
+  const flopsPerGpu = PHYSICS_DEFAULTS.flopsPerGpu;
 
-  const utilInf = resolveAssumptionValue(computeCfg.utilizationInference?.value, PHYSICS_DEFAULTS.utilizationInference);
-  const utilTrn = resolveAssumptionValue(computeCfg.utilizationTraining?.value, PHYSICS_DEFAULTS.utilizationTraining);
+  // Fix: read gpuUtilization from TRANSLATION_INTENSITIES correctly (plain numbers, not {value} objects)
+  const utilInf = computeCfg.gpuUtilization?.inference ?? PHYSICS_DEFAULTS.utilizationInference;
+  const utilTrn = computeCfg.gpuUtilization?.training ?? PHYSICS_DEFAULTS.utilizationTraining;
 
-  const demonstratedSecondsPerMonth = PHYSICS_DEFAULTS.secondsPerMonth;
+  const secondsPerMonth = PHYSICS_DEFAULTS.secondsPerMonth;
   const hoursPerMonth = PHYSICS_DEFAULTS.hoursPerMonth;
 
   const eff = getEfficiencyMultipliers(month, efficiencyAssumptions, effCache, warnings, warnedSet);
 
   // Inference: required = (tokens * flops/token * M) / (flops/gpu-month * S * H)
   const effectiveFlopsPerToken = flopsPerToken * eff.M_inference;
-  const rawFlopsPerGpuMonth = flopsPerGpu * utilInf * demonstratedSecondsPerMonth;
+  const rawFlopsPerGpuMonth = flopsPerGpu * utilInf * secondsPerMonth;
   const effectiveThroughputInf = rawFlopsPerGpuMonth * eff.S_inference * eff.H;
 
   const requiredInference = (totalTokens * effectiveFlopsPerToken) / Math.max(effectiveThroughputInf, EPSILON);
@@ -342,10 +451,8 @@ function computeRequiredGpus(month, demandAssumptions, efficiencyAssumptions, ef
   const denomTraining = hoursPerMonth * utilTrn * eff.S_training * eff.H;
   const requiredTraining = (totalTrainingHours * eff.M_training) / Math.max(denomTraining, EPSILON);
 
-  const requiredTotal = requiredInference + requiredTraining;
-
   return {
-    requiredTotal,
+    requiredTotal: requiredInference + requiredTraining,
     requiredInference,
     requiredTraining,
     inferenceDemand,
@@ -385,6 +492,17 @@ function buildIntensityMap() {
   map['server_assembly'] = 1 / Math.max(gpusPerServer, 1);
 
   map['grid_interconnect'] = mwPerGpu;
+
+  // Infrastructure nodes: propagate demand through datacenter MW chain
+  const powerChain = TRANSLATION_INTENSITIES?.powerChain || {};
+  const transformersPerMw = resolveAssumptionValue(powerChain.transformersPerMw?.value, 0.02);
+  const redundancyFactor = resolveAssumptionValue(powerChain.redundancyFactor?.value, 1.5);
+
+  map['transformers_lpt'] = mwPerGpu * transformersPerMw;
+  map['power_generation'] = mwPerGpu;
+  map['backup_power'] = mwPerGpu * redundancyFactor;
+  map['dc_construction'] = mwPerGpu * 400;   // ~400 worker-months per MW
+  map['dc_ops_staff'] = mwPerGpu * 8;        // ~8 FTEs per MW
 
   // Fill gaps from node definitions
   for (const node of NODES) {
@@ -467,6 +585,17 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
   const demandAssumptions = deepMerge(assumptions?.demand || DEMAND_ASSUMPTIONS, scenarioOverrides?.demand);
   const efficiencyAssumptions = deepMerge(assumptions?.efficiency || EFFICIENCY_ASSUMPTIONS, scenarioOverrides?.efficiency);
+  const supplyAssumptions = deepMerge(assumptions?.supply || SUPPLY_ASSUMPTIONS, scenarioOverrides?.supplyAssumptions);
+
+  // Precompute demand trajectories (block-chained, no discontinuities)
+  const demandTrajectories = precomputeDemandTrajectories(months, demandAssumptions);
+
+  // Precompute supply growth multipliers per category
+  const supplyMultipliers = precomputeSupplyMultipliers(months, supplyAssumptions);
+
+  // Glut thresholds
+  const glutThresholds = GLOBAL_PARAMS.glutThresholds || { soft: 0.95, hard: 0.80 };
+  const predictiveParams = GLOBAL_PARAMS.predictiveSupply || {};
 
   // --- state init ---
   const nodeState = {};
@@ -517,6 +646,13 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
   let demandScale = scenarioOverrides?.calibration?.demandScale ?? null;
 
+  // Helper: get supply multiplier for a node at a given month
+  const getSupplyMult = (nodeId, month) => {
+    const cat = SUPPLY_CATEGORY_MAP[nodeId];
+    if (!cat || !supplyMultipliers[cat]) return 1;
+    return supplyMultipliers[cat][month] || 1;
+  };
+
   for (let month = 0; month < months; month++) {
     results.months.push(month);
 
@@ -525,7 +661,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const currentInstalled = (nodeState['gpu_datacenter']?.installedBase || 0) + (nodeState['gpu_inference']?.installedBase || 0);
 
     if (month === 0 && (demandScale === null || demandScale === undefined)) {
-      const raw = computeRequiredGpus(0, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, 1);
+      const raw = computeRequiredGpus(0, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, 1);
       const rawReq = Math.max(raw.requiredTotal, 1);
       const desired = currentInstalled * calibrationCfg.targetRatio;
 
@@ -542,7 +678,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     const scaleUsed = (demandScale === null || demandScale === undefined) ? 1 : demandScale;
 
-    const req = computeRequiredGpus(month, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed);
+    const req = computeRequiredGpus(month, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed);
 
     // Allocation: training => DC; inference split by configurable share
     const dcInfShare = resolveAssumptionValue(demandBlock?.allocation?.dcInferenceShare?.value, 0.60);
@@ -588,7 +724,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const baselinePlan = planDeployDc + planDeployInf;
 
     // =======================================================
-    // STEP 1: POTENTIALS
+    // STEP 1: POTENTIALS (with supply growth multipliers)
     // =======================================================
     const potentials = {};
     for (const node of NODES) {
@@ -596,7 +732,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       if (node.group === 'A') continue;
 
       const state = nodeState[node.id];
-      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
+      const sMult = getSupplyMult(node.id, month);
+      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);
       const y = calculateNodeYield(node, month);
       const effCap = cap * (node.maxCapacityUtilization || 0.95) * y;
 
@@ -664,13 +801,22 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuTightness = gpuTotalLoad / Math.max(gpuPotential, EPSILON);
     const gpuPriceIndex = calculatePriceIndex(gpuTightness);
 
+    // GPU dynamic expansion using predictive supply params
     gpuState.tightnessHistory.push(gpuTightness);
-    if (sma(gpuState.tightnessHistory, 6) > 1.05 && (month - gpuState.lastExpansionMonth > 24)) {
-      const expansionAmount = gpuCap * 0.20;
+    const gpuAvgTightness = sma(gpuState.tightnessHistory, predictiveParams.forecastHorizonMonths || 6);
+    if (gpuAvgTightness > (predictiveParams.shortageThreshold || 1.0) &&
+        (month - gpuState.lastExpansionMonth) > (predictiveParams.cooldownMonths || 12) &&
+        gpuState.dynamicExpansions.length < (predictiveParams.maxDynamicExpansions || 5)) {
+      const expansionAmount = gpuCap * (predictiveParams.expansionFraction || 0.10);
       const leadTime = gpuNode.leadTimeDebottleneck || 24;
       gpuState.dynamicExpansions.push({ month: month + leadTime, capacityAdd: expansionAmount });
       gpuState.lastExpansionMonth = month;
     }
+
+    // Glut detection for GPUs
+    const gpuIsShort = gpuState.backlog > 0 || gpuTightness > 1.05;
+    const gpuIsGlut = gpuTightness < glutThresholds.soft && gpuState.backlog <= 0;
+    const gpuIsHardGlut = gpuTightness < glutThresholds.hard && gpuState.backlog <= 0;
 
     const storeGpu = (isDc) => {
       const nodeId = isDc ? 'gpu_datacenter' : 'gpu_inference';
@@ -695,8 +841,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       res.tightness.push(gpuTightness);
       res.priceIndex.push(gpuPriceIndex);
       res.yield.push(gpuYield);
-      res.shortage.push((gpuState.backlog > 0) ? 1 : 0);
-      res.glut.push(0);
+      res.shortage.push(gpuIsShort ? 1 : 0);
+      res.glut.push(gpuIsGlut ? (gpuIsHardGlut ? 2 : 1) : 0);
       res.unmetDemand.push(Math.max(0, (planDeployTotal * share) - (isDc ? actualDc : actualInf)));
     };
 
@@ -715,7 +861,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const planDemand = planDeployTotal * intensity;
       const actualConsumption = actualDeployTotal * intensity;
 
-      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
+      const sMult = getSupplyMult(node.id, month);
+      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);
       const y = calculateNodeYield(node, month);
       const effCap = cap * (node.maxCapacityUtilization || 0.95) * y;
 
@@ -750,13 +897,22 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const tightness = totalLoad / Math.max(potentialSupply, EPSILON);
       const priceIndex = calculatePriceIndex(tightness);
 
+      // Dynamic expansion using predictive supply params
       state.tightnessHistory.push(tightness);
-      if (sma(state.tightnessHistory, 6) > 1.10 && (month - state.lastExpansionMonth > 12)) {
-        const expansionAmount = cap * 0.20;
+      const avgTightness = sma(state.tightnessHistory, predictiveParams.forecastHorizonMonths || 6);
+      if (avgTightness > (predictiveParams.shortageThreshold || 1.0) &&
+          (month - state.lastExpansionMonth) > (predictiveParams.cooldownMonths || 12) &&
+          state.dynamicExpansions.length < (predictiveParams.maxDynamicExpansions || 5)) {
+        const expansionAmount = cap * (predictiveParams.expansionFraction || 0.10);
         const leadTime = node.leadTimeDebottleneck || 12;
         state.dynamicExpansions.push({ month: month + leadTime, capacityAdd: expansionAmount });
         state.lastExpansionMonth = month;
       }
+
+      // Glut detection for components
+      const isShort = tightness > 1.05 || state.backlog > 0;
+      const isGlut = tightness < glutThresholds.soft && state.backlog <= 0;
+      const isHardGlut = tightness < glutThresholds.hard && state.backlog <= 0;
 
       if (nodeRes) {
         nodeRes.demand.push(planDemand);
@@ -772,9 +928,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         nodeRes.yield.push(y);
         nodeRes.unmetDemand.push(unmetPlanThisMonth);
 
-        const isShort = tightness > 1.05 || state.backlog > 0;
         nodeRes.shortage.push(isShort ? 1 : 0);
-        nodeRes.glut.push(0);
+        nodeRes.glut.push(isGlut ? (isHardGlut ? 2 : 1) : 0);
 
         nodeRes.installedBase.push(0);
         nodeRes.requiredBase.push(0);
@@ -795,12 +950,16 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
 function analyzeResults(results) {
   const shortages = [];
+  const gluts = [];
+  const bottlenecks = [];
   const shortagePersistence = 3;
+  const glutPersistence = 3;
 
   for (const [nodeId, data] of Object.entries(results.nodes)) {
     const node = NODE_MAP.get(nodeId);
     if (!node || node.group === 'A') continue;
 
+    // Shortage detection
     let shortageStart = null;
     let peakTightness = 0;
     let shortageDuration = 0;
@@ -847,10 +1006,79 @@ function analyzeResults(results) {
         severity: peakTightness * shortageDuration
       });
     }
+
+    // Glut detection
+    let glutStart = null;
+    let minTightness = Infinity;
+    let glutDuration = 0;
+    let consecGlut = 0;
+
+    for (let month = 0; month < (data.glut?.length || 0); month++) {
+      const isGlut = (data.glut[month] || 0) > 0;
+      const t = data.tightness?.[month] || 1;
+
+      if (isGlut) {
+        consecGlut++;
+        if (consecGlut >= glutPersistence) {
+          if (glutStart === null) glutStart = month - glutPersistence + 1;
+          minTightness = Math.min(minTightness, t);
+          glutDuration++;
+        }
+      } else {
+        if (glutStart !== null) {
+          gluts.push({
+            nodeId,
+            nodeName: node.name,
+            group: node.group,
+            startMonth: glutStart,
+            minTightness,
+            duration: glutDuration,
+            severity: (1 - minTightness) * glutDuration
+          });
+        }
+        glutStart = null;
+        minTightness = Infinity;
+        glutDuration = 0;
+        consecGlut = 0;
+      }
+    }
+
+    if (glutStart !== null) {
+      gluts.push({
+        nodeId,
+        nodeName: node.name,
+        group: node.group,
+        startMonth: glutStart,
+        minTightness,
+        duration: glutDuration,
+        severity: (1 - minTightness) * glutDuration
+      });
+    }
+
+    // Bottleneck detection: nodes with tightness > 1.2 in first 24 months
+    const early = (data.tightness || []).slice(0, 24);
+    const avgEarlyTightness = early.length > 0
+      ? early.reduce((a, b) => a + (b || 0), 0) / early.length
+      : 0;
+    if (avgEarlyTightness > 1.1) {
+      bottlenecks.push({
+        nodeId,
+        nodeName: node.name,
+        group: node.group,
+        avgTightness: avgEarlyTightness
+      });
+    }
   }
 
   shortages.sort((a, b) => b.severity - a.severity);
-  return { shortages: shortages.slice(0, 20), gluts: [], bottlenecks: [] };
+  gluts.sort((a, b) => b.severity - a.severity);
+  bottlenecks.sort((a, b) => b.avgTightness - a.avgTightness);
+
+  return {
+    shortages: shortages.slice(0, 20),
+    gluts: gluts.slice(0, 20),
+    bottlenecks: bottlenecks.slice(0, 10)
+  };
 }
 
 export function formatMonth(monthIndex) {

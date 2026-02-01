@@ -1142,7 +1142,7 @@ const NODES_BASE = [
     description: 'High-voltage transformers for substations',
 
     demandDriverType: 'derived',
-    inputIntensity: 0,  // NOTE: kept out of GPU gating; model doesn't yet do multi-stage infra gating
+    inputIntensity: 0.000026,  // mwPerGpu * transformersPerMw (0.0013 * 0.02)
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 250,
@@ -1187,7 +1187,7 @@ const NODES_BASE = [
     description: 'Contracted incremental generation for new loads',
 
     demandDriverType: 'derived',
-    inputIntensity: 0,  // NOTE: kept out of GPU gating; model doesn't yet do multi-stage infra gating
+    inputIntensity: 0.0013,  // mwPerGpu (1:1 with datacenter MW demand)
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 8000,
@@ -1231,7 +1231,7 @@ const NODES_BASE = [
     description: 'Generators, UPS, batteries for redundancy',
 
     demandDriverType: 'derived',
-    inputIntensity: 0,  // NOTE: kept out of GPU gating; model doesn't yet do multi-stage infra gating
+    inputIntensity: 0.00195,  // mwPerGpu * redundancyFactor (0.0013 * 1.5)
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 10000,
@@ -1275,7 +1275,7 @@ const NODES_BASE = [
     description: 'Skilled labor availability for DC buildouts',
 
     demandDriverType: 'derived',
-    inputIntensity: 0,  // NOTE: kept out of GPU gating; model doesn't yet do multi-stage infra gating
+    inputIntensity: 0.52,  // mwPerGpu * 400 worker-months per MW
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 5000000,
@@ -1317,7 +1317,7 @@ const NODES_BASE = [
     description: 'Ops staffing for running/maintaining data centers',
 
     demandDriverType: 'derived',
-    inputIntensity: 0,  // NOTE: kept out of GPU gating; model doesn't yet do multi-stage infra gating
+    inputIntensity: 0.0104,  // mwPerGpu * 8 FTEs per MW
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 50000,
