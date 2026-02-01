@@ -5,6 +5,13 @@ import { formatMonth } from '../engine/calculations.js';
 function AnalysisTab({ results, onSelectNode }) {
   const { shortages, gluts, bottlenecks } = results?.summary || { shortages: [], gluts: [], bottlenecks: [] };
 
+  // Build group color lookup (NODE_GROUPS is an array, item.group is a letter like 'A')
+  const groupColor = useMemo(() => {
+    const map = {};
+    NODE_GROUPS.forEach(g => { map[g.id] = g.color; });
+    return map;
+  }, []);
+
   const getTightnessColor = (value) => {
     if (value > 1.2) return 'var(--status-tight)';
     if (value > 1.05) return 'var(--status-stressed)';
@@ -72,7 +79,7 @@ function AnalysisTab({ results, onSelectNode }) {
                             width: 8,
                             height: 8,
                             borderRadius: '50%',
-                            background: NODE_GROUPS[item.group]?.color,
+                            background: groupColor[item.group],
                             marginRight: '6px'
                           }}
                         />
@@ -141,7 +148,7 @@ function AnalysisTab({ results, onSelectNode }) {
                             width: 8,
                             height: 8,
                             borderRadius: '50%',
-                            background: NODE_GROUPS[item.group]?.color,
+                            background: groupColor[item.group],
                             marginRight: '6px'
                           }}
                         />
@@ -211,7 +218,7 @@ function AnalysisTab({ results, onSelectNode }) {
                             width: 8,
                             height: 8,
                             borderRadius: '50%',
-                            background: NODE_GROUPS[item.group]?.color,
+                            background: groupColor[item.group],
                             marginRight: '6px'
                           }}
                         />

@@ -732,6 +732,23 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     const req = computeRequiredGpus(month, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed);
 
+    // Forward-looking demand ratio cache for capacity planning.
+    // Uses precomputed trajectories to forecast how much total GPU demand grows
+    // over a given look-ahead horizon. Each node uses its own lead time as horizon.
+    const demandForecastCache = {};
+    const getDemandGrowthRatio = (lookAheadMonths) => {
+      if (demandForecastCache[lookAheadMonths] !== undefined) return demandForecastCache[lookAheadMonths];
+      const futureMonth = Math.min(month + lookAheadMonths, months - 1);
+      if (futureMonth <= month || req.requiredTotal <= EPSILON) {
+        demandForecastCache[lookAheadMonths] = 1;
+        return 1;
+      }
+      const futureReq = computeRequiredGpus(futureMonth, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed);
+      const ratio = Math.max(futureReq.requiredTotal / req.requiredTotal, 1);
+      demandForecastCache[lookAheadMonths] = ratio;
+      return ratio;
+    };
+
     // Allocation: training => DC; inference split by configurable share
     const dcInfShare = resolveAssumptionValue(demandBlock?.allocation?.dcInferenceShare?.value, 0.60);
     const requiredDcBase = req.requiredTraining + (req.requiredInference * dcInfShare);
@@ -853,16 +870,28 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuTightness = gpuTotalLoad / Math.max(gpuPotential, EPSILON);
     const gpuPriceIndex = calculatePriceIndex(gpuTightness);
 
-    // GPU dynamic expansion using predictive supply params
+    // Forward-looking capacity expansion for GPUs
+    // Look ahead by GPU lead time, forecast demand using trajectories, trigger build if shortage projected
     gpuState.tightnessHistory.push(gpuTightness);
-    const gpuAvgTightness = sma(gpuState.tightnessHistory, predictiveParams.forecastHorizonMonths || 6);
-    if (gpuAvgTightness > (predictiveParams.shortageThreshold || 1.0) &&
-        (month - gpuState.lastExpansionMonth) > (predictiveParams.cooldownMonths || 12) &&
-        gpuState.dynamicExpansions.length < (predictiveParams.maxDynamicExpansions || 5)) {
-      const expansionAmount = gpuCap * (predictiveParams.expansionFraction || 0.10);
-      const leadTime = gpuNode.leadTimeDebottleneck || 24;
-      gpuState.dynamicExpansions.push({ month: month + leadTime, capacityAdd: expansionAmount });
-      gpuState.lastExpansionMonth = month;
+    const gpuLeadTime = gpuNode.leadTimeDebottleneck || 6;
+    const gpuCooldown = Math.max(Math.floor(gpuLeadTime / 2), 6);
+    if ((month - gpuState.lastExpansionMonth) > gpuCooldown &&
+        gpuState.dynamicExpansions.length < 8) {
+      const gpuGrowthRatio = getDemandGrowthRatio(gpuLeadTime);
+      const forecastGpuDemand = planDeployTotal * gpuGrowthRatio;
+      const gpuFutureMonth = Math.min(month + gpuLeadTime, months - 1);
+      const forecastGpuCap = calculateCapacity(gpuNode, gpuFutureMonth, scenarioOverrides, gpuState.dynamicExpansions);
+      const forecastGpuEffCap = forecastGpuCap * 0.95 * calculateNodeYield(gpuNode, gpuFutureMonth);
+
+      if (forecastGpuDemand > forecastGpuEffCap) {
+        const gap = forecastGpuDemand - forecastGpuEffCap;
+        const expansionAmount = Math.min(gap * 0.5, gpuCap * 0.30);
+        gpuState.dynamicExpansions.push({
+          month: gpuFutureMonth,
+          capacityAdd: Math.max(expansionAmount, gpuCap * 0.05)
+        });
+        gpuState.lastExpansionMonth = month;
+      }
     }
 
     // Glut detection for GPUs
@@ -949,16 +978,30 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const tightness = totalLoad / Math.max(potentialSupply, EPSILON);
       const priceIndex = calculatePriceIndex(tightness);
 
-      // Dynamic expansion using predictive supply params
+      // Forward-looking capacity expansion for components
+      // Forecast demand at month + leadTime using demand trajectory growth ratio,
+      // compare to projected capacity, trigger build if shortage projected
       state.tightnessHistory.push(tightness);
-      const avgTightness = sma(state.tightnessHistory, predictiveParams.forecastHorizonMonths || 6);
-      if (avgTightness > (predictiveParams.shortageThreshold || 1.0) &&
-          (month - state.lastExpansionMonth) > (predictiveParams.cooldownMonths || 12) &&
-          state.dynamicExpansions.length < (predictiveParams.maxDynamicExpansions || 5)) {
-        const expansionAmount = cap * (predictiveParams.expansionFraction || 0.10);
-        const leadTime = node.leadTimeDebottleneck || 12;
-        state.dynamicExpansions.push({ month: month + leadTime, capacityAdd: expansionAmount });
-        state.lastExpansionMonth = month;
+      const compLeadTime = node.leadTimeDebottleneck || 12;
+      const compCooldown = Math.max(Math.floor(compLeadTime / 2), 6);
+      if ((month - state.lastExpansionMonth) > compCooldown &&
+          state.dynamicExpansions.length < 8) {
+        const growthRatio = getDemandGrowthRatio(compLeadTime);
+        const forecastDemand = planDemand * growthRatio;
+        const compFutureMonth = Math.min(month + compLeadTime, months - 1);
+        const futureSMult = getSupplyMult(node.id, compFutureMonth);
+        const futureCap = calculateCapacity(node, compFutureMonth, scenarioOverrides, state.dynamicExpansions, futureSMult);
+        const futureEffCap = futureCap * (node.maxCapacityUtilization || 0.95) * calculateNodeYield(node, compFutureMonth);
+
+        if (forecastDemand > futureEffCap) {
+          const gap = forecastDemand - futureEffCap;
+          const expansionAmount = Math.min(gap * 0.5, cap * 0.30);
+          state.dynamicExpansions.push({
+            month: month + compLeadTime,
+            capacityAdd: Math.max(expansionAmount, cap * 0.05)
+          });
+          state.lastExpansionMonth = month;
+        }
       }
 
       // Glut detection for components
@@ -1107,17 +1150,33 @@ function analyzeResults(results) {
       });
     }
 
-    // Bottleneck detection: nodes with tightness > 1.2 in first 24 months
+    // Bottleneck detection: nodes with avg tightness > 1.1 in first 24 months
     const early = (data.tightness || []).slice(0, 24);
     const avgEarlyTightness = early.length > 0
       ? early.reduce((a, b) => a + (b || 0), 0) / early.length
       : 0;
     if (avgEarlyTightness > 1.1) {
+      const maxTightness = Math.max(...early.map(v => v || 0));
+      const shortageMonths = early.filter(v => (v || 0) > 1.05).length;
+
+      // Downstream impact: count child nodes weighted by their tightness contribution
+      const children = NODES.filter(n => n.parentNodeIds?.includes(nodeId));
+      const downstreamImpact = children.reduce((acc, child) => {
+        const childData = results.nodes[child.id];
+        const childAvg = childData?.tightness
+          ? childData.tightness.slice(0, 24).reduce((a, b) => a + (b || 0), 0) / Math.max(childData.tightness.slice(0, 24).length, 1)
+          : 0;
+        return acc + (childAvg > 1.0 ? childAvg : 0);
+      }, 0);
+
       bottlenecks.push({
         nodeId,
         nodeName: node.name,
         group: node.group,
-        avgTightness: avgEarlyTightness
+        avgTightness: avgEarlyTightness,
+        maxTightness,
+        shortageMonths,
+        downstreamImpact
       });
     }
   }
