@@ -370,7 +370,7 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
   if (cache[month]) return cache[month];
 
   if (month === 0) {
-    cache[0] = { M_inference: 1, M_training: 1, S_inference: 1, S_training: 1, H: 1 };
+    cache[0] = { M_inference: 1, M_training: 1, S_inference: 1, S_training: 1, H: 1 , Intensity: 1};
     return cache[0];
   }
 
