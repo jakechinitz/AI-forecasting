@@ -234,7 +234,7 @@ const DEMAND_TEMPLATE_YEAR1 = {
   },
 
   intensityGrowth: {
-    value: 0.40,
+    value: 0.20,
     confidence: 'medium',
     source: 'Reasoning models, agent loops, tool use',
     historicalRange: [0.25, 0.60]
