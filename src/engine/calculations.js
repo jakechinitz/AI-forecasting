@@ -370,7 +370,7 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
   if (cache[month]) return cache[month];
 
   if (month === 0) {
-    cache[0] = { M_inference: 1, M_training: 1, S_inference: 1, S_training: 1, H: 1 , Intensity: 1};
+    cache[0] = { M_inference: 1, M_training: 1, S_inference: 1, S_training: 1, H: 1, Intensity: 1 };
     return cache[0];
   }
 
@@ -386,6 +386,9 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
   const sTrnAnnual = resolveGrowthRate(block?.systemsEfficiency?.s_training, 0.08);
 
   const hAnnual = resolveGrowthRate(block?.hardwareEfficiency?.h, 0.15);
+  
+  // FIX: Define intensityAnnual so the calculation below works
+  const intensityAnnual = resolveGrowthRate(block?.intensityGrowth, 0.40);
 
   const decayInf = Math.pow(1 - mInfAnnual, 1 / 12);
   const decayTrn = Math.pow(1 - mTrnAnnual, 1 / 12);
@@ -400,7 +403,7 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
     M_training: prev.M_training * decayTrn,
     S_inference: prev.S_inference * growSInf,
     S_training: prev.S_training * growSTrn,
-    H: prev.H * growH
+    H: prev.H * growH, // FIX: Added missing comma
     Intensity: prev.Intensity * growIntensity // Track cumulative intensity
   };
 
