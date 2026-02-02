@@ -1059,7 +1059,7 @@ const NODES_BASE = [
       { date: '2026-01', capacityAdd: 300, type: 'committed' },
       { date: '2027-01', capacityAdd: 300, type: 'optional' }
     ],
-    leadTimeDebottleneck: 12,
+    leadTimeDebottleneck: 24,
     leadTimeNewBuild: 48,
     rampProfile: 's-curve',
 
@@ -1194,7 +1194,7 @@ const NODES_BASE = [
     committedExpansions: [
       { date: '2026-01', capacityAdd: 2000, type: 'optional' }
     ],
-    leadTimeDebottleneck: 12,
+    leadTimeDebottleneck: 24,
     leadTimeNewBuild: 36,
     rampProfile: 's-curve',
 
