@@ -79,7 +79,7 @@ export const GLOBAL_PARAMS = {
     shortageThreshold: 1.0,
     expansionFraction: 0.10,
     cooldownMonths: 12,
-    maxDynamicExpansions: 5
+    maxDynamicExpansions: 20
   },
 
   // Inventory display
