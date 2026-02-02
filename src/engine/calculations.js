@@ -828,16 +828,22 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuState = nodeState['gpu_datacenter'];
     const infState = nodeState['gpu_inference'];
 
-    const dcGap = Math.max(0, requiredDcBase - gpuState.installedBase);
-    const infGap = Math.max(0, requiredInfBase - infState.installedBase);
-
+    // 1. Calculate natural decay (what dies this month)
     const dcRetirements = gpuState.installedBase / 48;
     const infRetirements = infState.installedBase / 48;
 
-    const backlogPaydown = gpuState.backlog / BACKLOG_PAYDOWN_MONTHS_GPU;
+    // 2. Calculate "Do Nothing" outcome (Projected Remaining Fleet)
+    //    If we buy 0 GPUs, this is what we will have left.
+    const dcProjectedRemaining = Math.max(0, gpuState.installedBase - dcRetirements);
+    const infProjectedRemaining = Math.max(0, infState.installedBase - infRetirements);
 
-    const planDeployDc = (dcGap / CATCHUP_MONTHS) + dcRetirements;
-    const planDeployInf = (infGap / CATCHUP_MONTHS) + infRetirements;
+    // 3. Smart Ordering Logic
+    //    Only buy if Required > Projected.
+    //    If Required < Projected, this returns 0 (orders stop, fleet shrinks).
+    const planDeployDc = Math.max(0, (requiredDcBase - dcProjectedRemaining) / CATCHUP_MONTHS);
+    const planDeployInf = Math.max(0, (requiredInfBase - infProjectedRemaining) / CATCHUP_MONTHS);
+
+    const backlogPaydown = gpuState.backlog / BACKLOG_PAYDOWN_MONTHS_GPU;
 
     const planDeployTotal = planDeployDc + planDeployInf + backlogPaydown;
     const baselinePlan = planDeployDc + planDeployInf;
