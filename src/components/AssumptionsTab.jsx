@@ -26,12 +26,7 @@ const TABLE_DEFS = {
       { path: ['continualLearning', 'networkBandwidthGrowth'], label: 'Network BW', suffix: '%/yr' }
     ]
   },
-  'inf-intensity': {
-    category: 'demand',
-    columns: [
-      { path: ['intensityGrowth'], label: 'Compute per Token', suffix: '%/yr', help: 'Context length + reasoning + agent loops' }
-    ]
-  },
+  // REMOVED: 'inf-intensity' definition
   'model-eff': {
     category: 'efficiency',
     columns: [
@@ -71,9 +66,9 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
 
   /*
    * 2D selection model:
-   *   sel = { t: tableId, r0, c0, r1, c1 }
-   *   r0/c0 = anchor cell, r1/c1 = focus (cursor) cell
-   *   Selected rectangle = min/max of anchor & focus
+   * sel = { t: tableId, r0, c0, r1, c1 }
+   * r0/c0 = anchor cell, r1/c1 = focus (cursor) cell
+   * Selected rectangle = min/max of anchor & focus
    */
   const [sel, setSel] = useState(null);
   const selRef = useRef(sel);
@@ -529,10 +524,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
             {renderEditableTable('cont-learning')}
           </div>
 
-          <div className="section">
-            <h4 className="section-title">Inference Intensity</h4>
-            {renderEditableTable('inf-intensity')}
-          </div>
+          {/* REMOVED: Inference Intensity Section */}
         </div>
 
         {/* ── Efficiency Improvements ── */}
