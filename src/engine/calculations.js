@@ -628,14 +628,13 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // Precompute demand trajectories (block-chained, no discontinuities)
   const demandTrajectories = precomputeDemandTrajectories(months, demandAssumptions);
 
-  // Note: Organic supply multipliers are NOT applied to starting capacity.
-  // Capacity grows through committed expansions (announced projects) and
-  // demand-responsive dynamic expansions only. Supply expansion rates from
-  // SUPPLY_ASSUMPTIONS cap how fast dynamic expansions can be per category.
+  // Precompute supply growth multipliers per category
+  const supplyMultipliers = precomputeSupplyMultipliers(months, supplyAssumptions);
 
   // Glut thresholds
   const glutThresholds = GLOBAL_PARAMS.glutThresholds || { soft: 0.95, hard: 0.80 };
   const predictiveParams = GLOBAL_PARAMS.predictiveSupply || {};
+  const maxDynamicExpansions = predictiveParams.maxDynamicExpansions || 5;
 
   // --- state init ---
   const nodeState = {};
@@ -699,6 +698,13 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   };
 
   let demandScale = scenarioOverrides?.calibration?.demandScale ?? null;
+
+  // Helper: get supply multiplier for a node at a given month
+  const getSupplyMult = (nodeId, month) => {
+    const cat = SUPPLY_CATEGORY_MAP[nodeId];
+    if (!cat || !supplyMultipliers[cat]) return 1;
+    return supplyMultipliers[cat][month] || 1;
+  };
 
   // Helper: get the supply expansion rate for a node's category at a given month
   const getExpansionRate = (nodeId, month) => {
@@ -797,7 +803,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const baselinePlan = planDeployDc + planDeployInf;
 
     // =======================================================
-    // STEP 1: POTENTIALS (startingCapacity + committed + dynamic expansions)
+    // STEP 1: POTENTIALS (with organic supply growth)
     // =======================================================
     const potentials = {};
     for (const node of NODES) {
@@ -805,7 +811,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       if (node.group === 'A') continue;
 
       const state = nodeState[node.id];
-      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
+      const sMult = getSupplyMult(node.id, month);
+      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);
       const y = calculateNodeYield(node, month);
       const effCap = cap * (node.maxCapacityUtilization || 0.95) * y;
 
@@ -879,7 +886,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuLeadTime = gpuNode.leadTimeDebottleneck || 6;
     const gpuCooldown = Math.max(Math.floor(gpuLeadTime / 2), 6);
     if ((month - gpuState.lastExpansionMonth) > gpuCooldown &&
-        gpuState.dynamicExpansions.length < 8) {
+        gpuState.dynamicExpansions.length < maxDynamicExpansions) {
       const gpuGrowthRatio = getDemandGrowthRatio(gpuLeadTime);
       const forecastGpuDemand = planDeployTotal * gpuGrowthRatio;
       const gpuFutureMonth = Math.min(month + gpuLeadTime, months - 1);
@@ -945,36 +952,41 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const planDemand = planDeployTotal * intensity;
       const actualConsumption = actualDeployTotal * intensity;
 
-      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions);
+      const sMult = getSupplyMult(node.id, month);
+      const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);
       const y = calculateNodeYield(node, month);
       const effCap = cap * (node.maxCapacityUtilization || 0.95) * y;
 
       const inventoryIn = state.inventory;
       const backlogIn = state.backlog;
+      const backlogUrgency = backlogIn / BACKLOG_PAYDOWN_MONTHS_COMPONENTS;
 
       const potentialSupply = (state.type === 'STOCK') ? (inventoryIn + effCap) : effCap;
 
+      // Plan-driven fulfillment: production and delivery are driven by plan demand
+      // (what was ordered), not actualConsumption (what downstream used). This
+      // decouples supplier ramp-up from GPU gating — suppliers ship against orders
+      // and build inventory, rather than idling when a different node is bottlenecked.
       let production = 0;
+      let delivered = 0;
+
       if (state.type === 'STOCK') {
         const bufferTarget = planDemand * DEFAULT_BUFFER_MONTHS;
-        const backlogUrgency = backlogIn / BACKLOG_PAYDOWN_MONTHS_COMPONENTS;
-        const prodNeed = actualConsumption + backlogUrgency + Math.max(0, bufferTarget - inventoryIn);
+        const prodNeed = planDemand + backlogUrgency + Math.max(0, bufferTarget - inventoryIn);
         production = Math.min(effCap, prodNeed);
-      }
-
-      let delivered = 0;
-      if (state.type === 'STOCK') {
         const available = inventoryIn + production;
-        delivered = Math.min(actualConsumption, available);
+        delivered = Math.min(planDemand + backlogUrgency, available);
         state.inventory = available - delivered;
         if (state.inventory < -1e-6) state.inventory = 0;
       } else {
-        delivered = Math.min(actualConsumption, effCap);
+        // FLOW / THROUGHPUT / QUEUE — no inventory, deliver against plan + backlog
+        delivered = Math.min(planDemand + backlogUrgency, effCap);
         state.inventory = 0;
       }
 
-      const unmetPlanThisMonth = Math.max(0, planDemand - potentialSupply);
-      state.backlog = Math.max(0, backlogIn + unmetPlanThisMonth);
+      // Backlog = previous backlog + new demand - total fulfilled (covers both new demand and paydown)
+      const unmetPlanThisMonth = Math.max(0, planDemand - delivered);
+      state.backlog = Math.max(0, backlogIn + planDemand - delivered);
 
       const totalLoad = planDemand + (backlogIn / BACKLOG_PAYDOWN_MONTHS_COMPONENTS);
       const tightness = totalLoad / Math.max(potentialSupply, EPSILON);
@@ -987,11 +999,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const compLeadTime = node.leadTimeDebottleneck || 12;
       const compCooldown = Math.max(Math.floor(compLeadTime / 2), 6);
       if ((month - state.lastExpansionMonth) > compCooldown &&
-          state.dynamicExpansions.length < 8) {
+          state.dynamicExpansions.length < maxDynamicExpansions) {
         const growthRatio = getDemandGrowthRatio(compLeadTime);
         const forecastDemand = planDemand * growthRatio;
         const compFutureMonth = Math.min(month + compLeadTime, months - 1);
-        const futureCap = calculateCapacity(node, compFutureMonth, scenarioOverrides, state.dynamicExpansions);
+        const futureSMult = getSupplyMult(node.id, compFutureMonth);
+        const futureCap = calculateCapacity(node, compFutureMonth, scenarioOverrides, state.dynamicExpansions, futureSMult);
         const futureEffCap = futureCap * (node.maxCapacityUtilization || 0.95) * calculateNodeYield(node, compFutureMonth);
 
         if (forecastDemand > futureEffCap) {
