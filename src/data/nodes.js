@@ -373,7 +373,7 @@ const NODES_BASE = [
       { date: '2026-01', capacityAdd: 1200000, type: 'committed' },
       { date: '2026-09', capacityAdd: 1000000, type: 'optional' }
     ],
-    leadTimeDebottleneck: 9,
+    leadTimeDebottleneck: 24,
     leadTimeNewBuild: 24,
     rampProfile: 's-curve',
 
@@ -417,7 +417,7 @@ const NODES_BASE = [
     committedExpansions: [
       { date: '2026-01', capacityAdd: 4000000, type: 'optional' }
     ],
-    leadTimeDebottleneck: 9,
+    leadTimeDebottleneck: 12,
     leadTimeNewBuild: 24,
     rampProfile: 'linear',
 
@@ -510,7 +510,7 @@ const NODES_BASE = [
       { date: '2026-06', capacityAdd: 20000, type: 'committed' },
       { date: '2026-12', capacityAdd: 10000, type: 'optional' }
     ],
-    leadTimeDebottleneck: 9,
+    leadTimeDebottleneck: 30,
     leadTimeNewBuild: 24,
     rampProfile: 's-curve',
 
@@ -555,7 +555,7 @@ const NODES_BASE = [
       { date: '2026-06', capacityAdd: 5000, type: 'committed' },
       { date: '2027-06', capacityAdd: 8000, type: 'optional' }
     ],
-    leadTimeDebottleneck: 12,
+    leadTimeDebottleneck: 24,
     leadTimeNewBuild: 30,
     rampProfile: 's-curve',
 
@@ -648,7 +648,7 @@ const NODES_BASE = [
     committedExpansions: [
       { date: '2026-01', capacityAdd: 100000, type: 'optional' }
     ],
-    leadTimeDebottleneck: 6,
+    leadTimeDebottleneck: 24,
     leadTimeNewBuild: 18,
     rampProfile: 'linear',
 
