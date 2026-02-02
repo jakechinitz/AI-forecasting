@@ -393,13 +393,15 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
   const growSInf = Math.pow(1 + sInfAnnual, 1 / 12);
   const growSTrn = Math.pow(1 + sTrnAnnual, 1 / 12);
   const growH = Math.pow(1 + hAnnual, 1 / 12);
-
+  const growIntensity = Math.pow(1 + intensityAnnual, 1 / 12);
+  
   const cur = {
     M_inference: prev.M_inference * decayInf,
     M_training: prev.M_training * decayTrn,
     S_inference: prev.S_inference * growSInf,
     S_training: prev.S_training * growSTrn,
     H: prev.H * growH
+    Intensity: prev.Intensity * growIntensity // Track cumulative intensity
   };
 
   // Safety: M should not increase (cost multiplier should trend down)
@@ -462,6 +464,10 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   // Efficiency gain: M decays (models get cheaper → more tok/s), S and H grow throughput
   const efficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference * eff.H;
 
+  // NEW: Apply Intensity as a penalty (lowers effective throughput per "unit of intent")
+  // Or simply acts as a demand multiplier. Here we treat it as a multiplier on required GPUs.
+  const intensityMult = eff.Intensity;
+  
   // Per-segment GPU demand (with demandScale applied to token volumes)
   const consumerTokens = (inferenceDemand.consumer || 0) * demandScale;
   const enterpriseTokens = (inferenceDemand.enterprise || 0) * demandScale;
