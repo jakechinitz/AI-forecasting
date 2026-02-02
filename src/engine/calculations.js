@@ -79,6 +79,8 @@ const QUEUE_NODES = new Set([
  * Nodes NOT in this map rely on committed + dynamic expansions only.
  */
 const SUPPLY_CATEGORY_MAP = {
+  gpu_datacenter: 'foundry',
+  gpu_inference: 'foundry',
   cowos_capacity: 'packaging',
   hybrid_bonding: 'packaging',
   abf_substrate: 'packaging',
@@ -823,7 +825,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // STEP 2: GATING
     // =======================================================
     const gpuNode = NODE_MAP.get('gpu_datacenter');
-    const gpuCap = calculateCapacity(gpuNode, month, scenarioOverrides, gpuState.dynamicExpansions);
+    const gpuSMult = getSupplyMult('gpu_datacenter', month);
+    const gpuCap = calculateCapacity(gpuNode, month, scenarioOverrides, gpuState.dynamicExpansions, gpuSMult);
     const gpuYield = calculateNodeYield(gpuNode, month);
     const gpuEffCap = gpuCap * 0.95 * gpuYield;
 
@@ -890,7 +893,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const gpuGrowthRatio = getDemandGrowthRatio(gpuLeadTime);
       const forecastGpuDemand = planDeployTotal * gpuGrowthRatio;
       const gpuFutureMonth = Math.min(month + gpuLeadTime, months - 1);
-      const forecastGpuCap = calculateCapacity(gpuNode, gpuFutureMonth, scenarioOverrides, gpuState.dynamicExpansions);
+      const forecastGpuSMult = getSupplyMult('gpu_datacenter', gpuFutureMonth);
+      const forecastGpuCap = calculateCapacity(gpuNode, gpuFutureMonth, scenarioOverrides, gpuState.dynamicExpansions, forecastGpuSMult);
       const forecastGpuEffCap = forecastGpuCap * 0.95 * calculateNodeYield(gpuNode, gpuFutureMonth);
 
       if (forecastGpuDemand > forecastGpuEffCap) {
@@ -1011,7 +1015,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
           const gap = forecastDemand - futureEffCap;
           // Cap expansion by supply category's annual expansion rate
           const expRate = getExpansionRate(node.id, month);
-          const maxDynamic = (node.startingCapacity || cap) * Math.min(expRate, 0.50);
+          const maxDynamic = cap * Math.min(expRate, 0.50);
           const expansionAmount = Math.min(gap * 0.5, maxDynamic);
           state.dynamicExpansions.push({
             month: month + compLeadTime,
