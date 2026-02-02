@@ -366,12 +366,11 @@ function calculateNodeYield(node, month) {
 // Convention:
 //  - M_* multiplies cost (good -> decreases over time, i.e. decay)
 //  - S_* and H multiply throughput (good -> increases over time, i.e. growth)
-//  - Intensity is a DRAG on throughput (bad -> increases difficulty per token)
 function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet) {
   if (cache[month]) return cache[month];
 
   if (month === 0) {
-    cache[0] = { M_inference: 1, M_training: 1, S_inference: 1, S_training: 1, H: 1, Intensity: 1 };
+    cache[0] = { M_inference: 1, M_training: 1, S_inference: 1, S_training: 1, H: 1 };
     return cache[0];
   }
 
@@ -379,7 +378,7 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
   const blockKey = getBlockKeyForMonth(month);
   const block = assumptions?.[blockKey] || EFFICIENCY_ASSUMPTIONS?.[blockKey] || EFFICIENCY_ASSUMPTIONS?.base || {};
 
-  // Efficiency Drivers (Good)
+  // Handle both { value: number } objects and plain numbers (from scenario overrides)
   const mInfAnnual = resolveGrowthRate(block?.modelEfficiency?.m_inference, 0.18);
   const mTrnAnnual = resolveGrowthRate(block?.modelEfficiency?.m_training, 0.10);
 
@@ -388,25 +387,19 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
 
   const hAnnual = resolveGrowthRate(block?.hardwareEfficiency?.h, 0.15);
 
-  // Intensity Driver (Bad/Drag)
-  // Fallback remains 0.40 as requested (you will tune this in assumptions.js)
-  const intensityAnnual = resolveGrowthRate(block?.intensityGrowth, 0.20);
-
   const decayInf = Math.pow(1 - mInfAnnual, 1 / 12);
   const decayTrn = Math.pow(1 - mTrnAnnual, 1 / 12);
 
   const growSInf = Math.pow(1 + sInfAnnual, 1 / 12);
   const growSTrn = Math.pow(1 + sTrnAnnual, 1 / 12);
   const growH = Math.pow(1 + hAnnual, 1 / 12);
-  const growIntensity = Math.pow(1 + intensityAnnual, 1 / 12);
 
   const cur = {
     M_inference: prev.M_inference * decayInf,
     M_training: prev.M_training * decayTrn,
     S_inference: prev.S_inference * growSInf,
     S_training: prev.S_training * growSTrn,
-    H: prev.H * growH,
-    Intensity: prev.Intensity * growIntensity
+    H: prev.H * growH
   };
 
   // Safety: M should not increase (cost multiplier should trend down)
@@ -469,19 +462,14 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   // Efficiency gain: M decays (models get cheaper → more tok/s), S and H grow throughput
   const efficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference * eff.H;
 
-  // New: Apply Intensity as a drag on efficiency.
-  // Net Efficiency = Raw Efficiency / Intensity Drag
-  // (If Intensity grows faster than efficiency, net throughput drops).
-  const netEfficiency = efficiencyGain / Math.max(eff.Intensity, EPSILON);
-
   // Per-segment GPU demand (with demandScale applied to token volumes)
   const consumerTokens = (inferenceDemand.consumer || 0) * demandScale;
   const enterpriseTokens = (inferenceDemand.enterprise || 0) * demandScale;
   const agenticTokens = (inferenceDemand.agentic || 0) * demandScale;
 
-  const consumerGpus = consumerTokens / Math.max(consumerTokPerSec * secondsPerMonth * netEfficiency, EPSILON);
-  const enterpriseGpus = enterpriseTokens / Math.max(enterpriseTokPerSec * secondsPerMonth * netEfficiency, EPSILON);
-  const agenticGpus = agenticTokens / Math.max(agenticTokPerSec * secondsPerMonth * netEfficiency, EPSILON);
+  const consumerGpus = consumerTokens / Math.max(consumerTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
+  const enterpriseGpus = enterpriseTokens / Math.max(enterpriseTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
+  const agenticGpus = agenticTokens / Math.max(agenticTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
 
   const requiredInference = consumerGpus + enterpriseGpus + agenticGpus;
 
