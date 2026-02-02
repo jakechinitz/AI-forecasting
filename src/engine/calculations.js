@@ -558,9 +558,13 @@ function buildIntensityMap() {
   map['optical_transceivers'] = resolveAssumptionValue(NODE_MAP.get('optical_transceivers')?.inputIntensity, 1);
   map['infiniband_cables'] = resolveAssumptionValue(NODE_MAP.get('infiniband_cables')?.inputIntensity, 4);
 
-  // NOTE: euv_tools is intentionally excluded. Its inputIntensity (0.00002) is
-  // tools-per-wafer (parent: advanced_wafers), not tools-per-GPU. Including it here
-  // would cap GPU deployment at ~180K/month regardless of actual GPU/component capacity.
+  // EUV tools: compound intensity through the wafer chain.
+  // inputIntensity (0.00002) is tools-per-wafer, so per-GPU = wafers/GPU × tools/wafer.
+  // At compound 0.000006, 4 tools support ~600K GPUs (not the false 180K ceiling from before).
+  const advWafersPerGpu = map['advanced_wafers'] || 0.3;
+  map['euv_tools'] = advWafersPerGpu * resolveAssumptionValue(
+    NODE_MAP.get('euv_tools')?.inputIntensity, 0.00002
+  );
 
   return map;
 }
@@ -643,8 +647,13 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // Precompute demand trajectories (block-chained, no discontinuities)
   const demandTrajectories = precomputeDemandTrajectories(months, demandAssumptions);
 
-  // Precompute supply growth multipliers per category
-  const supplyMultipliers = precomputeSupplyMultipliers(months, supplyAssumptions);
+  // Demand-responsive organic growth: running multiplier per node.
+  // Only compounds when node tightness > 1 (demand exceeds supply).
+  // Prevents perpetual capacity growth when there's no shortage pressure.
+  const runningSupplyMult = {};
+  for (const node of NODES) {
+    if (node.group !== 'A') runningSupplyMult[node.id] = 1.0;
+  }
 
   // Glut thresholds
   const glutThresholds = GLOBAL_PARAMS.glutThresholds || { soft: 0.95, hard: 0.80 };
@@ -722,11 +731,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
   let demandScale = scenarioOverrides?.calibration?.demandScale ?? null;
 
-  // Helper: get supply multiplier for a node at a given month
-  const getSupplyMult = (nodeId, month) => {
+  // Helper: compound organic growth for a node (call when tightness > 1)
+  const compoundOrganicGrowth = (nodeId, month) => {
     const cat = SUPPLY_CATEGORY_MAP[nodeId];
-    if (!cat || !supplyMultipliers[cat]) return 1;
-    return supplyMultipliers[cat][month] || 1;
+    if (!cat) return;
+    const blockKey = getBlockKeyForMonth(month);
+    const block = supplyAssumptions?.[blockKey];
+    const annualRate = resolveAssumptionValue(block?.expansionRates?.[cat]?.value, 0);
+    runningSupplyMult[nodeId] *= Math.pow(1 + annualRate, 1 / 12);
   };
 
   // Helper: get the supply expansion rate for a node's category at a given month
@@ -839,7 +851,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       if (node.group === 'A') continue;
 
       const state = nodeState[node.id];
-      const sMult = getSupplyMult(node.id, month);
+      const sMult = runningSupplyMult[node.id] || 1;
       const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);
       const y = calculateNodeYield(node, month);
       const effCap = cap * (node.maxCapacityUtilization || 0.95) * y;
@@ -851,7 +863,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // STEP 2: GATING
     // =======================================================
     const gpuNode = NODE_MAP.get('gpu_datacenter');
-    const gpuSMult = getSupplyMult('gpu_datacenter', month);
+    const gpuSMult = runningSupplyMult['gpu_datacenter'] || 1;
     const gpuCap = calculateCapacity(gpuNode, month, scenarioOverrides, gpuState.dynamicExpansions, gpuSMult);
     const gpuYield = calculateNodeYield(gpuNode, month);
     const gpuEffCap = gpuCap * 0.95 * gpuYield;
@@ -912,13 +924,20 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Forward-looking capacity expansion for GPUs
     // Look ahead by GPU lead time, forecast demand using trajectories, trigger build if shortage projected
     gpuState.tightnessHistory.push(gpuTightness);
+
+    // Organic growth: only compound when demand exceeds supply
+    if (gpuTightness > 1.0) {
+      compoundOrganicGrowth('gpu_datacenter', month);
+      compoundOrganicGrowth('gpu_inference', month);
+    }
+
     const gpuLeadTime = gpuNode.leadTimeDebottleneck || 6;
     const gpuCooldown = Math.max(Math.floor(gpuLeadTime / 2), 6);
     if ((month - gpuState.lastExpansionMonth) > gpuCooldown) {
       const gpuGrowthRatio = getDemandGrowthRatio(gpuLeadTime);
       const forecastGpuDemand = planDeployTotal * gpuGrowthRatio;
       const gpuFutureMonth = Math.min(month + gpuLeadTime, months - 1);
-      const forecastGpuSMult = getSupplyMult('gpu_datacenter', gpuFutureMonth);
+      const forecastGpuSMult = runningSupplyMult['gpu_datacenter'] || 1;
       const forecastGpuCap = calculateCapacity(gpuNode, gpuFutureMonth, scenarioOverrides, gpuState.dynamicExpansions, forecastGpuSMult);
       const forecastGpuEffCap = forecastGpuCap * 0.95 * calculateNodeYield(gpuNode, gpuFutureMonth);
 
@@ -981,7 +1000,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const planDemand = planDeployTotal * intensity;
       const actualConsumption = actualDeployTotal * intensity;
 
-      const sMult = getSupplyMult(node.id, month);
+      const sMult = runningSupplyMult[node.id] || 1;
       const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);
       const y = calculateNodeYield(node, month);
       const effCap = cap * (node.maxCapacityUtilization || 0.95) * y;
@@ -1025,13 +1044,17 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // Forecast demand at month + leadTime using demand trajectory growth ratio,
       // compare to projected capacity, trigger build if shortage projected
       state.tightnessHistory.push(tightness);
+
+      // Organic growth: only compound when demand exceeds supply for this node
+      if (tightness > 1.0) compoundOrganicGrowth(node.id, month);
+
       const compLeadTime = node.leadTimeDebottleneck || 12;
       const compCooldown = Math.max(Math.floor(compLeadTime / 2), 6);
       if ((month - state.lastExpansionMonth) > compCooldown) {
         const growthRatio = getDemandGrowthRatio(compLeadTime);
         const forecastDemand = planDemand * growthRatio;
         const compFutureMonth = Math.min(month + compLeadTime, months - 1);
-        const futureSMult = getSupplyMult(node.id, compFutureMonth);
+        const futureSMult = runningSupplyMult[node.id] || 1;
         const futureCap = calculateCapacity(node, compFutureMonth, scenarioOverrides, state.dynamicExpansions, futureSMult);
         const futureEffCap = futureCap * (node.maxCapacityUtilization || 0.95) * calculateNodeYield(node, compFutureMonth);
 
