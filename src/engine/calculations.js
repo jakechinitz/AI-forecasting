@@ -473,9 +473,9 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   const enterpriseTokens = (inferenceDemand.enterprise || 0) * demandScale;
   const agenticTokens = (inferenceDemand.agentic || 0) * demandScale;
 
-  const consumerGpus = consumerTokens / Math.max(consumerTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
-  const enterpriseGpus = enterpriseTokens / Math.max(enterpriseTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
-  const agenticGpus = agenticTokens / Math.max(agenticTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
+  const consumerGpus = (consumerTokens * intensityMult) / Math.max(consumerTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
+  const enterpriseGpus = (enterpriseTokens * intensityMult) / Math.max(enterpriseTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
+  const agenticGpus = (agenticTokens * intensityMult) / Math.max(agenticTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
 
   const requiredInference = consumerGpus + enterpriseGpus + agenticGpus;
 
