@@ -524,9 +524,10 @@ function buildIntensityMap() {
   map['dram_server'] = resolveAssumptionValue(gpuToComp.serverDramGbPerGpu?.value, 128);
   map['ssd_datacenter'] = 2;  // TB per GPU
 
+  // Hybrid bonding: initial static value (overridden monthly with adoption curve in sim loop)
   const hbIntensity = resolveAssumptionValue(gpuToComp.hybridBondingPerGpu?.value, 0.35);
-  const hbShare = resolveAssumptionValue(gpuToComp.hybridBondingPackageShare?.value, 0.2);
-  map['hybrid_bonding'] = hbIntensity * hbShare;
+  const hbAdoptInit = resolveAssumptionValue(gpuToComp.hybridBondingAdoption?.initial, 0.02);
+  map['hybrid_bonding'] = hbIntensity * hbAdoptInit;
 
   const gpusPerServer = resolveAssumptionValue(serverToInfra.gpusPerServer?.value, 8);
   map['server_assembly'] = 1 / Math.max(gpusPerServer, 1);
@@ -544,10 +545,22 @@ function buildIntensityMap() {
   map['dc_construction'] = mwPerGpu * 400;   // ~400 worker-months per MW
   map['dc_ops_staff'] = mwPerGpu * 8;        // ~8 FTEs per MW
 
-  // Fill gaps from node definitions
-  for (const node of NODES) {
-    if (node?.inputIntensity && map[node.id] === undefined) map[node.id] = node.inputIntensity;
-  }
+  // Downstream deployable nodes with GPU parents: explicitly set per-GPU intensities.
+  // These were previously auto-mapped by a "fill gaps" loop, but that loop also pulled in
+  // upstream capital equipment (euv_tools) whose inputIntensity is per-wafer, not per-GPU,
+  // creating a false ~180K GPU/month hard ceiling.
+  map['liquid_cooling'] = resolveAssumptionValue(NODE_MAP.get('liquid_cooling')?.inputIntensity, 0.05);
+  map['osat_test'] = resolveAssumptionValue(NODE_MAP.get('osat_test')?.inputIntensity, 1);
+  map['rack_pdu'] = resolveAssumptionValue(NODE_MAP.get('rack_pdu')?.inputIntensity, 0.025);
+  map['cpu_server'] = resolveAssumptionValue(NODE_MAP.get('cpu_server')?.inputIntensity, 0.25);
+  map['dpu_nic'] = resolveAssumptionValue(NODE_MAP.get('dpu_nic')?.inputIntensity, 1);
+  map['switch_asics'] = resolveAssumptionValue(NODE_MAP.get('switch_asics')?.inputIntensity, 0.125);
+  map['optical_transceivers'] = resolveAssumptionValue(NODE_MAP.get('optical_transceivers')?.inputIntensity, 1);
+  map['infiniband_cables'] = resolveAssumptionValue(NODE_MAP.get('infiniband_cables')?.inputIntensity, 4);
+
+  // NOTE: euv_tools is intentionally excluded. Its inputIntensity (0.00002) is
+  // tools-per-wafer (parent: advanced_wafers), not tools-per-GPU. Including it here
+  // would cap GPU deployment at ~180K/month regardless of actual GPU/component capacity.
 
   return map;
 }
@@ -636,7 +649,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // Glut thresholds
   const glutThresholds = GLOBAL_PARAMS.glutThresholds || { soft: 0.95, hard: 0.80 };
   const predictiveParams = GLOBAL_PARAMS.predictiveSupply || {};
-  const maxDynamicExpansions = predictiveParams.maxDynamicExpansions || 5;
+
+  // Hybrid bonding adoption curve params (for month-dependent intensity in sim loop)
+  const hbAdoption = TRANSLATION_INTENSITIES?.gpuToComponents?.hybridBondingAdoption || {};
+  const hbAdoptionInitial = resolveAssumptionValue(hbAdoption.initial, 0.02);
+  const hbAdoptionTarget = resolveAssumptionValue(hbAdoption.target, 0.25);
+  const hbAdoptionHalflife = resolveAssumptionValue(hbAdoption.halflifeMonths, 36);
+  const hbIntensityBase = resolveAssumptionValue(
+    TRANSLATION_INTENSITIES?.gpuToComponents?.hybridBondingPerGpu?.value, 0.35
+  );
 
   // --- state init ---
   const nodeState = {};
@@ -719,6 +740,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
   for (let month = 0; month < months; month++) {
     results.months.push(month);
+
+    // Update hybrid bonding intensity with month-dependent adoption curve
+    // S-curve: starts at initial share (~2%), ramps toward target (~25%) with halflife of 36 months
+    const hbShare = hbAdoptionTarget - (hbAdoptionTarget - hbAdoptionInitial) * Math.pow(2, -month / Math.max(hbAdoptionHalflife, 1));
+    nodeIntensityMap['hybrid_bonding'] = hbIntensityBase * hbShare;
 
     const demandBlock = getDemandBlockForMonth(month, demandAssumptions);
 
@@ -888,8 +914,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     gpuState.tightnessHistory.push(gpuTightness);
     const gpuLeadTime = gpuNode.leadTimeDebottleneck || 6;
     const gpuCooldown = Math.max(Math.floor(gpuLeadTime / 2), 6);
-    if ((month - gpuState.lastExpansionMonth) > gpuCooldown &&
-        gpuState.dynamicExpansions.length < maxDynamicExpansions) {
+    if ((month - gpuState.lastExpansionMonth) > gpuCooldown) {
       const gpuGrowthRatio = getDemandGrowthRatio(gpuLeadTime);
       const forecastGpuDemand = planDeployTotal * gpuGrowthRatio;
       const gpuFutureMonth = Math.min(month + gpuLeadTime, months - 1);
@@ -1002,8 +1027,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       state.tightnessHistory.push(tightness);
       const compLeadTime = node.leadTimeDebottleneck || 12;
       const compCooldown = Math.max(Math.floor(compLeadTime / 2), 6);
-      if ((month - state.lastExpansionMonth) > compCooldown &&
-          state.dynamicExpansions.length < maxDynamicExpansions) {
+      if ((month - state.lastExpansionMonth) > compCooldown) {
         const growthRatio = getDemandGrowthRatio(compLeadTime);
         const forecastDemand = planDemand * growthRatio;
         const compFutureMonth = Math.min(month + compLeadTime, months - 1);
