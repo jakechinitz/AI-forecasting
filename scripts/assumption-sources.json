@@ -1,11 +1,36 @@
 {
+  "description": "Monthly sources for AI infrastructure supply chain assumption updates. Organized by category. The update script fetches all in parallel and filters failures.",
+  "fetchTimeoutMs": 15000,
+  "maxContentCharsPerSource": 15000,
   "sources": [
-    "https://www.nvidia.com/en-us/about-nvidia/financial-info/",
-    "https://investor.tsmc.com/english/quarterly-results/2024Q4",
-    "https://www.skhynix.com/ir/financial-report",
-    "https://investors.samsung.com/financials/quarterly-results",
-    "https://investors.micron.com/quarterly-results/default.aspx",
-    "https://www.spglobal.com/marketintelligence/en/news-insights/latest-news-headlines",
-    "https://www.reuters.com/technology/"
+    { "url": "https://nvidianews.nvidia.com/", "name": "NVIDIA Newsroom", "category": "gpu_compute" },
+    { "url": "https://ir.nvidia.com/news-events/press-releases", "name": "NVIDIA IR Press Releases", "category": "gpu_compute" },
+    { "url": "https://www.amd.com/en/newsroom.html", "name": "AMD Newsroom", "category": "gpu_compute" },
+    { "url": "https://www.intel.com/content/www/us/en/newsroom/home.html", "name": "Intel Newsroom", "category": "gpu_compute" },
+
+    { "url": "https://pr.tsmc.com/english/news/releaseByFilter", "name": "TSMC Press Releases", "category": "foundry" },
+    { "url": "https://www.asml.com/en/news", "name": "ASML News", "category": "equipment" },
+    { "url": "https://www.appliedmaterials.com/us/en/blog.html", "name": "Applied Materials Blog", "category": "equipment" },
+
+    { "url": "https://news.skhynix.com/", "name": "SK Hynix Newsroom", "category": "memory" },
+    { "url": "https://www.micron.com/about/newsroom", "name": "Micron Newsroom", "category": "memory" },
+    { "url": "https://semiconductor.samsung.com/news-events/", "name": "Samsung Semiconductor News", "category": "memory" },
+
+    { "url": "https://ase.aseglobal.com/en/news", "name": "ASE Group News", "category": "packaging" },
+    { "url": "https://www.amkor.com/news/", "name": "Amkor News", "category": "packaging" },
+
+    { "url": "https://www.datacenterdynamics.com/en/news/", "name": "DataCenter Dynamics News", "category": "datacenter" },
+    { "url": "https://www.datacenterfrontier.com/", "name": "Data Center Frontier", "category": "datacenter" },
+
+    { "url": "https://www.trendforce.com/", "name": "TrendForce", "category": "industry" },
+    { "url": "https://www.semi.org/en/news-media", "name": "SEMI News", "category": "industry" },
+    { "url": "https://www.semiconductors.org/news-events/", "name": "SIA News & Events", "category": "industry" },
+
+    { "url": "https://www.reuters.com/technology/artificial-intelligence/", "name": "Reuters AI", "category": "news" },
+    { "url": "https://www.reuters.com/technology/", "name": "Reuters Technology", "category": "news" },
+    { "url": "https://www.theregister.com/data_centre/", "name": "The Register - Data Centre", "category": "news" },
+    { "url": "https://www.tomshardware.com/tag/ai", "name": "Tom's Hardware AI", "category": "news" },
+    { "url": "https://www.eetimes.com/", "name": "EE Times", "category": "news" },
+    { "url": "https://semianalysis.com/", "name": "SemiAnalysis", "category": "industry" }
   ]
 }
