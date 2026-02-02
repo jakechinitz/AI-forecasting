@@ -733,7 +733,7 @@ const NODES_BASE = [
     description: 'ASML EUV tool deliveries',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.00000,
+    inputIntensity: 0.00002,
     parentNodeIds: ['advanced_wafers'],
 
     startingCapacity: 4,
