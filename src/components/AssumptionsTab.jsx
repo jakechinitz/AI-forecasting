@@ -1,5 +1,11 @@
 import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
-import { ASSUMPTION_SEGMENTS } from '../data/assumptions.js';
+import { ASSUMPTION_SEGMENTS, GLOBAL_PARAMS } from '../data/assumptions.js';
+
+/* ── Brain equivalency constants ── */
+const BRAIN = GLOBAL_PARAMS.brainEquivalency;
+
+/* ── Block durations in years ── */
+const BLOCK_YEARS = [1, 1, 1, 1, 1, 5, 5, 5];
 
 /* ── Table definitions: id → { category, columns[] } ── */
 const TABLE_DEFS = {
@@ -26,7 +32,6 @@ const TABLE_DEFS = {
       { path: ['continualLearning', 'networkBandwidthGrowth'], label: 'Network BW', suffix: '%/yr' }
     ]
   },
-  // REMOVED: 'inf-intensity' definition
   'model-eff': {
     category: 'efficiency',
     columns: [
@@ -50,6 +55,8 @@ const TABLE_DEFS = {
   }
 };
 
+const EFFICIENCY_TABLE_IDS = ['model-eff', 'sys-eff', 'hw-eff'];
+
 /* Metrics table columns (read-only derived values) */
 const METRICS_COLUMNS = [
   { valueKey: 'inferenceGain', label: 'Inference eff. (x/yr)', format: v => v.toFixed(2) },
@@ -58,6 +65,14 @@ const METRICS_COLUMNS = [
   { valueKey: 'trainingOom', label: 'Training OOM/yr', format: v => v.toFixed(2) },
   { valueKey: 'totalGain', label: 'Total eff. (x/yr)', format: v => v.toFixed(2) },
   { valueKey: 'totalOom', label: 'Total OOM/yr', format: v => v.toFixed(2) }
+];
+
+/* Brain equivalency table columns */
+const BRAIN_COLUMNS = [
+  { valueKey: 'cumulativeGain', label: 'Cumulative Eff. (x)', format: v => v < 1000 ? v.toFixed(1) + 'x' : (v / 1000).toFixed(1) + 'Kx' },
+  { valueKey: 'wattsPerBrainEquiv', label: 'W per Brain-Equiv', format: v => v >= 1000 ? (v / 1000).toFixed(1) + ' kW' : v.toFixed(0) + ' W' },
+  { valueKey: 'brainEfficiencyPct', label: '% of Brain Eff.', format: v => v < 1 ? v.toFixed(2) + '%' : v < 100 ? v.toFixed(1) + '%' : v.toFixed(0) + '%' },
+  { valueKey: 'atAsymptote', label: 'Status', format: v => v ? 'AT LIMIT' : '' }
 ];
 
 function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSimulating }) {
@@ -351,6 +366,65 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     }, {});
   }, [assumptions, timeBlocks]);
 
+  /* ── Brain power equivalency (cumulative efficiency → watts per brain equiv) ── */
+
+  const brainEquivalency = useMemo(() => {
+    const startingWatts = BRAIN.startingWattsPerBrainEquiv;
+    const minWatts = BRAIN.minWattsPerBrainEquiv;
+    const brainWatts = BRAIN.humanBrainWatts;
+
+    // Max cumulative gain = starting watts / min watts
+    const maxCumulativeGain = startingWatts / minWatts;
+
+    let cumulativeGain = 1.0;
+    let asymptoteReached = false;
+    let firstAsymptoteIdx = -1;
+
+    const results = {};
+
+    timeBlocks.forEach((block, idx) => {
+      const years = BLOCK_YEARS[idx] || 1;
+      const annualGain = efficiencySummary[block.key]?.totalGain || 1;
+
+      if (!asymptoteReached) {
+        // Compound the annual gain over the block's duration
+        const blockGain = Math.pow(annualGain, years);
+        cumulativeGain *= blockGain;
+
+        // Check if we hit the asymptote
+        if (cumulativeGain >= maxCumulativeGain) {
+          cumulativeGain = maxCumulativeGain;
+          asymptoteReached = true;
+          firstAsymptoteIdx = idx;
+        }
+      }
+
+      const wattsPerBrainEquiv = Math.max(startingWatts / cumulativeGain, minWatts);
+      const brainEfficiencyPct = (brainWatts / wattsPerBrainEquiv) * 100;
+
+      results[block.key] = {
+        cumulativeGain,
+        wattsPerBrainEquiv,
+        brainEfficiencyPct,
+        atAsymptote: asymptoteReached
+      };
+    });
+
+    return {
+      perBlock: results,
+      firstAsymptoteIdx
+    };
+  }, [efficiencySummary, timeBlocks]);
+
+  /* ── Check if a row is past the asymptote (for greying out efficiency cells) ── */
+
+  const isRowPastAsymptote = useCallback((rowIdx) => {
+    const { firstAsymptoteIdx } = brainEquivalency;
+    if (firstAsymptoteIdx === -1) return false;
+    // Grey out rows AFTER the one that hit the asymptote
+    return rowIdx > firstAsymptoteIdx;
+  }, [brainEquivalency]);
+
   /* ── Render: table header row ── */
 
   const renderHeaderRow = (columns, label = 'Year') => (
@@ -365,88 +439,105 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     </tr>
   );
 
-  /* ── Render: editable table by ID ── */
+  /* ── Render: editable table by ID (with asymptote support) ── */
 
   const renderEditableTable = (tableId) => {
     const def = TABLE_DEFS[tableId];
     if (!def) return null;
     const { category, columns } = def;
+    const isEfficiencyTable = EFFICIENCY_TABLE_IDS.includes(tableId);
 
     return (
       <div className="assumptions-table-wrap">
         <table className="assumptions-table">
           <thead>{renderHeaderRow(columns)}</thead>
           <tbody>
-            {timeBlocks.map((block, rowIdx) => (
-              <tr key={block.key}>
-                <td className="assumptions-label-cell assumptions-year-cell">
-                  <div className="assumptions-row-title">{block.label}</div>
-                  <div className="assumptions-row-help">{block.years}</div>
-                </td>
-                {columns.map((col, colIdx) => {
-                  const selected = isCellInSelection(tableId, rowIdx, colIdx);
-                  const focused = isCellFocused(tableId, rowIdx, colIdx);
+            {timeBlocks.map((block, rowIdx) => {
+              const disabled = isEfficiencyTable && isRowPastAsymptote(rowIdx);
 
-                  let value = assumptions?.[category]?.[block.key];
-                  for (const key of col.path) value = value?.[key];
-                  const numValue = typeof value === 'object' ? value?.value : value;
-                  const confidence = typeof value === 'object' ? value?.confidence : null;
-                  const source = typeof value === 'object' ? value?.source : '';
+              return (
+                <tr key={block.key} className={disabled ? 'asymptote-disabled' : ''}>
+                  <td className="assumptions-label-cell assumptions-year-cell">
+                    <div className="assumptions-row-title">{block.label}</div>
+                    <div className="assumptions-row-help">{block.years}</div>
+                  </td>
+                  {columns.map((col, colIdx) => {
+                    const selected = !disabled && isCellInSelection(tableId, rowIdx, colIdx);
+                    const focused = !disabled && isCellFocused(tableId, rowIdx, colIdx);
 
-                  const cellClasses = [
-                    'assumptions-input-cell',
-                    selected && 'is-selected',
-                    focused && 'is-focused',
-                  ].filter(Boolean).join(' ');
+                    let value = assumptions?.[category]?.[block.key];
+                    for (const key of col.path) value = value?.[key];
+                    const numValue = typeof value === 'object' ? value?.value : value;
+                    const confidence = typeof value === 'object' ? value?.confidence : null;
+                    const source = typeof value === 'object' ? value?.source : '';
 
-                  return (
-                    <td
-                      key={col.label}
-                      className={cellClasses}
-                      onMouseDown={(e) => handleCellMouseDown(e, tableId, rowIdx, colIdx)}
-                      onMouseEnter={() => handleCellMouseEnter(tableId, rowIdx, colIdx)}
-                    >
-                      <div className="input-row">
-                        <input
-                          type="number"
-                          step="0.01"
-                          data-t={tableId}
-                          data-r={rowIdx}
-                          data-c={colIdx}
-                          value={
-                            numValue === null || numValue === undefined || Number.isNaN(numValue)
-                              ? ''
-                              : (numValue * 100).toFixed(0)
-                          }
-                          onFocus={(e) => e.target.select()}
-                          onKeyDown={handleKeyDown}
-                          onChange={(e) => {
-                            if (e.target.value === '') {
-                              onAssumptionChange(category, block.key, col.path, null);
-                              return;
-                            }
-                            const newValue = parseFloat(e.target.value) / 100;
-                            if (!Number.isNaN(newValue)) {
-                              onAssumptionChange(category, block.key, col.path, newValue);
-                            }
-                          }}
-                          style={{ width: '56px' }}
-                        />
-                        <span className="input-suffix">{col.suffix}</span>
-                        {confidence && (
-                          <span
-                            className={`confidence-${confidence}`}
-                            title={`Confidence: ${confidence}${source ? ` • ${source}` : ''}`}
-                          >
-                            {confidence === 'high' ? '●' : confidence === 'medium' ? '◐' : '○'}
+                    const cellClasses = [
+                      'assumptions-input-cell',
+                      selected && 'is-selected',
+                      focused && 'is-focused',
+                      disabled && 'is-disabled',
+                    ].filter(Boolean).join(' ');
+
+                    return (
+                      <td
+                        key={col.label}
+                        className={cellClasses}
+                        onMouseDown={disabled ? undefined : (e) => handleCellMouseDown(e, tableId, rowIdx, colIdx)}
+                        onMouseEnter={disabled ? undefined : () => handleCellMouseEnter(tableId, rowIdx, colIdx)}
+                        title={disabled ? 'Efficiency asymptote reached — no further gains possible' : undefined}
+                      >
+                        <div className="input-row">
+                          {disabled ? (
+                            <span className="assumptions-metric" style={{ opacity: 0.35, fontSize: '0.8125rem' }}>
+                              {numValue !== null && numValue !== undefined && !Number.isNaN(numValue)
+                                ? (numValue * 100).toFixed(0)
+                                : '—'}
+                            </span>
+                          ) : (
+                            <input
+                              type="number"
+                              step="0.01"
+                              data-t={tableId}
+                              data-r={rowIdx}
+                              data-c={colIdx}
+                              value={
+                                numValue === null || numValue === undefined || Number.isNaN(numValue)
+                                  ? ''
+                                  : (numValue * 100).toFixed(0)
+                              }
+                              onFocus={(e) => e.target.select()}
+                              onKeyDown={handleKeyDown}
+                              onChange={(e) => {
+                                if (e.target.value === '') {
+                                  onAssumptionChange(category, block.key, col.path, null);
+                                  return;
+                                }
+                                const newValue = parseFloat(e.target.value) / 100;
+                                if (!Number.isNaN(newValue)) {
+                                  onAssumptionChange(category, block.key, col.path, newValue);
+                                }
+                              }}
+                              style={{ width: '56px' }}
+                            />
+                          )}
+                          <span className="input-suffix" style={disabled ? { opacity: 0.35 } : undefined}>
+                            {col.suffix}
                           </span>
-                        )}
-                      </div>
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
+                          {!disabled && confidence && (
+                            <span
+                              className={`confidence-${confidence}`}
+                              title={`Confidence: ${confidence}${source ? ` • ${source}` : ''}`}
+                            >
+                              {confidence === 'high' ? '●' : confidence === 'medium' ? '◐' : '○'}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -475,6 +566,36 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               ))}
             </tr>
           ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  /* ── Render: brain power equivalency table ── */
+
+  const renderBrainEquivalencyTable = () => (
+    <div className="assumptions-table-wrap">
+      <table className="assumptions-table assumptions-table--metrics">
+        <thead>{renderHeaderRow(BRAIN_COLUMNS)}</thead>
+        <tbody>
+          {timeBlocks.map(block => {
+            const data = brainEquivalency.perBlock[block.key];
+            return (
+              <tr key={block.key}>
+                <td className="assumptions-label-cell assumptions-year-cell">
+                  <div className="assumptions-row-title">{block.label}</div>
+                  <div className="assumptions-row-help">{block.years}</div>
+                </td>
+                {BRAIN_COLUMNS.map(col => (
+                  <td key={col.label} className="assumptions-input-cell">
+                    <span className={`assumptions-metric${col.valueKey === 'atAsymptote' && data[col.valueKey] ? ' asymptote-label' : ''}`}>
+                      {col.format(data[col.valueKey])}
+                    </span>
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -523,8 +644,6 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
             <h4 className="section-title">Continual Learning</h4>
             {renderEditableTable('cont-learning')}
           </div>
-
-          {/* REMOVED: Inference Intensity Section */}
         </div>
 
         {/* ── Efficiency Improvements ── */}
@@ -553,10 +672,23 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
             <h4 className="section-title">Implied Token Efficiency</h4>
             <p className="section-description">
               Derived from the combined model + systems + hardware improvements. OOM/year is the
-              log10 efficiency gain (e.g., 0.3 = 2×/year). Total OOM/year mirrors the
+              log10 efficiency gain (e.g., 0.3 = 2x/year). Total OOM/year mirrors the
               combined efficiency improvement rate used in industry reporting.
             </p>
             {renderMetricsTable()}
+          </div>
+
+          <div className="section">
+            <h4 className="section-title">Brain Power Equivalency</h4>
+            <p className="section-description">
+              Compares AI compute efficiency to the human brain ({BRAIN.humanBrainWatts}W).
+              Starting at {(BRAIN.startingWattsPerBrainEquiv / 1000).toFixed(0)}kW per brain-equivalent
+              of cognitive work, efficiency improvements compound over time.
+              Asymptotes at {BRAIN.maxEfficiencyVsBrain}x brain efficiency
+              ({BRAIN.minWattsPerBrainEquiv}W per brain-equiv). Once the
+              asymptote is reached, further efficiency cells are locked.
+            </p>
+            {renderBrainEquivalencyTable()}
           </div>
         </div>
       </div>
@@ -569,25 +701,25 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
           <div>
             <h4>Inference Accelerator-Hours</h4>
             <code>
-              InferAH = (Tokens × ComputePerToken × M<sub>t</sub>) / (Throughput × S<sub>t</sub> × H<sub>t</sub>)
+              InferAH = (Tokens x ComputePerToken x M<sub>t</sub>) / (Throughput x S<sub>t</sub> x H<sub>t</sub>)
             </code>
           </div>
           <div>
             <h4>Stacked Yield (HBM)</h4>
             <code>
-              Y(t) = Y<sub>target</sub> - (Y<sub>target</sub> - Y<sub>initial</sub>) × 2<sup>-t/HL</sup>
+              Y(t) = Y<sub>target</sub> - (Y<sub>target</sub> - Y<sub>initial</sub>) x 2<sup>-t/HL</sup>
             </code>
           </div>
           <div>
-            <h4>Tightness Ratio</h4>
+            <h4>Brain-Equiv Watts</h4>
             <code>
-              Tightness = (Demand + Backlog) / (Supply + Inventory + ε)
+              W<sub>brain</sub> = max(W<sub>start</sub> / CumulativeEff, W<sub>min</sub>)
             </code>
           </div>
           <div>
             <h4>Price Index</h4>
             <code>
-              P = 1 + a × (Tightness - 1)<sup>b</sup> when Tight {'>'} 1
+              P = 1 + a x (Tightness - 1)<sup>b</sup> when Tight {'>'} 1
             </code>
           </div>
         </div>

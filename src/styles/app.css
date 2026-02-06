@@ -484,6 +484,25 @@
   color: var(--text-primary);
 }
 
+/* Asymptote disabled state for efficiency cells */
+.assumptions-input-cell.is-disabled {
+  background: var(--bg-tertiary);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.asymptote-disabled .assumptions-label-cell {
+  opacity: 0.5;
+}
+
+.asymptote-label {
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .section-description {
   font-size: 0.8125rem;
   color: var(--text-secondary);

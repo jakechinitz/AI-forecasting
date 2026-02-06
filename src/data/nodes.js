@@ -1051,7 +1051,7 @@ const NODES_BASE = [
     description: 'Operational data center power capacity',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.001,
+    inputIntensity: 0.0013,  // kwPerGpu(1.0) * pue(1.3) / 1000 = MW per GPU
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
     startingCapacity: 1000,
@@ -1099,7 +1099,7 @@ const NODES_BASE = [
     description: 'Utility grid connection approvals',
 
     demandDriverType: 'derived',
-    inputIntensity: 1,
+    inputIntensity: 0.0013,  // MW per GPU (same as datacenter_mw)
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 2500,
