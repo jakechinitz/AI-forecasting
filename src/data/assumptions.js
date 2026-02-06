@@ -85,6 +85,15 @@ export const GLOBAL_PARAMS = {
   // Inventory display
   inventoryDisplay: {
     forwardMonths: 3
+  },
+
+  // Brain power equivalency parameters
+  brainEquivalency: {
+    humanBrainWatts: 30,              // Human brain power consumption in watts
+    startingWattsPerBrainEquiv: 10000, // Starting AI watts per brain-equivalent of cognitive work
+    maxEfficiencyVsBrain: 5,          // Asymptote: AI can be at most 5x more efficient than the brain
+    // At 5x efficiency, AI does brain-equivalent work at 30W / 5 = 6W
+    minWattsPerBrainEquiv: 6          // = humanBrainWatts / maxEfficiencyVsBrain
   }
 };
 
@@ -478,9 +487,9 @@ export const TRANSLATION_INTENSITIES = {
      *   agentic @15 → ~39M tok/GPU-month
      */
     effectiveTokensPerSecPerGpu: {
-      consumer: { value: 40, confidence: 'medium', source: 'Blended model mix (frontier + mid-size), moderate latency', historicalRange: [20, 80] },
-      enterprise: { value: 25, confidence: 'medium', source: 'Frontier models, strict enterprise latency SLAs', historicalRange: [10, 50] },
-      agentic: { value: 15, confidence: 'low', source: 'Multi-step reasoning, long context, tool use', historicalRange: [5, 40] }
+      consumer: { value: 30, confidence: 'medium', source: 'Unified throughput — all inference compute costs the same per token', historicalRange: [20, 80] },
+      enterprise: { value: 30, confidence: 'medium', source: 'Unified throughput — segment differences captured in growth rates', historicalRange: [10, 50] },
+      agentic: { value: 30, confidence: 'medium', source: 'Unified throughput — extra agentic compute rolled into demand growth', historicalRange: [5, 40] }
     },
     /**
      * flopsPerToken: DEPRECATED for inference GPU demand calculation.

@@ -30,15 +30,17 @@ import {
 // ============================================
 
 const PHYSICS_DEFAULTS = {
-  // Inference: effective tokens/sec per GPU by workload segment.
-  // These reflect REAL-WORLD serving throughput (memory/bandwidth/KV-cache/latency-constrained),
+  // Inference: effective tokens/sec per GPU (unified across all segments).
+  // All inference compute costs the same per token. Any difference in agentic vs consumer
+  // compute intensity is captured in the demand growth rate assumptions, not throughput.
+  // Reflects REAL-WORLD serving throughput (memory/bandwidth/KV-cache/latency-constrained),
   // NOT theoretical peak FLOPs. Already accounts for utilization, batching overhead, and latency SLAs.
   //   Frontier-ish models, latency-constrained: ~10-50 tok/s/GPU
   //   Smaller models / high-batch throughput:    ~50-300 tok/s/GPU
   effectiveTokensPerSecPerGpu: {
-    consumer: 40,     // blended model mix, moderate latency requirements
-    enterprise: 25,   // frontier models, strict enterprise latency SLAs
-    agentic: 15       // multi-step reasoning, long context, tool use
+    consumer: 30,     // unified throughput across all segments
+    enterprise: 30,   // unified throughput across all segments
+    agentic: 30       // unified throughput (extra compute rolled into growth assumptions)
   },
   // Training: accelerator-hours model (training IS compute-limited, FLOPs matter)
   utilizationTraining: 0.50,
