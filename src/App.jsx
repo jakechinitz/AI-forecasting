@@ -143,6 +143,7 @@ function App() {
             onAssumptionChange={handleAssumptionChange}
             onRunSimulation={runSim}
             isSimulating={isSimulating}
+            results={simulationResults}
           />
         );
 
