@@ -101,7 +101,12 @@ const SUPPLY_CATEGORY_MAP = {
   power_generation: 'power',
   backup_power: 'power',
   dc_construction: 'power',
-  dc_ops_staff: 'power'
+  dc_ops_staff: 'power',
+  cpu_server: 'foundry',
+  dpu_nic: 'foundry',
+  switch_asics: 'foundry',
+  optical_transceivers: 'datacenter',
+  infiniband_cables: 'datacenter'
 };
 
 const EXPECTED_UNITS = {

@@ -7,6 +7,7 @@ const BRAIN = GLOBAL_PARAMS.brainEquivalency;
 const KW_PER_GPU = (TRANSLATION_INTENSITIES?.serverToInfra?.kwPerGpu?.value ?? 1.0);
 const PUE = (TRANSLATION_INTENSITIES?.serverToInfra?.pue?.value ?? 1.3);
 const WATTS_PER_GPU = KW_PER_GPU * PUE * 1000; // Convert kW to watts, apply PUE
+const WORLD_POPULATION = 8.2e9; // ~8.2 billion humans (2026)
 
 /* Block durations in years (matches ASSUMPTION_SEGMENTS order) */
 const BLOCK_YEARS = [1, 1, 1, 1, 1, 5, 5, 5];
@@ -84,6 +85,8 @@ function DemandEngineTab({ results, assumptions }) {
       const wattsPerBrainEquiv = computeBrainEquivAtMonth(month, assumptions?.efficiency);
       const brainEquivalents = totalPowerWatts / wattsPerBrainEquiv;
 
+      const aisPerHuman = brainEquivalents / WORLD_POPULATION;
+
       data.push({
         month,
         label: formatMonth(month),
@@ -97,7 +100,8 @@ function DemandEngineTab({ results, assumptions }) {
         totalInstalled,
         totalPowerGW,
         brainEquivalents,
-        wattsPerBrainEquiv
+        wattsPerBrainEquiv,
+        aisPerHuman
       });
     }
     return data;
@@ -119,7 +123,9 @@ function DemandEngineTab({ results, assumptions }) {
       currentBrainEquiv: current.brainEquivalents,
       future5yBrainEquiv: future5y.brainEquivalents,
       currentPowerGW: current.totalPowerGW,
-      future5yPowerGW: future5y.totalPowerGW
+      future5yPowerGW: future5y.totalPowerGW,
+      currentAisPerHuman: current.aisPerHuman,
+      future5yAisPerHuman: future5y.aisPerHuman
     };
   }, [chartData]);
 
@@ -234,6 +240,28 @@ function DemandEngineTab({ results, assumptions }) {
               </div>
             </div>
           </div>
+          <div className="grid grid-4" style={{ marginTop: 'var(--space-md)' }}>
+            <div className="card">
+              <div className="metric">
+                <span className="metric-value">{summaryMetrics.currentAisPerHuman?.toFixed(4)}</span>
+                <span className="metric-label">Current AIs per Human</span>
+              </div>
+            </div>
+            <div className="card">
+              <div className="metric">
+                <span className="metric-value">{summaryMetrics.future5yAisPerHuman?.toFixed(2)}</span>
+                <span className="metric-label">5-Year AIs per Human</span>
+              </div>
+            </div>
+            <div className="card" style={{ gridColumn: 'span 2' }}>
+              <div className="metric">
+                <span className="metric-value" style={{ fontSize: '0.875rem' }}>
+                  1 AI per human = {formatNumber(WORLD_POPULATION)} brain-equivalents
+                </span>
+                <span className="metric-label">World Population Baseline (~8.2B)</span>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -332,6 +360,36 @@ function DemandEngineTab({ results, assumptions }) {
           </ResponsiveContainer>
         </div>
 
+        {/* AIs per Human */}
+        <div className="chart-container">
+          <div className="chart-header">
+            <h3 className="chart-title">AIs per Human (brain-equiv / 8.2B)</h3>
+          </div>
+          <ResponsiveContainer width="100%" height={300}>
+            <AreaChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--bg-tertiary)" />
+              <XAxis
+                dataKey="label"
+                tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                interval={7}
+              />
+              <YAxis
+                tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                tickFormatter={(v) => v < 0.01 ? v.toExponential(1) : v.toFixed(2)}
+              />
+              <Tooltip content={<CustomTooltip />} />
+              <Area
+                type="monotone"
+                dataKey="aisPerHuman"
+                stroke="#ef4444"
+                fill="#ef4444"
+                fillOpacity={0.3}
+                name="AIs per Human"
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+
         {/* GPU Demand */}
         <div className="chart-container">
           <div className="chart-header">
@@ -419,6 +477,17 @@ function DemandEngineTab({ results, assumptions }) {
               marginTop: 'var(--space-xs)'
             }}>
               BrainEquiv = (InstalledGPUs x {WATTS_PER_GPU.toFixed(0)}W) / WattsPerBrainEquiv(t)
+            </div>
+          </div>
+          <div style={{ marginBottom: 'var(--space-md)' }}>
+            <strong>AIs per Human:</strong>
+            <div style={{
+              padding: 'var(--space-sm)',
+              background: 'var(--bg-tertiary)',
+              borderRadius: 'var(--radius-sm)',
+              marginTop: 'var(--space-xs)'
+            }}>
+              AIsPerHuman = BrainEquiv / {formatNumber(WORLD_POPULATION)} (world pop.)
             </div>
           </div>
           <div>
