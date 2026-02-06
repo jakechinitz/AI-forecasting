@@ -1,10 +1,18 @@
 import React, { useState, useMemo } from 'react';
 import { NODE_GROUPS } from '../data/nodes.js';
 
-function NodeLibraryTab({ nodes, groups, selectedNode, onSelectNode }) {
+function NodeLibraryTab({ nodes, groups: groupsProp, selectedNode, onSelectNode }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeGroup, setActiveGroup] = useState(null);
   const [expandedNode, setExpandedNode] = useState(null);
+
+  // Convert array-format NODE_GROUPS to object keyed by group id
+  const groups = useMemo(() => {
+    if (Array.isArray(groupsProp)) {
+      return groupsProp.reduce((acc, g) => { acc[g.id] = g; return acc; }, {});
+    }
+    return groupsProp;
+  }, [groupsProp]);
 
   const filteredNodes = useMemo(() => {
     return nodes.filter(node => {

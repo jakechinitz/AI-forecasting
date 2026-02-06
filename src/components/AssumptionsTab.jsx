@@ -1,8 +1,13 @@
 import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
-import { ASSUMPTION_SEGMENTS, GLOBAL_PARAMS } from '../data/assumptions.js';
+import { ASSUMPTION_SEGMENTS, GLOBAL_PARAMS, TRANSLATION_INTENSITIES } from '../data/assumptions.js';
+import { formatNumber } from '../engine/calculations.js';
 
 /* ── Brain equivalency constants ── */
 const BRAIN = GLOBAL_PARAMS.brainEquivalency;
+const KW_PER_GPU = (TRANSLATION_INTENSITIES?.serverToInfra?.kwPerGpu?.value ?? 1.0);
+const PUE = (TRANSLATION_INTENSITIES?.serverToInfra?.pue?.value ?? 1.3);
+const WATTS_PER_GPU = KW_PER_GPU * PUE * 1000;
+const WORLD_POPULATION = 8.2e9;
 
 /* ── Block durations in years ── */
 const BLOCK_YEARS = [1, 1, 1, 1, 1, 5, 5, 5];
@@ -71,11 +76,11 @@ const METRICS_COLUMNS = [
 const BRAIN_COLUMNS = [
   { valueKey: 'cumulativeGain', label: 'Cumulative Eff. (x)', format: v => v < 1000 ? v.toFixed(1) + 'x' : (v / 1000).toFixed(1) + 'Kx' },
   { valueKey: 'wattsPerBrainEquiv', label: 'W per Brain-Equiv', format: v => v >= 1000 ? (v / 1000).toFixed(1) + ' kW' : v.toFixed(0) + ' W' },
-  { valueKey: 'brainEfficiencyPct', label: '% of Brain Eff.', format: v => v < 1 ? v.toFixed(2) + '%' : v < 100 ? v.toFixed(1) + '%' : v.toFixed(0) + '%' },
-  { valueKey: 'atAsymptote', label: 'Status', format: v => v ? 'AT LIMIT' : '' }
+  { valueKey: 'brainEfficiencyPct', label: '% of Brain Eff.', format: v => v < 1 ? v.toFixed(2) + '%' : v < 100 ? v.toFixed(1) + '%' : v.toFixed(0) + '%', help: `Human brain = ${GLOBAL_PARAMS.brainEquivalency.humanBrainWatts}W` },
+  { valueKey: 'atAsymptote', label: 'Limit?', format: v => v ? 'AT LIMIT' : '\u2014' }
 ];
 
-function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSimulating }) {
+function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSimulating, results }) {
   const timeBlocks = ASSUMPTION_SEGMENTS;
   const numRows = timeBlocks.length;
 
@@ -418,6 +423,39 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     };
   }, [efficiencySummary, timeBlocks]);
 
+  /* ── Implied human-equivalent AIs per time block (from simulation results) ── */
+
+  const impliedAIs = useMemo(() => {
+    if (!results?.months?.length) return null;
+
+    // End month for each block (cumulative)
+    const blockEndMonths = [];
+    let cum = 0;
+    BLOCK_YEARS.forEach(y => { cum += y * 12; blockEndMonths.push(cum); });
+
+    return timeBlocks.map((block, idx) => {
+      const endMonth = Math.min(blockEndMonths[idx], results.months.length - 1);
+      const monthIdx = endMonth;
+
+      const dcInstalled = results.nodes?.gpu_datacenter?.installedBase?.[monthIdx] || 0;
+      const infInstalled = results.nodes?.gpu_inference?.installedBase?.[monthIdx] || 0;
+      const totalInstalled = dcInstalled + infInstalled;
+      const totalPowerWatts = totalInstalled * WATTS_PER_GPU;
+
+      const wattsPerBrainEquiv = brainEquivalency.perBlock[block.key]?.wattsPerBrainEquiv || BRAIN.startingWattsPerBrainEquiv;
+      const brainEquivs = totalPowerWatts / wattsPerBrainEquiv;
+      const aisPerHuman = brainEquivs / WORLD_POPULATION;
+
+      return {
+        key: block.key,
+        totalInstalledGPUs: totalInstalled,
+        totalPowerGW: totalPowerWatts / 1e9,
+        brainEquivs,
+        aisPerHuman
+      };
+    });
+  }, [results, brainEquivalency, timeBlocks]);
+
   /* ── Check if a row is past the asymptote (for greying out efficiency cells) ── */
 
   const isRowPastAsymptote = useCallback((rowIdx) => {
@@ -646,6 +684,71 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
             <h4 className="section-title">Continual Learning</h4>
             {renderEditableTable('cont-learning')}
           </div>
+
+          {/* ── Implied Human-Equivalent AIs ── */}
+          {impliedAIs && (
+            <div className="section">
+              <h4 className="section-title">Implied Human-Equivalent AIs</h4>
+              <p className="section-description">
+                Based on projected installed GPU base, power draw, and efficiency improvements.
+                Brain equivalents = total AI watts / watts-per-brain-equiv.
+                Divided by world population (~8.2B) for AIs per human.
+              </p>
+              <div className="assumptions-table-wrap">
+                <table className="assumptions-table assumptions-table--metrics">
+                  <thead>
+                    <tr>
+                      <th className="assumptions-header-cell assumptions-header-label">Year</th>
+                      <th className="assumptions-header-cell">
+                        <div className="assumptions-col-title">Installed GPUs</div>
+                      </th>
+                      <th className="assumptions-header-cell">
+                        <div className="assumptions-col-title">Power (GW)</div>
+                      </th>
+                      <th className="assumptions-header-cell">
+                        <div className="assumptions-col-title">Brain Equivalents</div>
+                      </th>
+                      <th className="assumptions-header-cell">
+                        <div className="assumptions-col-title">AIs per Human</div>
+                        <div className="assumptions-col-years">brain-equiv / 8.2B</div>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {impliedAIs.map((row, idx) => (
+                      <tr key={row.key}>
+                        <td className="assumptions-label-cell assumptions-year-cell">
+                          <div className="assumptions-row-title">{timeBlocks[idx].label}</div>
+                          <div className="assumptions-row-help">{timeBlocks[idx].years}</div>
+                        </td>
+                        <td className="assumptions-input-cell">
+                          <span className="assumptions-metric">{formatNumber(row.totalInstalledGPUs)}</span>
+                        </td>
+                        <td className="assumptions-input-cell">
+                          <span className="assumptions-metric">{row.totalPowerGW.toFixed(1)}</span>
+                        </td>
+                        <td className="assumptions-input-cell">
+                          <span className="assumptions-metric">{formatNumber(row.brainEquivs)}</span>
+                        </td>
+                        <td className="assumptions-input-cell">
+                          <span className="assumptions-metric" style={{
+                            fontWeight: 600,
+                            color: row.aisPerHuman >= 1 ? 'var(--accent-danger)' : row.aisPerHuman >= 0.1 ? 'var(--accent-warning)' : 'var(--text-primary)'
+                          }}>
+                            {row.aisPerHuman < 0.01
+                              ? row.aisPerHuman.toExponential(2)
+                              : row.aisPerHuman < 1
+                                ? row.aisPerHuman.toFixed(3)
+                                : row.aisPerHuman.toFixed(1)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── Efficiency Improvements ── */}
