@@ -59,11 +59,11 @@ const EFFICIENCY_TABLE_IDS = ['model-eff', 'sys-eff', 'hw-eff'];
 
 /* Metrics table columns (read-only derived values) */
 const METRICS_COLUMNS = [
-  { valueKey: 'inferenceGain', label: 'Inference eff. (x/yr)', format: v => v.toFixed(2) },
-  { valueKey: 'inferenceOom', label: 'Inference OOM/yr', format: v => v.toFixed(2) },
-  { valueKey: 'trainingGain', label: 'Training eff. (x/yr)', format: v => v.toFixed(2) },
-  { valueKey: 'trainingOom', label: 'Training OOM/yr', format: v => v.toFixed(2) },
-  { valueKey: 'totalGain', label: 'Total eff. (x/yr)', format: v => v.toFixed(2) },
+  { valueKey: 'inferenceGain', label: 'Inference eff. (x/yr)', format: v => v.toFixed(2) + 'x' },
+  { valueKey: 'inferenceCostReduction', label: 'Inf. cost reduction', format: v => v.toFixed(0) + '%', help: 'Google achieved ~80% in 2024' },
+  { valueKey: 'trainingGain', label: 'Training eff. (x/yr)', format: v => v.toFixed(2) + 'x' },
+  { valueKey: 'trainingCostReduction', label: 'Train. cost reduction', format: v => v.toFixed(0) + '%' },
+  { valueKey: 'totalGain', label: 'Total eff. (x/yr)', format: v => v.toFixed(2) + 'x' },
   { valueKey: 'totalOom', label: 'Total OOM/yr', format: v => v.toFixed(2) }
 ];
 
@@ -356,7 +356,9 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
         totalGain,
         inferenceOom: Math.log10(inferenceGain),
         trainingOom: Math.log10(trainingGain),
-        totalOom: Math.log10(totalGain)
+        totalOom: Math.log10(totalGain),
+        inferenceCostReduction: (1 - 1 / inferenceGain) * 100,
+        trainingCostReduction: (1 - 1 / trainingGain) * 100
       };
     };
 
