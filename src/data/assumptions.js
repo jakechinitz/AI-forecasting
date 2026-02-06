@@ -197,24 +197,27 @@ const applyBlockLabel = (block, segmentKey, includeAsOfDate) => {
  * should never see missing workloadBase.
  */
 const WORKLOAD_BASE_DEFAULT = {
+  // Calibrated to Feb 2026 installed base (~10M AI accelerators, ~70% inference utilization)
+  // Google alone: 480T tokens/month (Apr 2025); total industry: ~1,500T+ mid-2025
+  // At 30 tok/s/GPU blended throughput, 500T tokens needs ~6.4M GPU-equivalents
   inferenceTokensPerMonth: {
-    consumer: 5e12,
-    enterprise: 6e12,
-    agentic: 1e12
+    consumer: 250e12,     // 250T — ChatGPT 810M WAU, Gemini 750M MAU, Claude, etc.
+    enterprise: 200e12,   // 200T — 71% of orgs using GenAI, copilots, RAG
+    agentic: 50e12        // 50T — emerging but doubling every 4 months
   },
   trainingRunsPerMonth: {
-    frontier: 2,
-    midtier: 150
+    frontier: 3,          // more frontier labs (OpenAI, Anthropic, Google, Meta, xAI, Mistral)
+    midtier: 300           // explosion of enterprise fine-tuning
   },
   // Assumption is accelerator-hours per run (not tokens)
   trainingComputePerRun: {
-    frontier: 50e6,
-    midtier: 200000
+    frontier: 50e6,       // ~70K GPUs for 1 month (100K GPU cluster at 70% utilization)
+    midtier: 200000       // ~280 GPUs for 1 month
   },
   continualLearningBase: {
-    accelHoursPerMonth: 150000,
-    dataTB: 1500,
-    networkGbps: 300
+    accelHoursPerMonth: 300000,   // doubled from prior — more continual training
+    dataTB: 3000,
+    networkGbps: 500
   }
 };
 
@@ -224,15 +227,17 @@ const DEMAND_TEMPLATE_YEAR1 = {
 
   workloadBase: cloneBlock(WORKLOAD_BASE_DEFAULT),
 
+  // Growth rates as annual fractions: 1.00 = 100% = 2x, 4.00 = 400% = 5x
+  // Google: 49.5x token growth in 12mo; OpenAI: 65x in 20mo; ChatGPT: 200M→810M WAU
   inferenceGrowth: {
-    consumer: { value: 3.00, confidence: 'medium', source: 'Usage growth + consumer adoption', historicalRange: [0.25, 1.50] },
-    enterprise: { value: 3.00, confidence: 'medium', source: 'Enterprise AI adoption + cloud earnings', historicalRange: [0.35, 1.50] },
-    agentic: { value: 3.00, confidence: 'low', source: 'Emerging category, rapid adoption from small base', historicalRange: [0.50, 3.00] }
+    consumer: { value: 4.00, confidence: 'medium', source: 'ChatGPT 810M WAU, Gemini 750M MAU; usage/user growing 2-3x/yr', historicalRange: [2.00, 8.00] },
+    enterprise: { value: 5.00, confidence: 'medium', source: 'Enterprise adoption 33%→71%; OpenAI enterprise reasoning tokens 320x YoY', historicalRange: [2.00, 10.00] },
+    agentic: { value: 9.00, confidence: 'low', source: '1B AI agents projected by end 2026; deployments doubling every 4 months', historicalRange: [4.00, 15.00] }
   },
 
   trainingGrowth: {
-    frontier: { value: 2.00, confidence: 'medium', source: 'Supply-constrained demand unlocking', historicalRange: [0.10, 1.00] },
-    midtier: { value: 2.00, confidence: 'low', source: 'Fine-tuning proliferation', historicalRange: [0.30, 1.50] }
+    frontier: { value: 1.50, confidence: 'medium', source: 'More frontier labs + bigger runs; supply-constrained', historicalRange: [0.50, 3.00] },
+    midtier: { value: 3.00, confidence: 'low', source: 'Fine-tuning explosion; 31% reaching production (2x 2024 rate)', historicalRange: [1.00, 5.00] }
   },
 
   contextLength: {
@@ -276,67 +281,67 @@ const buildDemandBlocks = () => {
   });
 
   // Targeted tweaks (only the values that should change by period)
-  // Year 2: Still high growth but decelerating
-  blocks.year2.inferenceGrowth.consumer.value = 1.00;
-  blocks.year2.inferenceGrowth.enterprise.value = 2.00;
-  blocks.year2.inferenceGrowth.agentic.value = 3.00;
-  blocks.year2.trainingGrowth.frontier.value = 1.00;
-  blocks.year2.trainingGrowth.midtier.value = 1.00;
+  // Year 2: Decelerating but still very strong
+  blocks.year2.inferenceGrowth.consumer.value = 2.00;   // 3x
+  blocks.year2.inferenceGrowth.enterprise.value = 3.00;  // 4x
+  blocks.year2.inferenceGrowth.agentic.value = 5.00;     // 6x
+  blocks.year2.trainingGrowth.frontier.value = 0.80;
+  blocks.year2.trainingGrowth.midtier.value = 2.00;
 
-  // Year 3: Growth moderating as market matures
-  blocks.year3.inferenceGrowth.consumer.value = 0.80;
-  blocks.year3.inferenceGrowth.enterprise.value = 1.00;
-  blocks.year3.inferenceGrowth.agentic.value = 1.50;
-  blocks.year3.trainingGrowth.frontier.value = 0.50;
-  blocks.year3.trainingGrowth.midtier.value = 0.50;
+  // Year 3: Growth moderating, market maturing
+  blocks.year3.inferenceGrowth.consumer.value = 1.00;    // 2x
+  blocks.year3.inferenceGrowth.enterprise.value = 1.50;  // 2.5x
+  blocks.year3.inferenceGrowth.agentic.value = 3.00;     // 4x
+  blocks.year3.trainingGrowth.frontier.value = 0.40;
+  blocks.year3.trainingGrowth.midtier.value = 1.00;
 
   // Year 4: Supply catching up, growth normalizing
-  blocks.year4.inferenceGrowth.consumer.value = 0.50;
-  blocks.year4.inferenceGrowth.enterprise.value = 0.80;
-  blocks.year4.inferenceGrowth.agentic.value = 1.00;
-  blocks.year4.trainingGrowth.frontier.value = 0.20;
-  blocks.year4.trainingGrowth.midtier.value = 0.30;
+  blocks.year4.inferenceGrowth.consumer.value = 0.60;    // 1.6x
+  blocks.year4.inferenceGrowth.enterprise.value = 0.80;  // 1.8x
+  blocks.year4.inferenceGrowth.agentic.value = 1.50;     // 2.5x
+  blocks.year4.trainingGrowth.frontier.value = 0.25;
+  blocks.year4.trainingGrowth.midtier.value = 0.50;
 
   // Year 5: Maturing market
-  blocks.year5.inferenceGrowth.consumer.value = 0.50;
-  blocks.year5.inferenceGrowth.enterprise.value = 0.55;
-  blocks.year5.inferenceGrowth.agentic.value = 1.00;
+  blocks.year5.inferenceGrowth.consumer.value = 0.40;    // 1.4x
+  blocks.year5.inferenceGrowth.enterprise.value = 0.55;  // 1.55x
+  blocks.year5.inferenceGrowth.agentic.value = 1.00;     // 2x
   blocks.year5.trainingGrowth.frontier.value = 0.15;
-  blocks.year5.trainingGrowth.midtier.value = 0.20;
+  blocks.year5.trainingGrowth.midtier.value = 0.30;
 
   // Years 6-10
-  blocks.years6_10.inferenceGrowth.consumer.value = 0.25;
-  blocks.years6_10.inferenceGrowth.enterprise.value = 0.35;
-  blocks.years6_10.inferenceGrowth.agentic.value = 0.60;
-  blocks.years6_10.trainingGrowth.frontier.value = 0.15;
-  blocks.years6_10.trainingGrowth.midtier.value = 0.30;
-  blocks.years6_10.contextLength.averageTokens = 16000;
-  blocks.years6_10.contextLength.growthRate = 0.20;
-  blocks.years6_10.intensityGrowth.value = 0.20;
+  blocks.years6_10.inferenceGrowth.consumer.value = 0.20;
+  blocks.years6_10.inferenceGrowth.enterprise.value = 0.30;
+  blocks.years6_10.inferenceGrowth.agentic.value = 0.50;
+  blocks.years6_10.trainingGrowth.frontier.value = 0.10;
+  blocks.years6_10.trainingGrowth.midtier.value = 0.20;
+  blocks.years6_10.contextLength.averageTokens = 32000;
+  blocks.years6_10.contextLength.growthRate = 0.25;
+  blocks.years6_10.intensityGrowth.value = 0.25;
   blocks.years6_10.continualLearning.computeGrowth.value = 0.40;
   blocks.years6_10.continualLearning.dataStorageGrowth.value = 0.35;
   blocks.years6_10.continualLearning.networkBandwidthGrowth.value = 0.30;
 
   // Years 11-15
-  blocks.years11_15.inferenceGrowth.consumer.value = 0.20;
-  blocks.years11_15.inferenceGrowth.enterprise.value = 0.25;
-  blocks.years11_15.inferenceGrowth.agentic.value = 0.30;
-  blocks.years11_15.trainingGrowth.frontier.value = 0.10;
-  blocks.years11_15.trainingGrowth.midtier.value = 0.20;
-  blocks.years11_15.contextLength.averageTokens = 32000;
-  blocks.years11_15.contextLength.growthRate = 0.10;
+  blocks.years11_15.inferenceGrowth.consumer.value = 0.12;
+  blocks.years11_15.inferenceGrowth.enterprise.value = 0.18;
+  blocks.years11_15.inferenceGrowth.agentic.value = 0.25;
+  blocks.years11_15.trainingGrowth.frontier.value = 0.08;
+  blocks.years11_15.trainingGrowth.midtier.value = 0.12;
+  blocks.years11_15.contextLength.averageTokens = 64000;
+  blocks.years11_15.contextLength.growthRate = 0.12;
   blocks.years11_15.intensityGrowth.value = 0.15;
   blocks.years11_15.continualLearning.computeGrowth.value = 0.25;
   blocks.years11_15.continualLearning.dataStorageGrowth.value = 0.25;
   blocks.years11_15.continualLearning.networkBandwidthGrowth.value = 0.20;
 
   // Years 16-20
-  blocks.years16_20.inferenceGrowth.consumer.value = 0.10;
-  blocks.years16_20.inferenceGrowth.enterprise.value = 0.15;
-  blocks.years16_20.inferenceGrowth.agentic.value = 0.20;
-  blocks.years16_20.trainingGrowth.frontier.value = 0.08;
-  blocks.years16_20.trainingGrowth.midtier.value = 0.15;
-  blocks.years16_20.contextLength.averageTokens = 64000;
+  blocks.years16_20.inferenceGrowth.consumer.value = 0.08;
+  blocks.years16_20.inferenceGrowth.enterprise.value = 0.10;
+  blocks.years16_20.inferenceGrowth.agentic.value = 0.15;
+  blocks.years16_20.trainingGrowth.frontier.value = 0.05;
+  blocks.years16_20.trainingGrowth.midtier.value = 0.08;
+  blocks.years16_20.contextLength.averageTokens = 128000;
   blocks.years16_20.contextLength.growthRate = 0.05;
   blocks.years16_20.intensityGrowth.value = 0.10;
   blocks.years16_20.continualLearning.computeGrowth.value = 0.15;
@@ -352,22 +357,29 @@ export const DEMAND_ASSUMPTIONS_BASE = buildDemandBlocks();
 // EFFICIENCY ASSUMPTIONS
 // ============================================
 
+// Efficiency calibration (Year 1 targets ~4.2x = 76% inference cost reduction):
+//   Google achieved ~80% (5x) in 2024; Stanford: 280x cost drop over 18mo
+//   Epoch AI: compute needs halving every 8 months for LLMs
+//   Software: 33x energy reduction per prompt in 12 months
+//   Hardware: H100→B200 ~4x inference perf in ~2 years
+// Formula: inferenceGain = 1 / ((1-m) / ((1+s) * (1+h)))
+// Year 1: 1/(0.45/(1.35*1.40)) = 1/0.238 = 4.20x ✓
 const EFFICIENCY_TEMPLATE_YEAR1 = {
   label: SEGMENT_LABELS.year1,
 
   modelEfficiency: {
-    m_inference: { value: 0.18, confidence: 'medium', source: 'Deployed model efficiency (rollout lag)', historicalRange: [0.10, 0.30] },
-    m_training: { value: 0.10, confidence: 'low', source: 'Optimizer + architecture improvements', historicalRange: [0.05, 0.20] }
+    m_inference: { value: 0.55, confidence: 'medium', source: 'Distillation, MoE, speculative decoding; Epoch AI: halving every 8mo', historicalRange: [0.30, 0.65] },
+    m_training: { value: 0.35, confidence: 'low', source: 'Optimizer + architecture; ARK: training cost declining 60%/yr', historicalRange: [0.15, 0.45] }
   },
 
   systemsEfficiency: {
-    s_inference: { value: 0.10, confidence: 'medium', source: 'Batching/scheduling/compiler gains', historicalRange: [0.06, 0.18] },
-    s_training: { value: 0.08, confidence: 'medium', source: 'Distributed training optimizations', historicalRange: [0.05, 0.15] }
+    s_inference: { value: 0.35, confidence: 'medium', source: 'vLLM/TRT-LLM 2-3x; speculative decoding; Google 33x energy/prompt', historicalRange: [0.15, 0.50] },
+    s_training: { value: 0.20, confidence: 'medium', source: 'Distributed training, better data pipelines, compiler optimizations', historicalRange: [0.10, 0.30] }
   },
 
   hardwareEfficiency: {
-    h: { value: 0.15, confidence: 'high', source: 'Blended fleet gen-over-gen', historicalRange: [0.10, 0.25] },
-    h_memory: { value: 0.12, confidence: 'medium', source: 'HBM generation improvements', historicalRange: [0.08, 0.20] }
+    h: { value: 0.40, confidence: 'high', source: 'H200/B100/B200 deployment; ~2-4x gen-over-gen for inference', historicalRange: [0.20, 0.50] },
+    h_memory: { value: 0.25, confidence: 'medium', source: 'HBM3E, larger capacity stacks', historicalRange: [0.12, 0.35] }
   }
 };
 
@@ -377,21 +389,55 @@ const buildEfficiencyBlocks = () => {
     blocks[seg.key] = applyBlockLabel(cloneBlock(EFFICIENCY_TEMPLATE_YEAR1), seg.key, false);
   });
 
-  // Diminishing returns as horizon extends
-  blocks.years6_10.modelEfficiency.m_inference.value = 0.14;
-  blocks.years6_10.modelEfficiency.m_training.value = 0.08;
-  blocks.years6_10.systemsEfficiency.s_inference.value = 0.08;
+  // Year 2: Still aggressive but decelerating (~3.1x = 67% cost reduction)
+  blocks.year2.modelEfficiency.m_inference.value = 0.45;
+  blocks.year2.modelEfficiency.m_training.value = 0.28;
+  blocks.year2.systemsEfficiency.s_inference.value = 0.28;
+  blocks.year2.systemsEfficiency.s_training.value = 0.16;
+  blocks.year2.hardwareEfficiency.h.value = 0.32;
+  blocks.year2.hardwareEfficiency.h_memory.value = 0.22;
+
+  // Year 3: Still strong (~2.5x = 60% cost reduction)
+  blocks.year3.modelEfficiency.m_inference.value = 0.38;
+  blocks.year3.modelEfficiency.m_training.value = 0.22;
+  blocks.year3.systemsEfficiency.s_inference.value = 0.22;
+  blocks.year3.systemsEfficiency.s_training.value = 0.13;
+  blocks.year3.hardwareEfficiency.h.value = 0.25;
+  blocks.year3.hardwareEfficiency.h_memory.value = 0.18;
+
+  // Year 4: Moderating (~2.0x = 50% cost reduction)
+  blocks.year4.modelEfficiency.m_inference.value = 0.30;
+  blocks.year4.modelEfficiency.m_training.value = 0.18;
+  blocks.year4.systemsEfficiency.s_inference.value = 0.18;
+  blocks.year4.systemsEfficiency.s_training.value = 0.10;
+  blocks.year4.hardwareEfficiency.h.value = 0.20;
+  blocks.year4.hardwareEfficiency.h_memory.value = 0.15;
+
+  // Year 5: Settling (~1.8x = 44% cost reduction)
+  blocks.year5.modelEfficiency.m_inference.value = 0.25;
+  blocks.year5.modelEfficiency.m_training.value = 0.15;
+  blocks.year5.systemsEfficiency.s_inference.value = 0.15;
+  blocks.year5.systemsEfficiency.s_training.value = 0.08;
+  blocks.year5.hardwareEfficiency.h.value = 0.18;
+  blocks.year5.hardwareEfficiency.h_memory.value = 0.12;
+
+  // Years 6-10: Diminishing returns (~1.5x = 33% cost reduction)
+  blocks.years6_10.modelEfficiency.m_inference.value = 0.18;
+  blocks.years6_10.modelEfficiency.m_training.value = 0.12;
+  blocks.years6_10.systemsEfficiency.s_inference.value = 0.12;
   blocks.years6_10.systemsEfficiency.s_training.value = 0.06;
   blocks.years6_10.hardwareEfficiency.h.value = 0.12;
   blocks.years6_10.hardwareEfficiency.h_memory.value = 0.10;
 
-  blocks.years11_15.modelEfficiency.m_inference.value = 0.10;
-  blocks.years11_15.modelEfficiency.m_training.value = 0.06;
-  blocks.years11_15.systemsEfficiency.s_inference.value = 0.06;
+  // Years 11-15: Mature (~1.3x = 22% cost reduction)
+  blocks.years11_15.modelEfficiency.m_inference.value = 0.12;
+  blocks.years11_15.modelEfficiency.m_training.value = 0.08;
+  blocks.years11_15.systemsEfficiency.s_inference.value = 0.08;
   blocks.years11_15.systemsEfficiency.s_training.value = 0.05;
   blocks.years11_15.hardwareEfficiency.h.value = 0.08;
   blocks.years11_15.hardwareEfficiency.h_memory.value = 0.07;
 
+  // Years 16-20: Near-mature (~1.2x = 15% cost reduction)
   blocks.years16_20.modelEfficiency.m_inference.value = 0.08;
   blocks.years16_20.modelEfficiency.m_training.value = 0.05;
   blocks.years16_20.systemsEfficiency.s_inference.value = 0.05;
@@ -411,11 +457,11 @@ export const EFFICIENCY_ASSUMPTIONS_BASE = buildEfficiencyBlocks();
 const SUPPLY_TEMPLATE_YEAR1 = {
   label: SEGMENT_LABELS.year1,
   expansionRates: {
-    packaging: { value: 0.35, confidence: 'high', source: 'CoWoS expansion plans + OSAT commitments' },
-    foundry: { value: 0.15, confidence: 'high', source: 'Advanced-node fab construction schedules' },
-    memory: { value: 0.25, confidence: 'medium', source: 'HBM capacity expansion announcements' },
-    datacenter: { value: 0.20, confidence: 'medium', source: 'Hyperscaler capex guidance' },
-    power: { value: 0.08, confidence: 'medium', source: 'Utility capex + transformer constraints' }
+    packaging: { value: 0.50, confidence: 'high', source: 'TSMC doubled CoWoS in 18mo; continued aggressive expansion' },
+    foundry: { value: 0.25, confidence: 'high', source: 'Advanced-node fabs + committed expansions coming online' },
+    memory: { value: 0.40, confidence: 'medium', source: 'HBM revenue 300%+ growth 2024; SK Hynix/Samsung expanding aggressively' },
+    datacenter: { value: 0.25, confidence: 'medium', source: '$6.7T capex through 2030 (McKinsey); hyperscaler $300B+/yr' },
+    power: { value: 0.10, confidence: 'medium', source: 'Key bottleneck; grid interconnection 2-5yr queues; 76GW potential with flexibility' }
   }
 };
 
@@ -425,21 +471,46 @@ const buildSupplyBlocks = () => {
     blocks[seg.key] = applyBlockLabel(cloneBlock(SUPPLY_TEMPLATE_YEAR1), seg.key, false);
   });
 
-  blocks.years6_10.expansionRates.packaging.value = 0.20;
-  blocks.years6_10.expansionRates.foundry.value = 0.10;
-  blocks.years6_10.expansionRates.memory.value = 0.18;
+  // Supply expansion decelerates as base grows but capex remains massive
+  blocks.year2.expansionRates.packaging.value = 0.45;
+  blocks.year2.expansionRates.foundry.value = 0.22;
+  blocks.year2.expansionRates.memory.value = 0.35;
+  blocks.year2.expansionRates.datacenter.value = 0.22;
+  blocks.year2.expansionRates.power.value = 0.10;
+
+  blocks.year3.expansionRates.packaging.value = 0.40;
+  blocks.year3.expansionRates.foundry.value = 0.20;
+  blocks.year3.expansionRates.memory.value = 0.32;
+  blocks.year3.expansionRates.datacenter.value = 0.22;
+  blocks.year3.expansionRates.power.value = 0.10;
+
+  blocks.year4.expansionRates.packaging.value = 0.35;
+  blocks.year4.expansionRates.foundry.value = 0.18;
+  blocks.year4.expansionRates.memory.value = 0.28;
+  blocks.year4.expansionRates.datacenter.value = 0.20;
+  blocks.year4.expansionRates.power.value = 0.10;
+
+  blocks.year5.expansionRates.packaging.value = 0.30;
+  blocks.year5.expansionRates.foundry.value = 0.15;
+  blocks.year5.expansionRates.memory.value = 0.25;
+  blocks.year5.expansionRates.datacenter.value = 0.18;
+  blocks.year5.expansionRates.power.value = 0.10;
+
+  blocks.years6_10.expansionRates.packaging.value = 0.22;
+  blocks.years6_10.expansionRates.foundry.value = 0.12;
+  blocks.years6_10.expansionRates.memory.value = 0.20;
   blocks.years6_10.expansionRates.datacenter.value = 0.15;
   blocks.years6_10.expansionRates.power.value = 0.10;
 
-  blocks.years11_15.expansionRates.packaging.value = 0.12;
+  blocks.years11_15.expansionRates.packaging.value = 0.15;
   blocks.years11_15.expansionRates.foundry.value = 0.08;
-  blocks.years11_15.expansionRates.memory.value = 0.12;
-  blocks.years11_15.expansionRates.datacenter.value = 0.10;
+  blocks.years11_15.expansionRates.memory.value = 0.14;
+  blocks.years11_15.expansionRates.datacenter.value = 0.12;
   blocks.years11_15.expansionRates.power.value = 0.08;
 
-  blocks.years16_20.expansionRates.packaging.value = 0.08;
-  blocks.years16_20.expansionRates.foundry.value = 0.05;
-  blocks.years16_20.expansionRates.memory.value = 0.08;
+  blocks.years16_20.expansionRates.packaging.value = 0.10;
+  blocks.years16_20.expansionRates.foundry.value = 0.06;
+  blocks.years16_20.expansionRates.memory.value = 0.10;
   blocks.years16_20.expansionRates.datacenter.value = 0.08;
   blocks.years16_20.expansionRates.power.value = 0.06;
 

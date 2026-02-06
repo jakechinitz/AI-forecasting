@@ -68,12 +68,12 @@ const NODES_BASE = [
     leadTimeMonths: 0,
     rampProfile: 'step',
 
-    // Base rate: 2 runs/month (Jan 2026)
+    // Base rate: 3 runs/month (Feb 2026) — more frontier labs actively training
     baseRate: {
-      value: 2,
+      value: 3,
       confidence: 'medium',
-      source: 'Industry cadence estimates. As of 2026-01.',
-      historicalRange: [1, 6]
+      source: 'Industry cadence: OpenAI, Anthropic, Google, Meta, xAI, Mistral. As of 2026-02.',
+      historicalRange: [2, 8]
     }
   },
   {
@@ -93,10 +93,10 @@ const NODES_BASE = [
     rampProfile: 'step',
 
     baseRate: {
-      value: 20,
+      value: 300,
       confidence: 'medium',
-      source: 'Industry cadence estimates. As of 2026-01.',
-      historicalRange: [10, 50]
+      source: 'Fine-tuning explosion; 31% orgs in production (2x 2024 rate). As of 2026-02.',
+      historicalRange: [100, 600]
     }
   },
   {
@@ -115,12 +115,13 @@ const NODES_BASE = [
     leadTimeMonths: 0,
     rampProfile: 'step',
 
-    // Base rate: 4T tokens/month consumer inference (Jan 2026)
+    // Base rate: 250T tokens/month consumer inference (Feb 2026)
+    // ChatGPT 810M WAU, Gemini 750M MAU, Claude 18.8M users
     baseRate: {
-      value: 4e12,
+      value: 250e12,
       confidence: 'medium',
-      source: 'Consumer AI usage estimates. As of 2026-01.',
-      historicalRange: [1e12, 12e12]
+      source: 'Consumer AI usage estimates. ChatGPT 810M WAU. As of 2026-02.',
+      historicalRange: [100e12, 500e12]
     }
   },
   {
@@ -139,12 +140,13 @@ const NODES_BASE = [
     leadTimeMonths: 0,
     rampProfile: 'step',
 
-    // Base rate: 6T tokens/month enterprise inference (Jan 2026)
+    // Base rate: 200T tokens/month enterprise inference (Feb 2026)
+    // 71% of orgs using GenAI; $37B+ enterprise AI spend
     baseRate: {
-      value: 6e12,
+      value: 200e12,
       confidence: 'medium',
-      source: 'Cloud provider earnings, $37B enterprise AI spend. As of 2026-01.',
-      historicalRange: [2e12, 10e12]
+      source: 'Enterprise AI adoption 71% of orgs; cloud earnings. As of 2026-02.',
+      historicalRange: [100e12, 400e12]
     }
   },
   {
@@ -163,12 +165,13 @@ const NODES_BASE = [
     leadTimeMonths: 0,
     rampProfile: 'step',
 
-    // Base rate: 1T tokens/month agentic inference (Jan 2026)
+    // Base rate: 50T tokens/month agentic inference (Feb 2026)
+    // AI agent deployments doubling every 4 months; 40% enterprise apps by end 2026
     baseRate: {
-      value: 1e12,
+      value: 50e12,
       confidence: 'low',
-      source: 'Agentic AI in 40% enterprise apps. As of 2026-01.',
-      historicalRange: [0.3e12, 3e12]
+      source: 'Agentic AI doubling every 4mo; 1B agents projected by end 2026. As of 2026-02.',
+      historicalRange: [20e12, 100e12]
     }
   },
 
@@ -186,13 +189,13 @@ const NODES_BASE = [
     inputIntensity: 1,
     parentNodeIds: ['training_frontier', 'training_midtier', 'inference_consumer', 'inference_enterprise', 'inference_agentic'],
 
-    // Base rate: ~5.4M datacenter GPUs shipped 2025 (NVIDIA + competitors)
-    // Source: NVIDIA earnings, analyst estimates. As of 2026-01-01.
-    startingCapacity: 450000,  // units/month (~5.4M/yr)
+    // Base rate: ~7.2M datacenter GPUs shipped 2025 (NVIDIA Blackwell ramp + competitors)
+    // NVIDIA datacenter revenue $115B+ FY2026; Blackwell shipping at scale
+    startingCapacity: 600000,  // units/month (~7.2M/yr)
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 50000, type: 'committed' },
-      { date: '2026-01', capacityAdd: 120000, type: 'committed' },
-      { date: '2026-07', capacityAdd: 150000, type: 'optional' }
+      { date: '2026-06', capacityAdd: 150000, type: 'committed' },
+      { date: '2027-01', capacityAdd: 200000, type: 'committed' },
+      { date: '2027-07', capacityAdd: 200000, type: 'optional' }
     ],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 18,
@@ -216,10 +219,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'high',
 
     baseRate: {
-      value: 450000,
+      value: 600000,
       confidence: 'high',
-      source: 'NVIDIA quarterly reports, supply chain analysis. As of 2026-01.',
-      historicalRange: [350000, 600000]
+      source: 'NVIDIA Blackwell ramp + AMD MI300X; datacenter rev $115B+ FY2026. As of 2026-02.',
+      historicalRange: [450000, 900000]
     }
   },
 
@@ -234,9 +237,10 @@ const NODES_BASE = [
     inputIntensity: 1,
     parentNodeIds: ['inference_consumer', 'inference_enterprise', 'inference_agentic'],
 
-    startingCapacity: 220000,
+    startingCapacity: 350000,
     committedExpansions: [
-      { date: '2026-01', capacityAdd: 80000, type: 'optional' }
+      { date: '2026-06', capacityAdd: 100000, type: 'committed' },
+      { date: '2027-01', capacityAdd: 150000, type: 'optional' }
     ],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 18,
@@ -260,10 +264,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'medium',
 
     baseRate: {
-      value: 220000,
+      value: 350000,
       confidence: 'medium',
-      source: 'Competitor shipments, inference ASIC ramp. As of 2026-01.',
-      historicalRange: [100000, 400000]
+      source: 'AMD MI300X, Intel Gaudi, Google TPU, custom ASICs ramping. As of 2026-02.',
+      historicalRange: [200000, 600000]
     }
   },
 
@@ -367,11 +371,11 @@ const NODES_BASE = [
     inputIntensity: 8,
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 5000000,
+    startingCapacity: 7000000,   // HBM3E ramp by SK Hynix, Samsung, Micron
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 1000000, type: 'committed' },
-      { date: '2026-01', capacityAdd: 1200000, type: 'committed' },
-      { date: '2026-09', capacityAdd: 1000000, type: 'optional' }
+      { date: '2026-06', capacityAdd: 2000000, type: 'committed' },
+      { date: '2027-01', capacityAdd: 2500000, type: 'committed' },
+      { date: '2027-09', capacityAdd: 1500000, type: 'optional' }
     ],
     leadTimeDebottleneck: 24,
     leadTimeNewBuild: 24,
@@ -395,10 +399,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'high',
 
     baseRate: {
-      value: 5000000,
+      value: 7000000,
       confidence: 'high',
-      source: 'HBM supplier announcements and demand estimates',
-      historicalRange: [3000000, 7000000]
+      source: 'HBM3E ramp; revenue 300%+ growth 2024; SK Hynix/Samsung/Micron expanding. As of 2026-02.',
+      historicalRange: [5000000, 10000000]
     }
   },
 
@@ -504,11 +508,11 @@ const NODES_BASE = [
     inputIntensity: 1.0,
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 80000,
+    startingCapacity: 120000,    // TSMC doubled CoWoS capacity through 2025
     committedExpansions: [
-      { date: '2025-10', capacityAdd: 15000, type: 'committed' },
-      { date: '2026-06', capacityAdd: 20000, type: 'committed' },
-      { date: '2026-12', capacityAdd: 10000, type: 'optional' }
+      { date: '2026-06', capacityAdd: 30000, type: 'committed' },
+      { date: '2027-01', capacityAdd: 40000, type: 'committed' },
+      { date: '2027-06', capacityAdd: 20000, type: 'optional' }
     ],
     leadTimeDebottleneck: 30,
     leadTimeNewBuild: 24,
@@ -532,10 +536,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'critical',
 
     baseRate: {
-      value: 80000,
+      value: 120000,
       confidence: 'high',
-      source: 'TSMC CoWoS capacity estimates',
-      historicalRange: [60000, 120000]
+      source: 'TSMC CoWoS doubled through 2025; continued aggressive expansion. As of 2026-02.',
+      historicalRange: [90000, 180000]
     }
   },
 
@@ -1054,10 +1058,11 @@ const NODES_BASE = [
     inputIntensity: 0.0013,  // kwPerGpu(1.0) * pue(1.3) / 1000 = MW per GPU
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    startingCapacity: 1000,
+    startingCapacity: 1500,     // AI-dedicated DC power ~18GW globally by early 2026
     committedExpansions: [
-      { date: '2026-01', capacityAdd: 300, type: 'committed' },
-      { date: '2027-01', capacityAdd: 300, type: 'optional' }
+      { date: '2026-06', capacityAdd: 500, type: 'committed' },
+      { date: '2027-01', capacityAdd: 500, type: 'committed' },
+      { date: '2027-06', capacityAdd: 400, type: 'optional' }
     ],
     leadTimeDebottleneck: 24,
     leadTimeNewBuild: 48,
@@ -1081,10 +1086,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 1000,
+      value: 1500,
       confidence: 'medium',
-      source: 'Global AI DC bring-up capacity estimates',
-      historicalRange: [500, 2000]
+      source: '$6.7T capex through 2030 (McKinsey); hyperscaler $300B+/yr capex. As of 2026-02.',
+      historicalRange: [1000, 3000]
     }
   },
 
