@@ -11,6 +11,7 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
 
   const node = getNode(selectedNode);
   const nodeData = results?.nodes[selectedNode];
+  const isStockNode = selectedNode === 'gpu_datacenter' || selectedNode === 'gpu_inference';
 
   // Filter data by time range
   const chartData = useMemo(() => {
@@ -22,11 +23,18 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
 
     const data = [];
     for (let i = 0; i < Math.min(results.months.length, maxMonth); i += 3) {
+      const demandValue = isStockNode
+        ? (nodeData.requiredBase?.[i] ?? nodeData.demand[i])
+        : nodeData.demand[i];
+      const supplyValue = isStockNode
+        ? (nodeData.installedBase?.[i] ?? nodeData.supply[i])
+        : nodeData.supply[i];
+
       data.push({
         month: results.months[i],
         label: formatMonth(results.months[i]),
-        demand: nodeData.demand[i],
-        supply: nodeData.supply[i],                         // Shipments cleared
+        demand: demandValue,
+        supply: supplyValue,                                // Shipments or installed base
         supplyPotential: nodeData.supplyPotential?.[i] || nodeData.supply[i],  // Production potential
         gpuDelivered: nodeData.gpuDelivered?.[i] || 0,      // GPUs actually usable (after gating)
         idleGpus: nodeData.idleGpus?.[i] || 0,              // GPUs blocked by components
@@ -43,10 +51,7 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
       });
     }
     return data;
-  }, [nodeData, results, timeRange]);
-
-  // Check if this is a GPU/stock node
-  const isStockNode = selectedNode === 'gpu_datacenter' || selectedNode === 'gpu_inference';
+  }, [nodeData, results, timeRange, isStockNode]);
 
   // Heatmap data for tightness across nodes
   const heatmapData = useMemo(() => {
@@ -173,7 +178,7 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
               {/* Shipments vs Demand (Flow View) - GPU nodes show 3 series */}
               <div className="chart-container">
                 <div className="chart-header">
-                  <h3 className="chart-title">{isStockNode ? 'GPU: Demand vs Shipments vs Delivered' : 'Shipments vs Demand'}</h3>
+                  <h3 className="chart-title">{isStockNode ? 'GPU: Required vs Installed vs Delivered' : 'Shipments vs Demand'}</h3>
                 </div>
                 <ResponsiveContainer width="100%" height={280}>
                   <ComposedChart data={chartData}>
@@ -182,11 +187,25 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
                     <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickFormatter={(v) => formatNumber(v)} />
                     <Tooltip content={<CustomTooltip />} />
                     <Area type="monotone" dataKey="supplyPotential" fill="#6366f1" fillOpacity={0.1} stroke="#6366f1" strokeDasharray="4 4" name="Production Potential" />
-                    <Line type="monotone" dataKey="supply" stroke="#f59e0b" strokeWidth={2} dot={false} name="Raw Shipments" />
+                    <Line
+                      type="monotone"
+                      dataKey="supply"
+                      stroke="#f59e0b"
+                      strokeWidth={2}
+                      dot={false}
+                      name={isStockNode ? 'Installed Base' : 'Raw Shipments'}
+                    />
                     {isStockNode && (
                       <Line type="monotone" dataKey="gpuDelivered" stroke="#22c55e" strokeWidth={2} dot={false} name="Delivered (After Gating)" />
                     )}
-                    <Line type="monotone" dataKey="demand" stroke="#ef4444" strokeWidth={2} dot={false} name={isStockNode ? 'Purchase Demand' : 'Demand'} />
+                    <Line
+                      type="monotone"
+                      dataKey="demand"
+                      stroke="#ef4444"
+                      strokeWidth={2}
+                      dot={false}
+                      name={isStockNode ? 'Required Base' : 'Demand'}
+                    />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>

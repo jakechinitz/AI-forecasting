@@ -18,8 +18,8 @@ function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results })
     const y5 = 60;  // Year 5
 
     return {
-      gpuDemandY1: gpuData?.demand[y1] || 0,
-      gpuDemandY5: gpuData?.demand[y5] || 0,
+      gpuDemandY1: gpuData?.requiredBase?.[y1] || 0,
+      gpuDemandY5: gpuData?.requiredBase?.[y5] || 0,
       gpuTightnessAvg: gpuData?.tightness.slice(0, 60).reduce((a, b) => a + b, 0) / 60 || 0,
       hbmTightnessMax: Math.max(...(hbmData?.tightness.slice(0, 60) || [1])),
       cowosTightnessMax: Math.max(...(cowosData?.tightness.slice(0, 60) || [1])),
@@ -88,13 +88,13 @@ function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results })
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{formatNumber(metrics.gpuDemandY1)}</span>
-                <span className="metric-label">GPU Demand Y1</span>
+                <span className="metric-label">Required GPU Base Y1</span>
               </div>
             </div>
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{formatNumber(metrics.gpuDemandY5)}</span>
-                <span className="metric-label">GPU Demand Y5</span>
+                <span className="metric-label">Required GPU Base Y5</span>
               </div>
             </div>
             <div className="card">
