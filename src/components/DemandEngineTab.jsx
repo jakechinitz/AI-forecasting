@@ -74,7 +74,8 @@ function DemandEngineTab({ results, assumptions }) {
       const midtierDemand = results.nodes.training_midtier?.demand[i] || 0;
 
       // GPU demand and installed base
-      const gpuDemand = results.nodes.gpu_datacenter?.demand[i] || 0;
+      const gpuDemand = (results.nodes.gpu_datacenter?.requiredBase?.[i] || 0)
+        + (results.nodes.gpu_inference?.requiredBase?.[i] || 0);
       const dcInstalled = results.nodes.gpu_datacenter?.installedBase[i] || 0;
       const infInstalled = results.nodes.gpu_inference?.installedBase[i] || 0;
       const totalInstalled = dcInstalled + infInstalled;
@@ -204,13 +205,13 @@ function DemandEngineTab({ results, assumptions }) {
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{formatNumber(summaryMetrics.currentGpu)}</span>
-                <span className="metric-label">Current GPU Demand</span>
+                <span className="metric-label">Current Required GPU Base</span>
               </div>
             </div>
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{formatNumber(summaryMetrics.future5yGpu)}</span>
-                <span className="metric-label">5-Year GPU Demand</span>
+                <span className="metric-label">5-Year Required GPU Base</span>
               </div>
             </div>
           </div>
@@ -393,7 +394,7 @@ function DemandEngineTab({ results, assumptions }) {
         {/* GPU Demand */}
         <div className="chart-container">
           <div className="chart-header">
-            <h3 className="chart-title">GPU Demand (units/month)</h3>
+            <h3 className="chart-title">Required GPU Base (units)</h3>
           </div>
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={chartData}>
@@ -414,7 +415,7 @@ function DemandEngineTab({ results, assumptions }) {
                 stroke="#22c55e"
                 strokeWidth={2}
                 dot={false}
-                name="GPU Demand"
+                name="Required GPU Base"
               />
             </LineChart>
           </ResponsiveContainer>
