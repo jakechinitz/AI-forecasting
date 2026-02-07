@@ -134,7 +134,7 @@ function getNodeType(nodeId) {
 const EPSILON = 1e-10;
 
 // Planning knobs
-const CATCHUP_MONTHS = 24;
+const CATCHUP_MONTHS = 6;
 const DEFAULT_BUFFER_MONTHS = 2;
 
 // Aggressive urgency
