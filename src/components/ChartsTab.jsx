@@ -30,16 +30,12 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
         ? (nodeData.installedBase?.[i] ?? nodeData.supply[i])
         : nodeData.supply[i];
 
-      const productionPotential = isStockNode
-        ? (nodeData.capacity?.[i] ?? nodeData.supplyPotential?.[i] ?? nodeData.supply[i])
-        : (nodeData.supplyPotential?.[i] ?? nodeData.supply[i]);
-
       data.push({
         month: results.months[i],
         label: formatMonth(results.months[i]),
         demand: demandValue,
         supply: supplyValue,                                // Shipments or installed base
-        supplyPotential: productionPotential,              // Production potential
+        supplyPotential: nodeData.supplyPotential?.[i] || nodeData.supply[i],  // Production potential
         gpuDelivered: nodeData.gpuDelivered?.[i] || 0,      // GPUs actually usable (after gating)
         idleGpus: nodeData.idleGpus?.[i] || 0,              // GPUs blocked by components
         capacity: nodeData.capacity[i],
