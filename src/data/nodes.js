@@ -280,7 +280,7 @@ const NODES_BASE = [
 
     demandDriverType: 'derived',
     inputIntensity: 0.25,
-    parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
+    parentNodeIds: ['gpu_datacenter', 'gpu_inference', 'grid_interconnect'],
 
     startingCapacity: 2500000,
     committedExpansions: [],
@@ -365,7 +365,7 @@ const NODES_BASE = [
     name: 'HBM Memory Stacks',
     group: 'C',
     unit: 'stacks/month',
-    description: 'HBM3, HBM3E stacked memory for GPUs',
+    description: 'HBM3, HBM3E stacked memory for GPUs (substitution risk: NAND/fiber loops)',
 
     demandDriverType: 'derived',
     inputIntensity: 8,
@@ -385,7 +385,7 @@ const NODES_BASE = [
     elasticityMid: 0.25,
     elasticityLong: 0.6,
 
-    substitutabilityScore: 0.1,
+    substitutabilityScore: 0.45,
     supplierConcentration: 4,
 
     contractingRegime: 'LTAs',
@@ -744,7 +744,7 @@ const NODES_BASE = [
     committedExpansions: [
       { date: '2027-01', capacityAdd: 1, type: 'optional' }
     ],
-    leadTimeDebottleneck: 24,
+    leadTimeDebottleneck: 36,
     leadTimeNewBuild: 60,
     rampProfile: 'step',
 
@@ -1056,7 +1056,7 @@ const NODES_BASE = [
 
     demandDriverType: 'derived',
     inputIntensity: 0.0013,  // kwPerGpu(1.0) * pue(1.3) / 1000 = MW per GPU
-    parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
+    parentNodeIds: ['gpu_datacenter', 'gpu_inference', 'grid_interconnect'],
 
     startingCapacity: 18000,     // AI-dedicated DC power ~18GW globally by early 2026
     committedExpansions: [
@@ -1101,7 +1101,7 @@ const NODES_BASE = [
     name: 'Grid Interconnect Queue',
     group: 'I',
     unit: 'MW-approved/month',
-    description: 'Utility grid connection approvals',
+    description: 'Utility grid connection approvals (3-5 year hookup queues)',
 
     demandDriverType: 'derived',
     inputIntensity: 0.0013,  // MW per GPU (same as datacenter_mw)
@@ -1109,7 +1109,7 @@ const NODES_BASE = [
 
     startingCapacity: 2500,
     committedExpansions: [],
-    leadTimeDebottleneck: 24,
+    leadTimeDebottleneck: 36,
     leadTimeNewBuild: 60,
     rampProfile: 'linear',
 
