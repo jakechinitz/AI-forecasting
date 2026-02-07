@@ -227,17 +227,19 @@ const DEMAND_TEMPLATE_YEAR1 = {
 
   workloadBase: cloneBlock(WORKLOAD_BASE_DEFAULT),
 
-  // Growth rates as annual fractions: 1.00 = 100% = 2x, 4.00 = 400% = 5x
+  // Growth rates as annual fractions: 1.00 = 100% = 2x, 9.00 = 900% = 10x
   // Google: 49.5x token growth in 12mo; OpenAI: 65x in 20mo; ChatGPT: 200M→810M WAU
+  // Net GPU demand growth = token_growth / efficiency_gain. At 4.2x efficiency:
+  //   Blended ~13.5x token growth → ~3.2x net GPU growth → real supply tension
   inferenceGrowth: {
-    consumer: { value: 4.00, confidence: 'medium', source: 'ChatGPT 810M WAU, Gemini 750M MAU; usage/user growing 2-3x/yr', historicalRange: [2.00, 8.00] },
-    enterprise: { value: 5.00, confidence: 'medium', source: 'Enterprise adoption 33%→71%; OpenAI enterprise reasoning tokens 320x YoY', historicalRange: [2.00, 10.00] },
-    agentic: { value: 9.00, confidence: 'low', source: '1B AI agents projected by end 2026; deployments doubling every 4 months', historicalRange: [4.00, 15.00] }
+    consumer: { value: 9.00, confidence: 'medium', source: 'Google 49.5x tokens/12mo; ChatGPT 810M WAU; usage/user 2-3x/yr; new modalities', historicalRange: [4.00, 15.00] },
+    enterprise: { value: 14.00, confidence: 'low', source: 'Enterprise adoption 33%→71%; OpenAI reasoning tokens 320x YoY; copilot saturation', historicalRange: [6.00, 25.00] },
+    agentic: { value: 24.00, confidence: 'low', source: '1B AI agents by 2026; 10-25x compute per task vs chat; coding agents mainstream', historicalRange: [10.00, 40.00] }
   },
 
   trainingGrowth: {
-    frontier: { value: 1.50, confidence: 'medium', source: 'More frontier labs + bigger runs; supply-constrained', historicalRange: [0.50, 3.00] },
-    midtier: { value: 3.00, confidence: 'low', source: 'Fine-tuning explosion; 31% reaching production (2x 2024 rate)', historicalRange: [1.00, 5.00] }
+    frontier: { value: 2.00, confidence: 'medium', source: 'More frontier labs + bigger clusters; GPT-5/Gemini 2/Claude 4 class runs', historicalRange: [0.50, 4.00] },
+    midtier: { value: 4.00, confidence: 'low', source: 'Enterprise fine-tuning explosion; 31% reaching production; RLHF ubiquitous', historicalRange: [2.00, 8.00] }
   },
 
   contextLength: {
@@ -281,33 +283,33 @@ const buildDemandBlocks = () => {
   });
 
   // Targeted tweaks (only the values that should change by period)
-  // Year 2: Decelerating but still very strong
-  blocks.year2.inferenceGrowth.consumer.value = 2.00;   // 3x
-  blocks.year2.inferenceGrowth.enterprise.value = 3.00;  // 4x
-  blocks.year2.inferenceGrowth.agentic.value = 5.00;     // 6x
-  blocks.year2.trainingGrowth.frontier.value = 0.80;
-  blocks.year2.trainingGrowth.midtier.value = 2.00;
+  // Year 2: Decelerating but still very strong (net GPU growth ~2.5x with ~3.1x efficiency)
+  blocks.year2.inferenceGrowth.consumer.value = 5.00;   // 6x
+  blocks.year2.inferenceGrowth.enterprise.value = 7.00;  // 8x
+  blocks.year2.inferenceGrowth.agentic.value = 14.00;    // 15x
+  blocks.year2.trainingGrowth.frontier.value = 1.50;
+  blocks.year2.trainingGrowth.midtier.value = 3.00;
 
-  // Year 3: Growth moderating, market maturing
-  blocks.year3.inferenceGrowth.consumer.value = 1.00;    // 2x
-  blocks.year3.inferenceGrowth.enterprise.value = 1.50;  // 2.5x
-  blocks.year3.inferenceGrowth.agentic.value = 3.00;     // 4x
-  blocks.year3.trainingGrowth.frontier.value = 0.40;
-  blocks.year3.trainingGrowth.midtier.value = 1.00;
+  // Year 3: Growth moderating, market maturing (net GPU growth ~1.8x with ~2.5x efficiency)
+  blocks.year3.inferenceGrowth.consumer.value = 2.00;    // 3x
+  blocks.year3.inferenceGrowth.enterprise.value = 3.00;  // 4x
+  blocks.year3.inferenceGrowth.agentic.value = 7.00;     // 8x
+  blocks.year3.trainingGrowth.frontier.value = 0.80;
+  blocks.year3.trainingGrowth.midtier.value = 1.50;
 
-  // Year 4: Supply catching up, growth normalizing
-  blocks.year4.inferenceGrowth.consumer.value = 0.60;    // 1.6x
-  blocks.year4.inferenceGrowth.enterprise.value = 0.80;  // 1.8x
-  blocks.year4.inferenceGrowth.agentic.value = 1.50;     // 2.5x
-  blocks.year4.trainingGrowth.frontier.value = 0.25;
-  blocks.year4.trainingGrowth.midtier.value = 0.50;
+  // Year 4: Supply catching up, growth normalizing (net GPU growth ~1.3x with ~2x efficiency)
+  blocks.year4.inferenceGrowth.consumer.value = 1.00;    // 2x
+  blocks.year4.inferenceGrowth.enterprise.value = 1.50;  // 2.5x
+  blocks.year4.inferenceGrowth.agentic.value = 3.00;     // 4x
+  blocks.year4.trainingGrowth.frontier.value = 0.40;
+  blocks.year4.trainingGrowth.midtier.value = 0.80;
 
-  // Year 5: Maturing market
-  blocks.year5.inferenceGrowth.consumer.value = 0.40;    // 1.4x
-  blocks.year5.inferenceGrowth.enterprise.value = 0.55;  // 1.55x
-  blocks.year5.inferenceGrowth.agentic.value = 1.00;     // 2x
-  blocks.year5.trainingGrowth.frontier.value = 0.15;
-  blocks.year5.trainingGrowth.midtier.value = 0.30;
+  // Year 5: Maturing market (net GPU growth ~1.1x with ~1.8x efficiency)
+  blocks.year5.inferenceGrowth.consumer.value = 0.60;    // 1.6x
+  blocks.year5.inferenceGrowth.enterprise.value = 0.80;  // 1.8x
+  blocks.year5.inferenceGrowth.agentic.value = 1.50;     // 2.5x
+  blocks.year5.trainingGrowth.frontier.value = 0.25;
+  blocks.year5.trainingGrowth.midtier.value = 0.50;
 
   // Years 6-10
   blocks.years6_10.inferenceGrowth.consumer.value = 0.20;
