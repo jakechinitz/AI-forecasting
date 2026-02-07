@@ -12,6 +12,7 @@ function MarketClearingTab({ results, selectedNode, onSelectNode }) {
   }, [results, selectedNode]);
 
   const node = getNode(selectedNode);
+  const isStockNode = selectedNode === 'gpu_datacenter' || selectedNode === 'gpu_inference';
 
   // Prepare chart data
   const chartData = useMemo(() => {
@@ -23,11 +24,18 @@ function MarketClearingTab({ results, selectedNode, onSelectNode }) {
 
     const data = [];
     for (let i = 0; i < Math.min(results.months.length, maxMonth); i += 3) {
+      const demandValue = isStockNode
+        ? (nodeData.requiredBase?.[i] ?? nodeData.demand[i])
+        : nodeData.demand[i];
+      const supplyValue = isStockNode
+        ? (nodeData.installedBase?.[i] ?? nodeData.supply[i])
+        : nodeData.supply[i];
+
       data.push({
         month: results.months[i],
         label: formatMonth(results.months[i]),
-        demand: nodeData.demand[i],
-        supply: nodeData.supply[i],
+        demand: demandValue,
+        supply: supplyValue,
         tightness: nodeData.tightness[i],
         priceIndex: nodeData.priceIndex[i],
         inventory: nodeData.inventory[i],
@@ -35,7 +43,7 @@ function MarketClearingTab({ results, selectedNode, onSelectNode }) {
       });
     }
     return data;
-  }, [nodeData, results, timeRange]);
+  }, [nodeData, results, timeRange, isStockNode]);
 
   // Get tightness status
   const getTightnessStatus = (value) => {

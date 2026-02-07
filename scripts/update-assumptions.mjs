@@ -204,7 +204,10 @@ Fetched sources (scraped, use what is relevant):\n${JSON.stringify(fetchedSource
   }
 
   const result = await response.json();
-  const outputText = result?.output_text;
+  const outputText = result?.output_text
+    ?? result?.output?.flatMap((item) => item.content || [])
+      .map((content) => content?.text)
+      .find((text) => typeof text === 'string' && text.trim().length > 0);
   if (!outputText) {
     throw new Error('No output_text in OpenAI response.');
   }

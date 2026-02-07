@@ -1058,7 +1058,7 @@ const NODES_BASE = [
     inputIntensity: 0.0013,  // kwPerGpu(1.0) * pue(1.3) / 1000 = MW per GPU
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    startingCapacity: 1500,     // AI-dedicated DC power ~18GW globally by early 2026
+    startingCapacity: 18000,     // AI-dedicated DC power ~18GW globally by early 2026
     committedExpansions: [
       { date: '2026-06', capacityAdd: 500, type: 'committed' },
       { date: '2027-01', capacityAdd: 500, type: 'committed' },
@@ -1086,10 +1086,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 1500,
+      value: 18000,
       confidence: 'medium',
       source: '$6.7T capex through 2030 (McKinsey); hyperscaler $300B+/yr capex. As of 2026-02.',
-      historicalRange: [1000, 3000]
+      historicalRange: [12000, 24000]
     }
   },
 

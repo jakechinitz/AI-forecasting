@@ -19,10 +19,15 @@ function GrowthRatesTab({ results }) {
     const rowData = NODES.map((node) => {
       const nodeData = results.nodes[node.id];
       if (!nodeData) return null;
+      const isStockNode = node.id === 'gpu_datacenter' || node.id === 'gpu_inference';
       const demandGrowthByMonth = results.months.map((_, index) => {
         if (index < 12) return null;
-        const demandNow = nodeData.demand[index] ?? 0;
-        const demandPrior = nodeData.demand[index - 12] ?? 0;
+        const demandNow = isStockNode
+          ? (nodeData.requiredBase?.[index] ?? nodeData.demand[index] ?? 0)
+          : (nodeData.demand[index] ?? 0);
+        const demandPrior = isStockNode
+          ? (nodeData.requiredBase?.[index - 12] ?? nodeData.demand[index - 12] ?? 0)
+          : (nodeData.demand[index - 12] ?? 0);
         return demandPrior > 0 ? (demandNow / demandPrior) - 1 : null;
       });
 
