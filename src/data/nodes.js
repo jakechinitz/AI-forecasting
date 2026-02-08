@@ -1056,7 +1056,7 @@ const NODES_BASE = [
 
     demandDriverType: 'derived',
     inputIntensity: 0.0013,  // kwPerGpu(1.0) * pue(1.3) / 1000 = MW per GPU
-    parentNodeIds: ['gpu_datacenter', 'gpu_inference', 'grid_interconnect'],
+    parentNodeIds: ['gpu_datacenter', 'gpu_inference', 'grid_interconnect', 'off_grid_power'],
 
     startingCapacity: 1500,     // ~1.5 GW/month of new AI DC power coming online
     committedExpansions: [
@@ -1072,7 +1072,8 @@ const NODES_BASE = [
     elasticityMid: 0.3,
     elasticityLong: 0.7,
 
-    substitutabilityScore: 0.2,
+    // High substitutability: grid power and off-grid power are interchangeable MW
+    substitutabilityScore: 0.9,
     supplierConcentration: 2,
 
     contractingRegime: 'LTAs',
@@ -1374,6 +1375,60 @@ const NODES_BASE = [
       confidence: 'low',
       source: 'Staffing proxy; do not gate GPUs directly until infra chain is wired',
       historicalRange: [20000, 120000]
+    }
+  },
+
+  // Off-grid / behind-the-meter generation: gas turbines, solar+storage, SMRs.
+  // Represents the Epoch AI thesis that datacenter power can bypass utility grid
+  // queues entirely by co-locating generation. These are manufactured goods
+  // (turbines, panels, battery modules) that scale like factories, not civil works.
+  {
+    id: 'off_grid_power',
+    name: 'Off-Grid Power Stack (Gas/Solar/SMR)',
+    group: 'I',
+    unit: 'MW/month',
+    description: 'Behind-the-meter generation: gas turbines (18mo), solar+storage (12-18mo), SMRs (36-60mo). Bypasses grid interconnect queue.',
+
+    demandDriverType: 'derived',
+    inputIntensity: 0.0013,
+    parentNodeIds: ['datacenter_mw'],
+
+    startingCapacity: 1000,
+    committedExpansions: [
+      { date: '2026-06', capacityAdd: 500, type: 'committed', source: 'Announced behind-the-meter gas projects (Microsoft/Constellation, Amazon/Talen)' },
+      { date: '2027-01', capacityAdd: 1000, type: 'optional', source: 'Pipeline of solar+storage co-location projects' }
+    ],
+    leadTimeDebottleneck: 12,
+    leadTimeNewBuild: 24,
+    rampProfile: 's-curve',
+
+    elasticityShort: 0.5,
+    elasticityMid: 1.2,
+    elasticityLong: 2.0,
+
+    substitutabilityScore: 0.9,
+    supplierConcentration: 1,
+
+    contractingRegime: 'LTAs',
+    inventoryBufferTarget: 0,
+    maxCapacityUtilization: 0.90,
+
+    // Parallelism constraint: turbine/panel manufacturing + EPC crew availability.
+    // Gas turbines are factory-built (GE/Siemens can ramp production lines).
+    // Solar panels are commodity. Main bottleneck is EPC labor for installation.
+    maxAnnualExpansion: 0.50,
+
+    yieldModel: 'simple',
+    yieldSimpleLoss: 0.05,
+
+    geoRiskFlag: false,
+    exportControlSensitivity: 'low',
+
+    baseRate: {
+      value: 1000,
+      confidence: 'medium',
+      source: 'Epoch AI analysis; behind-the-meter gas/solar/SMR pipeline estimates. Gas turbines deploy in <2yr.',
+      historicalRange: [200, 3000]
     }
   }
 ];

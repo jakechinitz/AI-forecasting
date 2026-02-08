@@ -67,7 +67,8 @@ const THROUGHPUT_NODES = new Set([
   'hybrid_bonding',
   'liquid_cooling',
   'dc_construction',
-  'euv_tools'
+  'euv_tools',
+  'off_grid_power'
 ]);
 
 const QUEUE_NODES = new Set([
@@ -97,6 +98,7 @@ const SUPPLY_CATEGORY_MAP = {
   rack_pdu: 'datacenter',
   liquid_cooling: 'datacenter',
   grid_interconnect: 'power',
+  off_grid_power: 'power',
   transformers_lpt: 'power',
   power_generation: 'power',
   backup_power: 'power',
@@ -107,6 +109,17 @@ const SUPPLY_CATEGORY_MAP = {
   switch_asics: 'foundry',
   optical_transceivers: 'datacenter',
   infiniband_cables: 'datacenter'
+};
+
+/**
+ * Substitution pools: nodes mapped to the same pool have their potentials
+ * summed in the gating step. This models interchangeable supply sources
+ * (e.g., grid MW and off-grid MW both deliver watts to datacenters).
+ * Nodes NOT in this map are gated independently as before.
+ */
+const SUBSTITUTION_POOLS = {
+  grid_interconnect: 'mw_delivery',
+  off_grid_power: 'mw_delivery'
 };
 
 const EXPECTED_UNITS = {
@@ -540,6 +553,7 @@ function buildIntensityMap() {
   map['server_assembly'] = 1 / Math.max(gpusPerServer, 1);
 
   map['grid_interconnect'] = mwPerGpu;
+  map['off_grid_power'] = mwPerGpu;
 
   // Infrastructure nodes: propagate demand through datacenter MW chain
   const powerChain = TRANSLATION_INTENSITIES?.powerChain || {};
@@ -896,13 +910,27 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     let maxSupported = Infinity;
     let constraintCount = 0;
 
+    // Substitution pooling: nodes that deliver the same resource (e.g., MW to
+    // datacenters) have their potentials summed before gating. This lets
+    // off-grid power absorb demand when the grid interconnect queue is full.
+    const pooledPotentials = {};
     for (const [nodeId, intensity] of Object.entries(nodeIntensityMap)) {
       const potential = potentials[nodeId];
-      if (potential !== undefined && intensity > 0) {
+      if (potential === undefined || intensity <= 0) continue;
+      const pool = SUBSTITUTION_POOLS[nodeId];
+      if (pool) {
+        if (!pooledPotentials[pool]) pooledPotentials[pool] = { potential: 0, intensity };
+        pooledPotentials[pool].potential += potential;
+      } else {
         const supported = potential / intensity;
         if (supported < maxSupported) maxSupported = supported;
         constraintCount++;
       }
+    }
+    for (const { potential, intensity } of Object.values(pooledPotentials)) {
+      const supported = potential / intensity;
+      if (supported < maxSupported) maxSupported = supported;
+      constraintCount++;
     }
 
     if (constraintCount === 0 && (month === 0 || month % 12 === 0)) {
