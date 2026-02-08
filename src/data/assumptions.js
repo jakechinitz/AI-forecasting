@@ -456,6 +456,9 @@ export const EFFICIENCY_ASSUMPTIONS_BASE = buildEfficiencyBlocks();
 // SUPPLY ASSUMPTIONS
 // ============================================
 
+// Base expansion rates represent the physical maximum the supply chain can expand
+// at when demand fully justifies it. Actual growth is demand-driven via tightness
+// elasticity in the simulation engine — these are ceilings, not schedules.
 const SUPPLY_TEMPLATE_YEAR1 = {
   label: SEGMENT_LABELS.year1,
   expansionRates: {
@@ -473,48 +476,10 @@ const buildSupplyBlocks = () => {
     blocks[seg.key] = applyBlockLabel(cloneBlock(SUPPLY_TEMPLATE_YEAR1), seg.key, false);
   });
 
-  // Supply expansion decelerates as base grows but capex remains massive
-  blocks.year2.expansionRates.packaging.value = 0.45;
-  blocks.year2.expansionRates.foundry.value = 0.22;
-  blocks.year2.expansionRates.memory.value = 0.35;
-  blocks.year2.expansionRates.datacenter.value = 0.22;
-  blocks.year2.expansionRates.power.value = 0.10;
-
-  blocks.year3.expansionRates.packaging.value = 0.40;
-  blocks.year3.expansionRates.foundry.value = 0.20;
-  blocks.year3.expansionRates.memory.value = 0.32;
-  blocks.year3.expansionRates.datacenter.value = 0.22;
-  blocks.year3.expansionRates.power.value = 0.10;
-
-  blocks.year4.expansionRates.packaging.value = 0.35;
-  blocks.year4.expansionRates.foundry.value = 0.18;
-  blocks.year4.expansionRates.memory.value = 0.28;
-  blocks.year4.expansionRates.datacenter.value = 0.20;
-  blocks.year4.expansionRates.power.value = 0.10;
-
-  blocks.year5.expansionRates.packaging.value = 0.30;
-  blocks.year5.expansionRates.foundry.value = 0.15;
-  blocks.year5.expansionRates.memory.value = 0.25;
-  blocks.year5.expansionRates.datacenter.value = 0.18;
-  blocks.year5.expansionRates.power.value = 0.10;
-
-  blocks.years6_10.expansionRates.packaging.value = 0.22;
-  blocks.years6_10.expansionRates.foundry.value = 0.12;
-  blocks.years6_10.expansionRates.memory.value = 0.20;
-  blocks.years6_10.expansionRates.datacenter.value = 0.15;
-  blocks.years6_10.expansionRates.power.value = 0.10;
-
-  blocks.years11_15.expansionRates.packaging.value = 0.15;
-  blocks.years11_15.expansionRates.foundry.value = 0.08;
-  blocks.years11_15.expansionRates.memory.value = 0.14;
-  blocks.years11_15.expansionRates.datacenter.value = 0.12;
-  blocks.years11_15.expansionRates.power.value = 0.08;
-
-  blocks.years16_20.expansionRates.packaging.value = 0.10;
-  blocks.years16_20.expansionRates.foundry.value = 0.06;
-  blocks.years16_20.expansionRates.memory.value = 0.10;
-  blocks.years16_20.expansionRates.datacenter.value = 0.08;
-  blocks.years16_20.expansionRates.power.value = 0.06;
+  // All periods inherit the Year 1 physical-maximum rates.
+  // Actual expansion is demand-driven: the simulation engine scales growth
+  // by supply-demand tightness × node elasticity, so these rates act as
+  // base inputs to the demand-pull formula rather than a fixed schedule.
 
   return blocks;
 };
