@@ -684,16 +684,17 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const defaultInfInstalled = 1500000;
 
   // Default starting backlogs for base case: reflects current massive shortage
-  // GPU backlog ~2M units, components scaled by their per-GPU intensity
+  // NVIDIA 6-12 month wait lists; every hyperscaler capacity-constrained
+  // GPU backlog ~4M units, components scaled by their per-GPU intensity
   const DEFAULT_STARTING_BACKLOGS = {
-    gpu_datacenter: 2000000,
-    hbm_stacks: 16000000,    // 8 stacks/GPU * 2M
-    cowos_capacity: 600000,   // 0.3 wafer-equiv/GPU * 2M
-    advanced_wafers: 600000,  // 0.3 wafers/GPU * 2M
-    dram_server: 256000000,   // 128 GB/GPU * 2M
-    ssd_datacenter: 4000000,  // 2 TB/GPU * 2M
-    server_assembly: 250000,  // (1/8 server/GPU) * 2M
-    datacenter_mw: 2600       // 0.0013 MW/GPU * 2M
+    gpu_datacenter: 4000000,
+    hbm_stacks: 32000000,    // 8 stacks/GPU * 4M
+    cowos_capacity: 1200000,  // 0.3 wafer-equiv/GPU * 4M
+    advanced_wafers: 1200000, // 0.3 wafers/GPU * 4M
+    dram_server: 512000000,   // 128 GB/GPU * 4M
+    ssd_datacenter: 8000000,  // 2 TB/GPU * 4M
+    server_assembly: 500000,  // (1/8 server/GPU) * 4M
+    datacenter_mw: 5200       // 0.0013 MW/GPU * 4M
   };
 
   const dcInstalledOverride = startOverrides.datacenterInstalledBase ?? startOverrides.installedBaseDatacenter ?? startOverrides.installedBase;
@@ -731,7 +732,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // --- calibration ---
   const calibrationCfg = {
     enabled: scenarioOverrides?.calibration?.enabled ?? true,
-    targetRatio: scenarioOverrides?.calibration?.targetRatio ?? 1.15,
+    targetRatio: scenarioOverrides?.calibration?.targetRatio ?? 1.50,
     minScale: scenarioOverrides?.calibration?.minScale ?? 0.02,
     maxScale: scenarioOverrides?.calibration?.maxScale ?? 50
   };
