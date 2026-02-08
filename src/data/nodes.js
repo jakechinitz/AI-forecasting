@@ -1085,6 +1085,11 @@ const NODES_BASE = [
     geoRiskFlag: true,
     exportControlSensitivity: 'low',
 
+    // Parallelism constraint: construction labor + grid interconnection queue.
+    // Hyperscalers can spend unlimited capital but cannot hire unlimited electricians
+    // or accelerate utility permitting. Historical DC capacity grew ~25-30%/yr peak.
+    maxAnnualExpansion: 0.30,
+
     baseRate: {
       value: 1500,
       confidence: 'medium',
@@ -1131,6 +1136,10 @@ const NODES_BASE = [
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
 
+    // Parallelism constraint: regulatory permitting throughput, not capital.
+    // Utility commissions process a finite number of interconnection studies per year.
+    maxAnnualExpansion: 0.10,
+
     baseRate: {
       value: 2500,
       confidence: 'medium',
@@ -1176,6 +1185,10 @@ const NODES_BASE = [
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
 
+    // Parallelism constraint: ~3,500 skilled LPT winding technicians globally;
+    // training pipeline adds ~5-8% workforce/yr. Capital is not the bottleneck.
+    maxAnnualExpansion: 0.15,
+
     baseRate: {
       value: 250,
       confidence: 'medium',
@@ -1219,6 +1232,10 @@ const NODES_BASE = [
 
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
+
+    // Parallelism constraint: permitting + environmental review for new generation
+    // sites. Labor can be hired; regulatory throughput cannot.
+    maxAnnualExpansion: 0.25,
 
     baseRate: {
       value: 8000,
@@ -1305,6 +1322,10 @@ const NODES_BASE = [
 
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
+
+    // Parallelism constraint: skilled electrical/mechanical trades labor pool.
+    // Apprenticeship pipeline grows ~5%/yr; poaching from other sectors adds ~3%.
+    maxAnnualExpansion: 0.08,
 
     baseRate: {
       value: 5000000,
