@@ -739,23 +739,21 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
   let demandScale = scenarioOverrides?.calibration?.demandScale ?? null;
 
-  // Helper: compound organic growth for a node (call when tightness > 1)
-  const compoundOrganicGrowth = (nodeId, month) => {
+  // Helper: compound organic growth for a node, scaled by demand pressure (tightness)
+  const compoundOrganicGrowth = (nodeId, month, tightness) => {
     const cat = SUPPLY_CATEGORY_MAP[nodeId];
     if (!cat) return;
     const blockKey = getBlockKeyForMonth(month);
     const block = supplyAssumptions?.[blockKey];
-    const annualRate = resolveAssumptionValue(block?.expansionRates?.[cat]?.value, 0);
-    runningSupplyMult[nodeId] *= Math.pow(1 + annualRate, 1 / 12);
-  };
+    const baseRate = resolveAssumptionValue(block?.expansionRates?.[cat]?.value, 0.15);
 
-  // Helper: get the supply expansion rate for a node's category at a given month
-  const getExpansionRate = (nodeId, month) => {
-    const cat = SUPPLY_CATEGORY_MAP[nodeId];
-    if (!cat) return 0.15; // fallback for unmapped nodes
-    const blockKey = getBlockKeyForMonth(month);
-    const block = supplyAssumptions?.[blockKey];
-    return resolveAssumptionValue(block?.expansionRates?.[cat]?.value, 0.15);
+    // Scale growth by how severe the shortage is, using the node's long-run elasticity
+    const node = NODE_MAP.get(nodeId);
+    const elasticity = node?.elasticityLong || 0.5;
+    const shortageMagnitude = Math.max(0, tightness - 1.0);
+    const dynamicRate = baseRate + (shortageMagnitude * elasticity * 2.0);
+
+    runningSupplyMult[nodeId] *= Math.pow(1 + dynamicRate, 1 / 12);
   };
 
   for (let month = 0; month < months; month++) {
@@ -1060,7 +1058,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       state.tightnessHistory.push(tightness);
 
       // Organic growth: only compound when demand exceeds supply for this node
-      if (tightness > 1.0) compoundOrganicGrowth(node.id, month);
+      if (tightness > 1.0) compoundOrganicGrowth(node.id, month, tightness);
 
       const compLeadTime = node.leadTimeDebottleneck || 12;
       const compCooldown = Math.max(Math.floor(compLeadTime / 2), 6);
@@ -1074,9 +1072,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
         if (forecastDemand > futureEffCap) {
           const gap = forecastDemand - futureEffCap;
-          // Cap expansion by supply category's annual expansion rate
-          const expRate = getExpansionRate(node.id, month);
-          const maxDynamic = cap * Math.min(expRate, 0.50);
+          // Dynamic expansion scaled by demand gap, bounded by physical lead-time constraints
+          const maxDynamic = cap * 1.0;
           const expansionAmount = Math.min(gap * 0.5, maxDynamic);
           state.dynamicExpansions.push({
             month: month + compLeadTime,
