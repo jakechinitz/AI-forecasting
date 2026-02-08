@@ -740,10 +740,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   let demandScale = scenarioOverrides?.calibration?.demandScale ?? null;
 
   // Helper: compound organic growth for a node, scaled by demand pressure (tightness).
-  // Growth is demand-driven but capped by a physics ceiling derived from the node's
-  // leadTimeNewBuild — you cannot pour concrete faster than concrete sets.
-  // The ceiling is self-maintaining: add a new node with realistic lead times and the
-  // governor automatically applies without touching assumptions or this function.
+  // Growth is demand-driven (shortage × elasticity) and uncapped by default.
+  // Nodes with real parallelism bottlenecks (labor, permitting, materials) define
+  // maxAnnualExpansion to encode the actual constraint. Lead time only governs
+  // *when* new capacity arrives, not *how much* can be started in parallel.
   const compoundOrganicGrowth = (nodeId, month, tightness) => {
     const cat = SUPPLY_CATEGORY_MAP[nodeId];
     if (!cat) return;
@@ -757,17 +757,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const shortageMagnitude = Math.max(0, tightness - 1.0);
     const dynamicRate = baseRate + (shortageMagnitude * elasticity * 2.0);
 
-    // Physics governor: cap annual growth rate based on how long it actually takes
-    // to build new capacity. Derived from leadTimeNewBuild so this never needs
-    // manual updating — the constraint lives on the node, not in assumptions.
-    //   leadTimeNewBuild 18mo (GPUs/silicon)   → ~56% annual cap
-    //   leadTimeNewBuild 36mo (fabs/power gen)  → ~33% annual cap
-    //   leadTimeNewBuild 48mo (data centers)    → ~25% annual cap
-    //   leadTimeNewBuild 60mo (grid/transformers)→ ~20% annual cap
-    // Node-level maxAnnualExpansion overrides this if defined.
-    const leadTime = node?.leadTimeNewBuild || 24;
-    const physicsMaxAnnual = node?.maxAnnualExpansion ?? (12 / leadTime);
-    const cappedRate = Math.min(dynamicRate, physicsMaxAnnual);
+    // Cap only if node defines an explicit parallelism constraint
+    // (e.g., maxAnnualExpansion: 0.15 for transformers due to skilled labor limits)
+    const cappedRate = node?.maxAnnualExpansion != null
+      ? Math.min(dynamicRate, node.maxAnnualExpansion)
+      : dynamicRate;
 
     runningSupplyMult[nodeId] *= Math.pow(1 + cappedRate, 1 / 12);
   };
@@ -1088,11 +1082,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
         if (forecastDemand > futureEffCap) {
           const gap = forecastDemand - futureEffCap;
-          // Dynamic expansion bounded by physics: monthly slice of the node's
-          // annual build-rate ceiling (derived from leadTimeNewBuild)
-          const ltNB = node.leadTimeNewBuild || 24;
-          const annualCeil = node.maxAnnualExpansion ?? (12 / ltNB);
-          const maxDynamic = cap * (annualCeil / 12);
+          // Dynamic expansion: uncapped unless node defines a parallelism limit
+          const maxDynamic = node.maxAnnualExpansion != null
+            ? cap * (node.maxAnnualExpansion / 12)
+            : cap * 1.0;
           const expansionAmount = Math.min(gap * 0.5, maxDynamic);
           state.dynamicExpansions.push({
             month: month + compLeadTime,
