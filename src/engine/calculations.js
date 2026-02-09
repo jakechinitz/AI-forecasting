@@ -480,12 +480,14 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   );
 
   // Efficiency gain: M decays (models get cheaper → more tok/s), S and H grow throughput.
-  // Cap the compound gain to prevent unrealistic efficiency from collapsing GPU demand
-  // to zero in later decades. Even with perfect software, hardware has thermodynamic
-  // and memory-bandwidth floors. 100x over baseline is roughly 7 hardware generations
-  // of 2x improvement each — an aggressive but physically plausible ceiling.
+  // Thermodynamic floor: no matter how clever the algorithm or how optimized the silicon,
+  // inference cannot go below ~6W per operation (5× more efficient than the human brain
+  // at ~30W). Current GPU-class accelerators draw ~700W, so the maximum compound
+  // efficiency gain across all axes is bounded by 700W / 6W ≈ 117×.
   const rawEfficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference * eff.H;
-  const MAX_EFFICIENCY_GAIN = 100;
+  const CURRENT_GPU_WATTS = 700;
+  const THERMODYNAMIC_FLOOR_WATTS = 6;
+  const MAX_EFFICIENCY_GAIN = CURRENT_GPU_WATTS / THERMODYNAMIC_FLOOR_WATTS;
   const efficiencyGain = Math.min(rawEfficiencyGain, MAX_EFFICIENCY_GAIN);
 
   // Per-segment GPU demand (with demandScale applied to token volumes)
