@@ -479,8 +479,14 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
     PHYSICS_DEFAULTS.effectiveTokensPerSecPerGpu.agentic
   );
 
-  // Efficiency gain: M decays (models get cheaper → more tok/s), S and H grow throughput
-  const efficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference * eff.H;
+  // Efficiency gain: M decays (models get cheaper → more tok/s), S and H grow throughput.
+  // Cap the compound gain to prevent unrealistic efficiency from collapsing GPU demand
+  // to zero in later decades. Even with perfect software, hardware has thermodynamic
+  // and memory-bandwidth floors. 100x over baseline is roughly 7 hardware generations
+  // of 2x improvement each — an aggressive but physically plausible ceiling.
+  const rawEfficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference * eff.H;
+  const MAX_EFFICIENCY_GAIN = 100;
+  const efficiencyGain = Math.min(rawEfficiencyGain, MAX_EFFICIENCY_GAIN);
 
   // Per-segment GPU demand (with demandScale applied to token volumes)
   const consumerTokens = (inferenceDemand.consumer || 0) * demandScale;
@@ -507,7 +513,11 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
 
   const totalTrainingHours = (frontierRuns * hoursFrontier) + (midtierRuns * hoursMidtier);
   const denomTraining = hoursPerMonth * utilTrn * eff.S_training * eff.H;
-  const requiredTraining = (totalTrainingHours * eff.M_training) / Math.max(denomTraining, EPSILON);
+  // Cap training efficiency the same way: M_training decays (numerator) while S*H grows
+  // (denominator), so the effective reduction factor = M / (S*H). Floor it at 1/MAX.
+  const rawTrainingFactor = eff.M_training / Math.max(denomTraining, EPSILON);
+  const minTrainingFactor = 1 / (hoursPerMonth * utilTrn * MAX_EFFICIENCY_GAIN);
+  const requiredTraining = totalTrainingHours * Math.max(rawTrainingFactor, minTrainingFactor);
 
   return {
     requiredTotal: requiredInference + requiredTraining,
