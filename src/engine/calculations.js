@@ -113,11 +113,15 @@ const SUPPLY_CATEGORY_MAP = {
 
 /**
  * Substitution pools: nodes mapped to the same pool have their potentials
- * summed in the gating step. This models interchangeable supply sources
- * (e.g., grid MW and off-grid MW both deliver watts to datacenters).
- * Nodes NOT in this map are gated independently as before.
+ * summed in the gating step. This models interchangeable supply sources.
+ *
+ * mw_delivery: All three nodes deliver MW to run GPUs through different paths.
+ * datacenter_mw = grid-connected DC capacity, grid_interconnect = utility hookup
+ * approvals, off_grid_power = behind-the-meter generation. A GPU needs MW from
+ * ANY of these paths, not all three independently.
  */
 const SUBSTITUTION_POOLS = {
+  datacenter_mw: 'mw_delivery',
   grid_interconnect: 'mw_delivery',
   off_grid_power: 'mw_delivery'
 };
