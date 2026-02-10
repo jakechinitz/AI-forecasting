@@ -338,8 +338,10 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
       const sInference = block?.systemsEfficiency?.s_inference?.value ?? 0;
       const sTraining = block?.systemsEfficiency?.s_training?.value ?? 0;
       const h = block?.hardwareEfficiency?.h?.value ?? 0;
+      const hMem = block?.hardwareEfficiency?.h_memory?.value ?? 0;
 
-      const inferenceFactor = (1 - mInference) / ((1 + sInference) * (1 + h));
+      // Inference is memory-bandwidth-bound: H_memory contributes alongside H
+      const inferenceFactor = (1 - mInference) / ((1 + sInference) * (1 + h) * (1 + hMem));
       const trainingFactor = (1 - mTraining) / ((1 + sTraining) * (1 + h));
 
       const inferenceGain = 1 / inferenceFactor;
