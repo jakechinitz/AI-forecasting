@@ -29,14 +29,6 @@ const TABLE_DEFS = {
       { path: ['trainingGrowth', 'midtier'], label: 'Mid-tier Runs', suffix: '%/yr' }
     ]
   },
-  'cont-learning': {
-    category: 'demand',
-    columns: [
-      { path: ['continualLearning', 'computeGrowth'], label: 'Compute', suffix: '%/yr' },
-      { path: ['continualLearning', 'dataStorageGrowth'], label: 'Data Storage', suffix: '%/yr' },
-      { path: ['continualLearning', 'networkBandwidthGrowth'], label: 'Network BW', suffix: '%/yr' }
-    ]
-  },
   'model-eff': {
     category: 'efficiency',
     columns: [
@@ -678,11 +670,6 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
           <div className="section">
             <h4 className="section-title">Training Demand</h4>
             {renderEditableTable('train-demand')}
-          </div>
-
-          <div className="section">
-            <h4 className="section-title">Continual Learning</h4>
-            {renderEditableTable('cont-learning')}
           </div>
 
           {/* ── Implied Human-Equivalent AIs ── */}

@@ -213,11 +213,6 @@ const WORKLOAD_BASE_DEFAULT = {
   trainingComputePerRun: {
     frontier: 50e6,       // ~70K GPUs for 1 month (100K GPU cluster at 70% utilization)
     midtier: 200000       // ~280 GPUs for 1 month
-  },
-  continualLearningBase: {
-    accelHoursPerMonth: 300000,   // doubled from prior — more continual training
-    dataTB: 3000,
-    networkGbps: 500
   }
 };
 
@@ -242,6 +237,10 @@ const DEMAND_TEMPLATE_YEAR1 = {
     midtier: { value: 4.00, confidence: 'low', source: 'Enterprise fine-tuning explosion; 31% reaching production; RLHF ubiquitous', historicalRange: [2.00, 8.00] }
   },
 
+  allocation: {
+    dcInferenceShare: { value: 0.60, confidence: 'medium', source: 'Inference ~60% of datacenter GPU fleet; training clusters concentrated at frontier labs' }
+  },
+
   contextLength: {
     averageTokens: 4000,
     growthRate: 0.30,
@@ -256,14 +255,6 @@ const DEMAND_TEMPLATE_YEAR1 = {
     historicalRange: [0.25, 0.60]
   },
 
-  continualLearning: {
-    computeGrowth: { value: 0.60, confidence: 'medium', source: 'Enterprise fine-tuning adoption' },
-    dataStorageGrowth: { value: 0.50, confidence: 'medium', source: 'RAG + checkpoint growth' },
-    networkBandwidthGrowth: { value: 0.45, confidence: 'medium', source: 'Distributed training + data movement' },
-
-    adoptionRateBy2030: { value: 0.90, confidence: 'medium', source: 'Fine-tuning ubiquity by 2030' },
-    memoryMultiplierAtFullAdoption: { value: 1.6, confidence: 'medium', source: 'Larger working sets + HBM pressure' }
-  }
 };
 
 /**
@@ -320,10 +311,6 @@ const buildDemandBlocks = () => {
   blocks.years6_10.contextLength.averageTokens = 32000;
   blocks.years6_10.contextLength.growthRate = 0.25;
   blocks.years6_10.intensityGrowth.value = 0.25;
-  blocks.years6_10.continualLearning.computeGrowth.value = 0.40;
-  blocks.years6_10.continualLearning.dataStorageGrowth.value = 0.35;
-  blocks.years6_10.continualLearning.networkBandwidthGrowth.value = 0.30;
-
   // Years 11-15
   blocks.years11_15.inferenceGrowth.consumer.value = 0.12;
   blocks.years11_15.inferenceGrowth.enterprise.value = 0.18;
@@ -333,9 +320,6 @@ const buildDemandBlocks = () => {
   blocks.years11_15.contextLength.averageTokens = 64000;
   blocks.years11_15.contextLength.growthRate = 0.12;
   blocks.years11_15.intensityGrowth.value = 0.15;
-  blocks.years11_15.continualLearning.computeGrowth.value = 0.25;
-  blocks.years11_15.continualLearning.dataStorageGrowth.value = 0.25;
-  blocks.years11_15.continualLearning.networkBandwidthGrowth.value = 0.20;
 
   // Years 16-20
   blocks.years16_20.inferenceGrowth.consumer.value = 0.08;
@@ -346,9 +330,6 @@ const buildDemandBlocks = () => {
   blocks.years16_20.contextLength.averageTokens = 128000;
   blocks.years16_20.contextLength.growthRate = 0.05;
   blocks.years16_20.intensityGrowth.value = 0.10;
-  blocks.years16_20.continualLearning.computeGrowth.value = 0.15;
-  blocks.years16_20.continualLearning.dataStorageGrowth.value = 0.15;
-  blocks.years16_20.continualLearning.networkBandwidthGrowth.value = 0.12;
 
   return blocks;
 };

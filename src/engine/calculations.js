@@ -233,7 +233,11 @@ function precomputeDemandTrajectories(totalMonths, demandAssumptions) {
     for (let m = 1; m < totalMonths; m++) {
       const block = getDemandBlockForMonth(m, demandAssumptions);
       const annualGrowth = resolveGrowthRate(block?.inferenceGrowth?.[seg], 0);
-      const monthlyFactor = Math.pow(1 + annualGrowth, 1 / 12);
+      // intensityGrowth: reasoning chains, tool use, and agent loops increase
+      // compute per request over time (more tokens per inference call)
+      const intensityAnnual = resolveGrowthRate(block?.intensityGrowth, 0);
+      const monthlyFactor = Math.pow(1 + annualGrowth, 1 / 12)
+        * Math.pow(1 + intensityAnnual, 1 / 12);
       arr[m] = arr[m - 1] * monthlyFactor;
     }
     inference[seg] = arr;
@@ -390,7 +394,7 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
   if (cache[month]) return cache[month];
 
   if (month === 0) {
-    cache[0] = { M_inference: 1, M_training: 1, S_inference: 1, S_training: 1, H: 1 };
+    cache[0] = { M_inference: 1, M_training: 1, S_inference: 1, S_training: 1, H: 1, H_memory: 1 };
     return cache[0];
   }
 
@@ -406,6 +410,7 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
   const sTrnAnnual = resolveGrowthRate(block?.systemsEfficiency?.s_training, 0.08);
 
   const hAnnual = resolveGrowthRate(block?.hardwareEfficiency?.h, 0.15);
+  const hMemAnnual = resolveGrowthRate(block?.hardwareEfficiency?.h_memory, 0.10);
 
   const decayInf = Math.pow(1 - mInfAnnual, 1 / 12);
   const decayTrn = Math.pow(1 - mTrnAnnual, 1 / 12);
@@ -413,13 +418,15 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
   const growSInf = Math.pow(1 + sInfAnnual, 1 / 12);
   const growSTrn = Math.pow(1 + sTrnAnnual, 1 / 12);
   const growH = Math.pow(1 + hAnnual, 1 / 12);
+  const growHMem = Math.pow(1 + hMemAnnual, 1 / 12);
 
   const cur = {
     M_inference: prev.M_inference * decayInf,
     M_training: prev.M_training * decayTrn,
     S_inference: prev.S_inference * growSInf,
     S_training: prev.S_training * growSTrn,
-    H: prev.H * growH
+    H: prev.H * growH,
+    H_memory: prev.H_memory * growHMem
   };
 
   // Safety: M should not increase (cost multiplier should trend down)
@@ -480,11 +487,13 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   );
 
   // Efficiency gain: M decays (models get cheaper → more tok/s), S and H grow throughput.
+  // H_memory: inference is memory-bandwidth-bound (not compute-bound), so HBM generational
+  // improvements (H_memory) directly increase inference tok/s alongside general H gains.
   // Thermodynamic floor: no matter how clever the algorithm or how optimized the silicon,
   // inference cannot go below ~6W per operation (5× more efficient than the human brain
   // at ~30W). Current GPU-class accelerators draw ~700W, so the maximum compound
   // efficiency gain across all axes is bounded by 700W / 6W ≈ 117×.
-  const rawEfficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference * eff.H;
+  const rawEfficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference * eff.H * eff.H_memory;
   const CURRENT_GPU_WATTS = 700;
   const THERMODYNAMIC_FLOOR_WATTS = 6;
   const MAX_EFFICIENCY_GAIN = CURRENT_GPU_WATTS / THERMODYNAMIC_FLOOR_WATTS;
