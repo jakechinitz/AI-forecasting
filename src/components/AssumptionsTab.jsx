@@ -437,7 +437,10 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
       const totalInstalled = dcInstalled + infInstalled;
       const totalPowerWatts = totalInstalled * WATTS_PER_GPU;
 
-      const wattsPerBrainEquiv = brainEquivalency.perBlock[block.key]?.wattsPerBrainEquiv || BRAIN.startingWattsPerBrainEquiv;
+      // Use capped wattsPerBrainEquiv from brain equivalency, hard-floored at 6W
+      const rawWpbe = brainEquivalency.perBlock[block.key]?.wattsPerBrainEquiv ?? BRAIN.startingWattsPerBrainEquiv;
+      const wattsPerBrainEquiv = Math.max(rawWpbe, BRAIN.minWattsPerBrainEquiv);
+      const atEfficiencyLimit = brainEquivalency.perBlock[block.key]?.atAsymptote || false;
       const brainEquivs = totalPowerWatts / wattsPerBrainEquiv;
       const aisPerHuman = brainEquivs / WORLD_POPULATION;
 
@@ -445,6 +448,8 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
         key: block.key,
         totalInstalledGPUs: totalInstalled,
         totalPowerGW: totalPowerWatts / 1e9,
+        wattsPerBrainEquiv,
+        atEfficiencyLimit,
         brainEquivs,
         aisPerHuman
       };
@@ -696,6 +701,10 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                         <div className="assumptions-col-title">Power (GW)</div>
                       </th>
                       <th className="assumptions-header-cell">
+                        <div className="assumptions-col-title">W/Brain-Equiv</div>
+                        <div className="assumptions-col-years">floor {BRAIN.minWattsPerBrainEquiv}W</div>
+                      </th>
+                      <th className="assumptions-header-cell">
                         <div className="assumptions-col-title">Brain Equivalents</div>
                       </th>
                       <th className="assumptions-header-cell">
@@ -716,6 +725,14 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                         </td>
                         <td className="assumptions-input-cell">
                           <span className="assumptions-metric">{row.totalPowerGW.toFixed(1)}</span>
+                        </td>
+                        <td className="assumptions-input-cell">
+                          <span className={`assumptions-metric${row.atEfficiencyLimit ? ' asymptote-label' : ''}`}>
+                            {row.wattsPerBrainEquiv >= 1000
+                              ? (row.wattsPerBrainEquiv / 1000).toFixed(1) + ' kW'
+                              : row.wattsPerBrainEquiv.toFixed(0) + ' W'}
+                            {row.atEfficiencyLimit ? ' (LIMIT)' : ''}
+                          </span>
                         </td>
                         <td className="assumptions-input-cell">
                           <span className="assumptions-metric">{formatNumber(row.brainEquivs)}</span>
