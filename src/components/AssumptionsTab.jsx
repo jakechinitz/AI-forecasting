@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import { ASSUMPTION_SEGMENTS, GLOBAL_PARAMS, TRANSLATION_INTENSITIES } from '../data/assumptions.js';
-import { formatNumber } from '../engine/calculations.js';
+import { formatNumber, MAX_EFFICIENCY_GAIN } from '../engine/calculations.js';
 
 /* ── Brain equivalency constants ── */
 const BRAIN = GLOBAL_PARAMS.brainEquivalency;
@@ -373,10 +373,12 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     const startingWatts = BRAIN.startingWattsPerBrainEquiv;
     const brainWatts = BRAIN.humanBrainWatts;
 
-    // Cap: AI can be at most 5× more efficient than the human brain (30W).
-    // At 5× efficiency → 6W per brain-equiv. maxCumulativeGain = 10000 / 6 ≈ 1667×.
+    // Cap cumulative efficiency gain at the same physical limit used for GPU demand:
+    // current GPU watts (700W) / thermodynamic floor (6W) ≈ 117×. This ensures brain
+    // equivalency stops improving once GPU-level efficiency is maxed out, so only
+    // demand (more GPUs / power) can increase brain equivalents beyond that point.
     const minWatts = BRAIN.minWattsPerBrainEquiv;
-    const maxCumulativeGain = startingWatts / minWatts;
+    const maxCumulativeGain = MAX_EFFICIENCY_GAIN;
 
     let cumulativeGain = 1.0;
     let asymptoteReached = false;
