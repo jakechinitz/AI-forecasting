@@ -461,8 +461,8 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
   const isRowPastAsymptote = useCallback((rowIdx) => {
     const { firstAsymptoteIdx } = brainEquivalency;
     if (firstAsymptoteIdx === -1) return false;
-    // Grey out rows AFTER the one that hit the asymptote
-    return rowIdx > firstAsymptoteIdx;
+    // Grey out the row that hit the asymptote and all rows after it
+    return rowIdx >= firstAsymptoteIdx;
   }, [brainEquivalency]);
 
   /* ── Render: table header row ── */
