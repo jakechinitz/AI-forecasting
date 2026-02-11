@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { formatMonth, formatNumber, MAX_EFFICIENCY_GAIN } from '../engine/calculations.js';
+import { formatMonth, formatNumber } from '../engine/calculations.js';
 import { GLOBAL_PARAMS, ASSUMPTION_SEGMENTS, TRANSLATION_INTENSITIES, getBlockKeyForMonth } from '../data/assumptions.js';
 
 const BRAIN = GLOBAL_PARAMS.brainEquivalency;
@@ -22,11 +22,9 @@ function computeBrainEquivAtMonth(month, efficiencyAssumptions) {
 
   // Compute cumulative efficiency gain month-by-month
   let cumGain = 1.0;
-  // Cap cumulative efficiency gain at the same physical limit used for GPU demand:
-  // current GPU watts (700W) / thermodynamic floor (6W) ≈ 117×. This ensures brain
-  // equivalency stops improving once GPU-level efficiency is maxed out, so only
-  // demand (more GPUs / power) can increase brain equivalents beyond that point.
-  const maxGain = MAX_EFFICIENCY_GAIN;
+  // Cap: AI can be at most maxEfficiencyVsBrain× more efficient than the human brain.
+  // At 5× efficiency, AI does brain-equivalent work at 30W / 5 = 6W.
+  const maxGain = BRAIN.startingWattsPerBrainEquiv / BRAIN.minWattsPerBrainEquiv;
 
   for (let m = 1; m <= month; m++) {
     if (cumGain >= maxGain) break;
