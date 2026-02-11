@@ -150,13 +150,25 @@ function getNodeType(nodeId) {
 
 const EPSILON = 1e-10;
 
-// Thermodynamic efficiency ceiling: shared across simulation engine and brain equivalency.
-// No matter how clever the algorithm or optimized the silicon, inference cannot go below
-// ~6W per operation (5× more efficient than the human brain at ~30W). Current GPU-class
-// accelerators draw ~700W, so max compound efficiency gain is bounded by 700W / 6W ≈ 117×.
+// Efficiency ceiling (soft knee): gains below the knee are linear; above, logarithmic
+// diminishing returns. The knee is set by the ratio of current GPU power to a practical
+// floor (~3W = 10× more efficient than the human brain at 30W). Beyond the knee,
+// improvements continue but at a dramatically slower pace — reflecting engineering
+// diminishing returns rather than a hard thermodynamic wall.
 export const CURRENT_GPU_WATTS = 700;
-export const THERMODYNAMIC_FLOOR_WATTS = 6;
-export const MAX_EFFICIENCY_GAIN = CURRENT_GPU_WATTS / THERMODYNAMIC_FLOOR_WATTS;
+export const THERMODYNAMIC_FLOOR_WATTS = 3;
+export const MAX_EFFICIENCY_GAIN = CURRENT_GPU_WATTS / THERMODYNAMIC_FLOOR_WATTS;  // ~233×
+
+/**
+ * Soft asymptotic efficiency cap with diminishing returns above the knee.
+ * Below the knee: gain = raw (linear, unchanged).
+ * Above the knee: gain = knee × (1 + ln(raw / knee)) — logarithmic.
+ * Continuous at the knee. Always increasing, but dramatically slower above it.
+ */
+export function softEfficiencyCap(raw, knee) {
+  if (raw <= knee) return raw;
+  return knee * (1 + Math.log(raw / knee));
+}
 
 // Planning knobs
 const CATCHUP_MONTHS = 6;
@@ -501,12 +513,11 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   // Efficiency gain: M decays (models get cheaper → more tok/s), S and H grow throughput.
   // H_memory: inference is memory-bandwidth-bound (not compute-bound), so HBM generational
   // improvements (H_memory) directly increase inference tok/s alongside general H gains.
-  // Thermodynamic floor: no matter how clever the algorithm or how optimized the silicon,
-  // inference cannot go below ~6W per operation (5× more efficient than the human brain
-  // at ~30W). Current GPU-class accelerators draw ~700W, so the maximum compound
-  // efficiency gain across all axes is bounded by 700W / 6W ≈ 117×.
+  // Soft efficiency ceiling: below ~233× (700W / 3W), gains are linear. Above the knee,
+  // diminishing returns kick in — improvements continue but at logarithmic pace,
+  // reflecting practical engineering limits rather than a hard thermodynamic wall.
   const rawEfficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference * eff.H * eff.H_memory;
-  const efficiencyGain = Math.min(rawEfficiencyGain, MAX_EFFICIENCY_GAIN);
+  const efficiencyGain = softEfficiencyCap(rawEfficiencyGain, MAX_EFFICIENCY_GAIN);
 
   // Per-segment GPU demand (with demandScale applied to token volumes)
   const consumerTokens = (inferenceDemand.consumer || 0) * demandScale;
@@ -533,11 +544,11 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
 
   const totalTrainingHours = (frontierRuns * hoursFrontier) + (midtierRuns * hoursMidtier);
   const denomTraining = hoursPerMonth * utilTrn * eff.S_training * eff.H;
-  // Cap training efficiency the same way: M_training decays (numerator) while S*H grows
-  // (denominator), so the effective reduction factor = M / (S*H). Floor it at 1/MAX.
-  const rawTrainingFactor = eff.M_training / Math.max(denomTraining, EPSILON);
-  const minTrainingFactor = 1 / (hoursPerMonth * utilTrn * MAX_EFFICIENCY_GAIN);
-  const requiredTraining = totalTrainingHours * Math.max(rawTrainingFactor, minTrainingFactor);
+  // Soft cap training efficiency: compute raw gain = (S*H) / M, apply soft knee,
+  // then convert back to a cost factor. Gains continue past the knee but slow dramatically.
+  const rawTrainingGain = eff.S_training * eff.H / Math.max(eff.M_training, EPSILON);
+  const cappedTrainingGain = softEfficiencyCap(rawTrainingGain, MAX_EFFICIENCY_GAIN);
+  const requiredTraining = totalTrainingHours / (hoursPerMonth * utilTrn * cappedTrainingGain);
 
   return {
     requiredTotal: requiredInference + requiredTraining,

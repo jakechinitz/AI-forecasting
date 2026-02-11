@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import { ASSUMPTION_SEGMENTS, GLOBAL_PARAMS, TRANSLATION_INTENSITIES } from '../data/assumptions.js';
-import { formatNumber } from '../engine/calculations.js';
+import { formatNumber, softEfficiencyCap } from '../engine/calculations.js';
 
 /* ── Brain equivalency constants ── */
 const BRAIN = GLOBAL_PARAMS.brainEquivalency;
@@ -73,7 +73,7 @@ const BRAIN_COLUMNS = [
   { valueKey: 'cumulativeGain', label: 'Cumulative Eff. (x)', format: v => v < 1000 ? v.toFixed(1) + 'x' : (v / 1000).toFixed(1) + 'Kx' },
   { valueKey: 'wattsPerBrainEquiv', label: 'W per Brain-Equiv', format: v => v >= 1000 ? (v / 1000).toFixed(1) + ' kW' : v.toFixed(0) + ' W' },
   { valueKey: 'brainEfficiencyPct', label: '% of Brain Eff.', format: v => v < 1 ? v.toFixed(2) + '%' : v < 100 ? v.toFixed(1) + '%' : v.toFixed(0) + '%', help: `Human brain = ${GLOBAL_PARAMS.brainEquivalency.humanBrainWatts}W` },
-  { valueKey: 'atAsymptote', label: 'Limit?', format: v => v ? 'AT LIMIT' : '\u2014' }
+  { valueKey: 'atAsymptote', label: 'Returns', format: v => v ? 'DIMINISHING' : 'linear' }
 ];
 
 function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSimulating, results }) {
@@ -377,14 +377,15 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     const startingWatts = BRAIN.startingWattsPerBrainEquiv;
     const brainWatts = BRAIN.humanBrainWatts;
 
-    // Cap: AI can be at most 5× more efficient than the human brain (30W).
-    // At 5× efficiency → 6W per brain-equiv. maxCumulativeGain = 10000 / 6 ≈ 1667×.
+    // Knee: gains above this level see logarithmic diminishing returns.
+    // maxCumulativeGain = 10000 / 3 ≈ 3333×. Beyond the knee, improvements
+    // continue but much slower — reflecting practical engineering limits.
     const minWatts = BRAIN.minWattsPerBrainEquiv;
     const maxCumulativeGain = startingWatts / minWatts;
 
-    let cumulativeGain = 1.0;
-    let asymptoteReached = false;
-    let firstAsymptoteIdx = -1;
+    let rawCumulativeGain = 1.0;
+    let pastKnee = false;
+    let firstKneeIdx = -1;
 
     const results = {};
 
@@ -392,33 +393,32 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
       const years = BLOCK_YEARS[idx] || 1;
       const annualGain = efficiencySummary[block.key]?.totalGain || 1;
 
-      if (!asymptoteReached) {
-        // Compound the annual gain over the block's duration
-        const blockGain = Math.pow(annualGain, years);
-        cumulativeGain *= blockGain;
+      // Always compound — gains never stop, just slow down past the knee
+      const blockGain = Math.pow(annualGain, years);
+      rawCumulativeGain *= blockGain;
 
-        // Check if we hit the asymptote
-        if (cumulativeGain >= maxCumulativeGain) {
-          cumulativeGain = maxCumulativeGain;
-          asymptoteReached = true;
-          firstAsymptoteIdx = idx;
-        }
+      // Soft cap: below the knee linear, above logarithmic diminishing returns
+      const effectiveGain = softEfficiencyCap(rawCumulativeGain, maxCumulativeGain);
+
+      if (!pastKnee && rawCumulativeGain >= maxCumulativeGain) {
+        pastKnee = true;
+        firstKneeIdx = idx;
       }
 
-      const wattsPerBrainEquiv = Math.max(startingWatts / cumulativeGain, minWatts);
+      const wattsPerBrainEquiv = Math.max(startingWatts / effectiveGain, minWatts);
       const brainEfficiencyPct = (brainWatts / wattsPerBrainEquiv) * 100;
 
       results[block.key] = {
-        cumulativeGain,
+        cumulativeGain: effectiveGain,
         wattsPerBrainEquiv,
         brainEfficiencyPct,
-        atAsymptote: asymptoteReached
+        atAsymptote: pastKnee
       };
     });
 
     return {
       perBlock: results,
-      firstAsymptoteIdx
+      firstAsymptoteIdx: firstKneeIdx
     };
   }, [efficiencySummary, timeBlocks]);
 
@@ -500,14 +500,13 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     });
   }, [impliedAIs, results]);
 
-  /* ── Check if a row is past the asymptote (for greying out efficiency cells) ── */
+  /* ── Check if a row is past the efficiency knee (diminishing returns) ── */
 
   const isRowPastAsymptote = useCallback((rowIdx) => {
-    const { firstAsymptoteIdx } = brainEquivalency;
-    if (firstAsymptoteIdx === -1) return false;
-    // Grey out the row that hit the asymptote and all rows after it
-    return rowIdx >= firstAsymptoteIdx;
-  }, [brainEquivalency]);
+    // With the soft cap, cells are never fully disabled — gains continue,
+    // just slower. Return false so all rows stay editable.
+    return false;
+  }, []);
 
   /* ── Render: table header row ── */
 
@@ -746,7 +745,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                       </th>
                       <th className="assumptions-header-cell">
                         <div className="assumptions-col-title">W/Brain-Equiv</div>
-                        <div className="assumptions-col-years">floor {BRAIN.minWattsPerBrainEquiv}W</div>
+                        <div className="assumptions-col-years">knee {BRAIN.minWattsPerBrainEquiv}W</div>
                       </th>
                       <th className="assumptions-header-cell">
                         <div className="assumptions-col-title">Brain Equivalents</div>
@@ -771,11 +770,12 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                           <span className="assumptions-metric">{row.totalPowerGW.toFixed(1)}</span>
                         </td>
                         <td className="assumptions-input-cell">
-                          <span className={`assumptions-metric${row.atEfficiencyLimit ? ' asymptote-label' : ''}`}>
+                          <span className="assumptions-metric">
                             {row.wattsPerBrainEquiv >= 1000
                               ? (row.wattsPerBrainEquiv / 1000).toFixed(1) + ' kW'
-                              : row.wattsPerBrainEquiv.toFixed(0) + ' W'}
-                            {row.atEfficiencyLimit ? ' (LIMIT)' : ''}
+                              : row.wattsPerBrainEquiv < 10
+                                ? row.wattsPerBrainEquiv.toFixed(1) + ' W'
+                                : row.wattsPerBrainEquiv.toFixed(0) + ' W'}
                           </span>
                         </td>
                         <td className="assumptions-input-cell">
@@ -918,9 +918,9 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               Compares AI compute efficiency to the human brain ({BRAIN.humanBrainWatts}W).
               Starting at {(BRAIN.startingWattsPerBrainEquiv / 1000).toFixed(0)}kW per brain-equivalent
               of cognitive work, efficiency improvements compound over time.
-              Asymptotes at {BRAIN.maxEfficiencyVsBrain}× brain efficiency
-              ({BRAIN.minWattsPerBrainEquiv}W per brain-equiv). Once the
-              asymptote is reached, further efficiency cells are locked.
+              Soft knee at {BRAIN.maxEfficiencyVsBrain}× brain efficiency
+              ({BRAIN.minWattsPerBrainEquiv}W per brain-equiv) — beyond this,
+              gains continue but with logarithmic diminishing returns.
             </p>
             {renderBrainEquivalencyTable()}
           </div>
