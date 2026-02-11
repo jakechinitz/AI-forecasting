@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { formatMonth, formatNumber } from '../engine/calculations.js';
+import { formatMonth, formatNumber, MAX_EFFICIENCY_GAIN } from '../engine/calculations.js';
 import { GLOBAL_PARAMS, ASSUMPTION_SEGMENTS, TRANSLATION_INTENSITIES, getBlockKeyForMonth } from '../data/assumptions.js';
 
 const BRAIN = GLOBAL_PARAMS.brainEquivalency;
@@ -14,14 +14,18 @@ const BLOCK_YEARS = [1, 1, 1, 1, 1, 5, 5, 5];
 
 /**
  * Compute watts-per-brain-equivalent at a given month based on efficiency assumptions.
- * Uses block-chained compounding of total efficiency gain.
+ * Uses block-chained compounding of total efficiency gain, capped at the same
+ * thermodynamic efficiency ceiling (117×) used by the simulation engine.
  */
 function computeBrainEquivAtMonth(month, efficiencyAssumptions) {
   if (!efficiencyAssumptions) return BRAIN.startingWattsPerBrainEquiv;
 
   // Compute cumulative efficiency gain month-by-month
   let cumGain = 1.0;
-  const maxGain = BRAIN.startingWattsPerBrainEquiv / BRAIN.minWattsPerBrainEquiv;
+  // Cap at the same thermodynamic limit the sim engine uses (700W / 6W ≈ 117×).
+  // Once hardware efficiency is maxed out, brain equivalency stops improving too.
+  const maxGain = MAX_EFFICIENCY_GAIN;
+  const minWatts = BRAIN.startingWattsPerBrainEquiv / maxGain;
 
   for (let m = 1; m <= month; m++) {
     if (cumGain >= maxGain) break;
@@ -32,11 +36,12 @@ function computeBrainEquivAtMonth(month, efficiencyAssumptions) {
     const mInf = block?.modelEfficiency?.m_inference?.value ?? 0;
     const sInf = block?.systemsEfficiency?.s_inference?.value ?? 0;
     const h = block?.hardwareEfficiency?.h?.value ?? 0;
+    const hMem = block?.hardwareEfficiency?.h_memory?.value ?? 0;
     const mTrn = block?.modelEfficiency?.m_training?.value ?? 0;
     const sTrn = block?.systemsEfficiency?.s_training?.value ?? 0;
 
-    // Annual gains for inference and training
-    const infFactor = (1 - mInf) / ((1 + sInf) * (1 + h));
+    // Annual gains for inference (includes h_memory) and training
+    const infFactor = (1 - mInf) / ((1 + sInf) * (1 + h) * (1 + hMem));
     const trnFactor = (1 - mTrn) / ((1 + sTrn) * (1 + h));
     const totalAnnualGain = Math.sqrt((1 / infFactor) * (1 / trnFactor));
 
@@ -46,7 +51,7 @@ function computeBrainEquivAtMonth(month, efficiencyAssumptions) {
   }
 
   cumGain = Math.min(cumGain, maxGain);
-  return Math.max(BRAIN.startingWattsPerBrainEquiv / cumGain, BRAIN.minWattsPerBrainEquiv);
+  return Math.max(BRAIN.startingWattsPerBrainEquiv / cumGain, minWatts);
 }
 
 function DemandEngineTab({ results, assumptions }) {

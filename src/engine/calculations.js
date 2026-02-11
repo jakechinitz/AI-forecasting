@@ -150,6 +150,14 @@ function getNodeType(nodeId) {
 
 const EPSILON = 1e-10;
 
+// Thermodynamic efficiency ceiling: shared across simulation engine and brain equivalency.
+// No matter how clever the algorithm or optimized the silicon, inference cannot go below
+// ~6W per operation (5× more efficient than the human brain at ~30W). Current GPU-class
+// accelerators draw ~700W, so max compound efficiency gain is bounded by 700W / 6W ≈ 117×.
+export const CURRENT_GPU_WATTS = 700;
+export const THERMODYNAMIC_FLOOR_WATTS = 6;
+export const MAX_EFFICIENCY_GAIN = CURRENT_GPU_WATTS / THERMODYNAMIC_FLOOR_WATTS;
+
 // Planning knobs
 const CATCHUP_MONTHS = 6;
 const DEFAULT_BUFFER_MONTHS = 2;
@@ -498,9 +506,6 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   // at ~30W). Current GPU-class accelerators draw ~700W, so the maximum compound
   // efficiency gain across all axes is bounded by 700W / 6W ≈ 117×.
   const rawEfficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference * eff.H * eff.H_memory;
-  const CURRENT_GPU_WATTS = 700;
-  const THERMODYNAMIC_FLOOR_WATTS = 6;
-  const MAX_EFFICIENCY_GAIN = CURRENT_GPU_WATTS / THERMODYNAMIC_FLOOR_WATTS;
   const efficiencyGain = Math.min(rawEfficiencyGain, MAX_EFFICIENCY_GAIN);
 
   // Per-segment GPU demand (with demandScale applied to token volumes)
@@ -693,9 +698,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // Precompute demand trajectories (block-chained, no discontinuities)
   const demandTrajectories = precomputeDemandTrajectories(months, demandAssumptions);
 
-  // Demand-responsive organic growth: running multiplier per node.
-  // Only compounds when node tightness > 1 (demand exceeds supply).
-  // Prevents perpetual capacity growth when there's no shortage pressure.
+  // Organic supply growth: running multiplier per node.
+  // Base expansion (from SUPPLY_ASSUMPTIONS) always applies — this is exogenous
+  // datacenter/foundry/memory growth. When tightness > 1, shortage-driven growth
+  // accelerates on top of the base rate via demand elasticity.
   const runningSupplyMult = {};
   for (const node of NODES) {
     if (node.group !== 'A') runningSupplyMult[node.id] = 1.0;
@@ -1000,11 +1006,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Look ahead by GPU lead time, forecast demand using trajectories, trigger build if shortage projected
     gpuState.tightnessHistory.push(gpuTightness);
 
-    // Organic growth: only compound when demand exceeds supply
-    if (gpuTightness > 1.0) {
-      compoundOrganicGrowth('gpu_datacenter', month, gpuTightness);
-      compoundOrganicGrowth('gpu_inference', month, gpuTightness);
-    }
+    // Organic growth: base expansion always applies (exogenous datacenter growth);
+    // when tightness > 1 (demand exceeds supply), shortage-driven growth adds on top.
+    compoundOrganicGrowth('gpu_datacenter', month, gpuTightness);
+    compoundOrganicGrowth('gpu_inference', month, gpuTightness);
 
     const gpuLeadTime = gpuNode.leadTimeDebottleneck || 6;
     const gpuCooldown = Math.max(Math.floor(gpuLeadTime / 2), 6);
@@ -1120,8 +1125,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // compare to projected capacity, trigger build if shortage projected
       state.tightnessHistory.push(tightness);
 
-      // Organic growth: only compound when demand exceeds supply for this node
-      if (tightness > 1.0) compoundOrganicGrowth(node.id, month, tightness);
+      // Organic growth: base expansion always applies; shortage adds extra growth on top
+      compoundOrganicGrowth(node.id, month, tightness);
 
       const compLeadTime = node.leadTimeDebottleneck || 12;
       const compCooldown = Math.max(Math.floor(compLeadTime / 2), 6);
