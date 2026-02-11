@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { formatMonth, formatNumber, MAX_EFFICIENCY_GAIN } from '../engine/calculations.js';
+import { formatMonth, formatNumber } from '../engine/calculations.js';
 import { GLOBAL_PARAMS, ASSUMPTION_SEGMENTS, TRANSLATION_INTENSITIES, getBlockKeyForMonth } from '../data/assumptions.js';
 
 const BRAIN = GLOBAL_PARAMS.brainEquivalency;
@@ -14,18 +14,17 @@ const BLOCK_YEARS = [1, 1, 1, 1, 1, 5, 5, 5];
 
 /**
  * Compute watts-per-brain-equivalent at a given month based on efficiency assumptions.
- * Uses block-chained compounding of total efficiency gain, capped at the same
- * thermodynamic efficiency ceiling (117×) used by the simulation engine.
+ * Uses block-chained compounding of total efficiency gain, capped at
+ * 5× brain efficiency (30W brain / 5 = 6W per brain-equiv).
  */
 function computeBrainEquivAtMonth(month, efficiencyAssumptions) {
   if (!efficiencyAssumptions) return BRAIN.startingWattsPerBrainEquiv;
 
   // Compute cumulative efficiency gain month-by-month
   let cumGain = 1.0;
-  // Cap at the same thermodynamic limit the sim engine uses (700W / 6W ≈ 117×).
-  // Once hardware efficiency is maxed out, brain equivalency stops improving too.
-  const maxGain = MAX_EFFICIENCY_GAIN;
-  const minWatts = BRAIN.startingWattsPerBrainEquiv / maxGain;
+  // Cap: AI can be at most maxEfficiencyVsBrain× more efficient than the human brain.
+  // At 5× efficiency, AI does brain-equivalent work at 30W / 5 = 6W.
+  const maxGain = BRAIN.startingWattsPerBrainEquiv / BRAIN.minWattsPerBrainEquiv;
 
   for (let m = 1; m <= month; m++) {
     if (cumGain >= maxGain) break;
@@ -51,7 +50,7 @@ function computeBrainEquivAtMonth(month, efficiencyAssumptions) {
   }
 
   cumGain = Math.min(cumGain, maxGain);
-  return Math.max(BRAIN.startingWattsPerBrainEquiv / cumGain, minWatts);
+  return Math.max(BRAIN.startingWattsPerBrainEquiv / cumGain, BRAIN.minWattsPerBrainEquiv);
 }
 
 function DemandEngineTab({ results, assumptions }) {
