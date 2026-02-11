@@ -463,27 +463,42 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
   /* ── AI power as % of total US electricity ── */
 
   const aiPowerShare = useMemo(() => {
-    if (!impliedAIs) return null;
+    if (!impliedAIs || !results?.months?.length) return null;
+
+    // End month for each block (cumulative)
+    const blockEndMonths = [];
+    let cum = 0;
+    BLOCK_YEARS.forEach(y => { cum += y * 12; blockEndMonths.push(cum); });
 
     let cumYears = 0;
     return impliedAIs.map((row, idx) => {
       const blockYears = BLOCK_YEARS[idx] || 1;
       cumYears += blockYears;
 
-      const aiGW = row.totalPowerGW;
+      const endMonth = Math.min(blockEndMonths[idx], results.months.length - 1);
+
+      // Unconstrained demand: requiredBase is the GPU fleet size the demand model wants
+      const dcRequired = results.nodes?.gpu_datacenter?.requiredBase?.[endMonth] || 0;
+      const infRequired = results.nodes?.gpu_inference?.requiredBase?.[endMonth] || 0;
+      const demandGW = (dcRequired + infRequired) * WATTS_PER_GPU / 1e9;
+
+      // Constrained: what actually got built (from installedBase via impliedAIs)
+      const constrainedGW = row.totalPowerGW;
+
       const usBaseGW = US_AVG_ELECTRICITY_GW * Math.pow(1 + US_ELECTRICITY_CAGR, cumYears);
-      const usTotalGW = usBaseGW + aiGW;
-      const aiPct = (aiGW / usTotalGW) * 100;
+      const usTotalGW = usBaseGW + constrainedGW;
+      const aiPct = (constrainedGW / usTotalGW) * 100;
 
       return {
         key: row.key,
-        aiGW,
+        demandGW,
+        constrainedGW,
         usBaseGW,
         usTotalGW,
         aiPct
       };
     });
-  }, [impliedAIs]);
+  }, [impliedAIs, results]);
 
   /* ── Check if a row is past the asymptote (for greying out efficiency cells) ── */
 
@@ -791,8 +806,9 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
             <div className="section">
               <h4 className="section-title">AI Power as % of US Electricity</h4>
               <p className="section-description">
-                US baseline electricity (~{US_AVG_ELECTRICITY_GW} GW avg load) growing at {(US_ELECTRICITY_CAGR * 100).toFixed(0)}%/yr
-                non-AI, plus AI compute power. Percentage = AI GW / (baseline + AI) GW.
+                Demand GW = unconstrained (what the model wants). Constrained GW = what actually gets
+                built after supply bottlenecks. US baseline (~{US_AVG_ELECTRICITY_GW} GW avg load) grows
+                at {(US_ELECTRICITY_CAGR * 100).toFixed(0)}%/yr non-AI. AI Share uses constrained GW.
               </p>
               <div className="assumptions-table-wrap">
                 <table className="assumptions-table assumptions-table--metrics">
@@ -800,8 +816,12 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                     <tr>
                       <th className="assumptions-header-cell assumptions-header-label">Year</th>
                       <th className="assumptions-header-cell">
-                        <div className="assumptions-col-title">AI Power</div>
-                        <div className="assumptions-col-years">GW</div>
+                        <div className="assumptions-col-title">AI Demand</div>
+                        <div className="assumptions-col-years">GW (unconstrained)</div>
+                      </th>
+                      <th className="assumptions-header-cell">
+                        <div className="assumptions-col-title">AI Actual</div>
+                        <div className="assumptions-col-years">GW (constrained)</div>
                       </th>
                       <th className="assumptions-header-cell">
                         <div className="assumptions-col-title">US Base</div>
@@ -818,35 +838,41 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                     </tr>
                   </thead>
                   <tbody>
-                    {aiPowerShare.map((row, idx) => (
-                      <tr key={row.key}>
-                        <td className="assumptions-label-cell assumptions-year-cell">
-                          <div className="assumptions-row-title">{timeBlocks[idx].label}</div>
-                          <div className="assumptions-row-help">{timeBlocks[idx].years}</div>
-                        </td>
-                        <td className="assumptions-input-cell">
-                          <span className="assumptions-metric">{row.aiGW < 0.1 ? row.aiGW.toFixed(2) : row.aiGW < 10 ? row.aiGW.toFixed(1) : formatNumber(row.aiGW)}</span>
-                        </td>
-                        <td className="assumptions-input-cell">
-                          <span className="assumptions-metric">{row.usBaseGW.toFixed(0)}</span>
-                        </td>
-                        <td className="assumptions-input-cell">
-                          <span className="assumptions-metric">{formatNumber(row.usTotalGW)}</span>
-                        </td>
-                        <td className="assumptions-input-cell">
-                          <span className="assumptions-metric" style={{
-                            fontWeight: 600,
-                            color: row.aiPct >= 50 ? 'var(--accent-danger)' : row.aiPct >= 10 ? 'var(--accent-warning)' : 'var(--text-primary)'
-                          }}>
-                            {row.aiPct < 0.01
-                              ? row.aiPct.toExponential(1) + '%'
-                              : row.aiPct < 1
-                                ? row.aiPct.toFixed(2) + '%'
-                                : row.aiPct.toFixed(1) + '%'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {aiPowerShare.map((row, idx) => {
+                      const fmtGW = (v) => v < 0.1 ? v.toFixed(2) : v < 10 ? v.toFixed(1) : formatNumber(v);
+                      return (
+                        <tr key={row.key}>
+                          <td className="assumptions-label-cell assumptions-year-cell">
+                            <div className="assumptions-row-title">{timeBlocks[idx].label}</div>
+                            <div className="assumptions-row-help">{timeBlocks[idx].years}</div>
+                          </td>
+                          <td className="assumptions-input-cell">
+                            <span className="assumptions-metric" style={{ opacity: 0.6 }}>{fmtGW(row.demandGW)}</span>
+                          </td>
+                          <td className="assumptions-input-cell">
+                            <span className="assumptions-metric">{fmtGW(row.constrainedGW)}</span>
+                          </td>
+                          <td className="assumptions-input-cell">
+                            <span className="assumptions-metric">{row.usBaseGW.toFixed(0)}</span>
+                          </td>
+                          <td className="assumptions-input-cell">
+                            <span className="assumptions-metric">{formatNumber(row.usTotalGW)}</span>
+                          </td>
+                          <td className="assumptions-input-cell">
+                            <span className="assumptions-metric" style={{
+                              fontWeight: 600,
+                              color: row.aiPct >= 50 ? 'var(--accent-danger)' : row.aiPct >= 10 ? 'var(--accent-warning)' : 'var(--text-primary)'
+                            }}>
+                              {row.aiPct < 0.01
+                                ? row.aiPct.toExponential(1) + '%'
+                                : row.aiPct < 1
+                                  ? row.aiPct.toFixed(2) + '%'
+                                  : row.aiPct.toFixed(1) + '%'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
