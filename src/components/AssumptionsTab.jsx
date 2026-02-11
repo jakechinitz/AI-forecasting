@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import { ASSUMPTION_SEGMENTS, GLOBAL_PARAMS, TRANSLATION_INTENSITIES } from '../data/assumptions.js';
-import { formatNumber, MAX_EFFICIENCY_GAIN } from '../engine/calculations.js';
+import { formatNumber } from '../engine/calculations.js';
 
 /* ── Brain equivalency constants ── */
 const BRAIN = GLOBAL_PARAMS.brainEquivalency;
@@ -373,10 +373,10 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     const startingWatts = BRAIN.startingWattsPerBrainEquiv;
     const brainWatts = BRAIN.humanBrainWatts;
 
-    // Cap at the same thermodynamic limit the simulation engine uses (700W / 6W ≈ 117×).
-    // Once hardware efficiency is maxed out, brain equivalency stops improving too.
-    const maxCumulativeGain = MAX_EFFICIENCY_GAIN;
-    const minWatts = startingWatts / maxCumulativeGain;
+    // Cap: AI can be at most 5× more efficient than the human brain (30W).
+    // At 5× efficiency → 6W per brain-equiv. maxCumulativeGain = 10000 / 6 ≈ 1667×.
+    const minWatts = BRAIN.minWattsPerBrainEquiv;
+    const maxCumulativeGain = startingWatts / minWatts;
 
     let cumulativeGain = 1.0;
     let asymptoteReached = false;
@@ -779,9 +779,9 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               Compares AI compute efficiency to the human brain ({BRAIN.humanBrainWatts}W).
               Starting at {(BRAIN.startingWattsPerBrainEquiv / 1000).toFixed(0)}kW per brain-equivalent
               of cognitive work, efficiency improvements compound over time.
-              Capped at the thermodynamic efficiency limit ({MAX_EFFICIENCY_GAIN.toFixed(0)}×),
-              corresponding to ~{(BRAIN.startingWattsPerBrainEquiv / MAX_EFFICIENCY_GAIN).toFixed(0)}W per brain-equiv. Once the
-              limit is reached, further efficiency cells are locked.
+              Asymptotes at {BRAIN.maxEfficiencyVsBrain}× brain efficiency
+              ({BRAIN.minWattsPerBrainEquiv}W per brain-equiv). Once the
+              asymptote is reached, further efficiency cells are locked.
             </p>
             {renderBrainEquivalencyTable()}
           </div>
