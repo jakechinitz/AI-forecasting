@@ -82,15 +82,12 @@ function App() {
     }, 50);
   }, [customAssumptions, selectedScenario]);
 
-  // Initial simulation run
+  // Run simulation on mount, and re-run whenever assumptions or scenario change.
+  // runSim is memoised on [customAssumptions, selectedScenario], so a new
+  // reference is created whenever either dependency changes, which triggers this effect.
   useEffect(() => {
     runSim();
-  }, []);
-
-  // Re-run simulation when scenario changes
-  useEffect(() => {
-    runSim();
-  }, [selectedScenario]);
+  }, [runSim]);
 
   // Handle assumption changes
   const handleAssumptionChange = useCallback((category, blockKey, path, value) => {
