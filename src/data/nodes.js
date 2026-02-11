@@ -1089,7 +1089,8 @@ const NODES_BASE = [
     // Parallelism constraint: construction labor + grid interconnection queue.
     // Hyperscalers can spend unlimited capital but cannot hire unlimited electricians
     // or accelerate utility permitting. Historical DC capacity grew ~25-30%/yr peak.
-    maxAnnualExpansion: 0.30,
+    // Raised to 100% to allow aggressive buildout scenarios (modular DC, off-grid, etc.)
+    maxAnnualExpansion: 1.00,
 
     baseRate: {
       value: 1500,
