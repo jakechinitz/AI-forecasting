@@ -174,6 +174,13 @@ export function softEfficiencyCap(raw, knee) {
 const CATCHUP_MONTHS = 6;
 const DEFAULT_BUFFER_MONTHS = 2;
 
+// Inventory management: manufacturers limit carrying inventory to avoid
+// capital lockup and carrying costs. CEILING_MONTHS caps inventory at N
+// months of consumption; CONSUMPTION_HEADROOM lets producers build ahead
+// of current consumption for growth readiness (1.5 = up to 50% headroom).
+const INVENTORY_CEILING_MONTHS = 4;
+const CONSUMPTION_HEADROOM = 1.5;
+
 // Aggressive urgency
 const BACKLOG_PAYDOWN_MONTHS_GPU = 6;
 const BACKLOG_PAYDOWN_MONTHS_COMPONENTS = 6;
@@ -987,7 +994,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // =======================================================
     // STEP 3: UPDATES
     // =======================================================
-    const gpuBufferTarget = planDeployTotal * DEFAULT_BUFFER_MONTHS;
+    // GPU buffer tracks actual deployment, not the unconstrained plan. When
+    // components gate deployment below plan, building GPU inventory against the
+    // full plan just piles up chips that can't deploy.
+    const gpuBufferTarget = actualDeployTotal * DEFAULT_BUFFER_MONTHS;
     const gpuProdTarget = actualDeployTotal + Math.max(0, gpuBufferTarget - gpuState.inventory);
     const gpuProduced = Math.min(gpuEffCap, gpuProdTarget);
 
@@ -996,7 +1006,13 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     gpuState.inventory = (gpuState.inventory + gpuProduced) - actualDeployTotal;
     if (gpuState.inventory < -1e-6) gpuState.inventory = 0;
 
-    gpuState.backlog = Math.max(0, oldGpuBacklog + baselinePlan - actualDeployTotal);
+    // GPU backlog: only accumulate shortfall from GPU production constraints,
+    // not component gating. Component shortfalls are tracked in component
+    // backlogs. Without this separation, component bottlenecks inflate the GPU
+    // plan (via backlog paydown), which inflates component demand, creating a
+    // positive feedback spiral.
+    const gpuLimitedDeploy = Math.min(baselinePlan, gpuAvailable);
+    gpuState.backlog = Math.max(0, oldGpuBacklog + baselinePlan - gpuLimitedDeploy);
 
     const shareDc = baselinePlan > EPSILON ? (planDeployDc / baselinePlan) : 0.7;
     const actualDc = actualDeployTotal * shareDc;
@@ -1091,6 +1107,16 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const planDemand = planDeployTotal * intensity;
       const actualConsumption = actualDeployTotal * intensity;
 
+      // Effective demand: producers respond to what customers actually consume,
+      // not the unconstrained order book. When a different component is the fleet
+      // bottleneck, actual consumption can be well below planDemand. Producers
+      // maintain CONSUMPTION_HEADROOM (1.5×) above current consumption for growth
+      // readiness, but won't speculatively produce 2-3× what's being consumed.
+      // During bootstrap (no consumption yet), fall back to plan demand.
+      const effectiveDemand = actualConsumption > EPSILON
+        ? Math.min(planDemand, actualConsumption * CONSUMPTION_HEADROOM)
+        : planDemand;
+
       const sMult = runningSupplyMult[node.id] || 1;
       const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);
       const y = calculateNodeYield(node, month);
@@ -1102,38 +1128,41 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
       const potentialSupply = (state.type === 'STOCK') ? (inventoryIn + effCap) : effCap;
 
-      // Plan-driven fulfillment: production and delivery are driven by plan demand
-      // (what was ordered), not actualConsumption (what downstream used). This
-      // decouples supplier ramp-up from GPU gating — suppliers ship against orders
-      // and build inventory, rather than idling when a different node is bottlenecked.
+      // Consumption-aware fulfillment: production targets effective demand (what
+      // customers actually take + growth headroom), not the unconstrained plan.
+      // STOCK nodes cap inventory at INVENTORY_CEILING_MONTHS of consumption to
+      // avoid unbounded buildup when a different component is the fleet bottleneck.
       let production = 0;
       let delivered = 0;
 
       if (state.type === 'STOCK') {
-        const bufferTarget = planDemand * DEFAULT_BUFFER_MONTHS;
-        const prodNeed = planDemand + backlogUrgency + Math.max(0, bufferTarget - inventoryIn);
+        const inventoryCeiling = effectiveDemand * INVENTORY_CEILING_MONTHS;
+        const bufferGap = Math.max(0, inventoryCeiling - inventoryIn);
+        const prodNeed = effectiveDemand + backlogUrgency + bufferGap / Math.max(INVENTORY_CEILING_MONTHS, 1);
         production = Math.min(effCap, prodNeed);
         const available = inventoryIn + production;
-        delivered = Math.min(planDemand + backlogUrgency, available);
+        delivered = Math.min(effectiveDemand + backlogUrgency, available);
         state.inventory = available - delivered;
         if (state.inventory < -1e-6) state.inventory = 0;
       } else {
-        // FLOW / THROUGHPUT / QUEUE — no inventory, deliver against plan + backlog
-        delivered = Math.min(planDemand + backlogUrgency, effCap);
+        // FLOW / THROUGHPUT / QUEUE — no inventory, deliver against effective demand + backlog
+        delivered = Math.min(effectiveDemand + backlogUrgency, effCap);
         state.inventory = 0;
       }
 
-      // Backlog = previous backlog + new demand - total fulfilled (covers both new demand and paydown)
-      const unmetPlanThisMonth = Math.max(0, planDemand - delivered);
-      state.backlog = Math.max(0, backlogIn + planDemand - delivered);
+      // Backlog tracks against effective demand (not plan). When actual consumption
+      // is well below plan due to a different bottleneck, the "unmet" plan demand
+      // is not a real order shortfall — it's phantom demand that nobody needs yet.
+      const unmetThisMonth = Math.max(0, effectiveDemand - delivered);
+      state.backlog = Math.max(0, backlogIn + effectiveDemand - delivered);
 
-      const totalLoad = planDemand + (backlogIn / BACKLOG_PAYDOWN_MONTHS_COMPONENTS);
+      const totalLoad = effectiveDemand + (backlogIn / BACKLOG_PAYDOWN_MONTHS_COMPONENTS);
       const tightness = totalLoad / Math.max(potentialSupply, EPSILON);
       const priceIndex = calculatePriceIndex(tightness);
 
       // Forward-looking capacity expansion for components
-      // Forecast demand at month + leadTime using demand trajectory growth ratio,
-      // compare to projected capacity, trigger build if shortage projected
+      // Uses effective demand (consumption-based) rather than plan demand, so
+      // expansion decisions reflect actual market need, not speculative order books.
       state.tightnessHistory.push(tightness);
 
       // Organic growth: base expansion always applies; shortage adds extra growth on top
@@ -1143,7 +1172,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const compCooldown = Math.max(Math.floor(compLeadTime / 2), 6);
       if ((month - state.lastExpansionMonth) > compCooldown) {
         const growthRatio = getDemandGrowthRatio(compLeadTime);
-        const forecastDemand = planDemand * growthRatio;
+        const forecastDemand = effectiveDemand * growthRatio;
         const compFutureMonth = Math.min(month + compLeadTime, months - 1);
         const futureSMult = runningSupplyMult[node.id] || 1;
         const futureCap = calculateCapacity(node, compFutureMonth, scenarioOverrides, state.dynamicExpansions, futureSMult);
@@ -1181,7 +1210,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         nodeRes.tightness.push(tightness);
         nodeRes.priceIndex.push(priceIndex);
         nodeRes.yield.push(y);
-        nodeRes.unmetDemand.push(unmetPlanThisMonth);
+        nodeRes.unmetDemand.push(unmetThisMonth);
 
         nodeRes.shortage.push(isShort ? 1 : 0);
         nodeRes.glut.push(isGlut ? (isHardGlut ? 2 : 1) : 0);
