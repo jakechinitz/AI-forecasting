@@ -956,12 +956,114 @@
   }
 }
 
+/* ─── Mobile tab bar (hidden on desktop) ─── */
+.mobile-tab-bar {
+  display: none;
+}
+
 @media (max-width: 768px) {
   .sidebar {
     display: none;
   }
 
+  /* Header: compact */
+  .header {
+    padding: 0 var(--space-sm);
+    height: 44px;
+  }
+
+  .logo-text {
+    font-size: 0.8125rem;
+  }
+
+  .scenario-badge {
+    font-size: 0.75rem;
+    padding: 3px 8px;
+  }
+
+  /* Main content: tighter padding, room for bottom bar */
   .main-content {
-    padding: var(--space-md);
+    padding: var(--space-sm) var(--space-sm) 64px;
+  }
+
+  /* Assumptions: single column, tighter */
+  .assumptions-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .assumption-block {
+    padding: var(--space-sm) var(--space-md);
+  }
+
+  .assumptions-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .assumptions-year-cell {
+    width: 80px;
+  }
+
+  .assumptions-header-cell {
+    min-width: 60px;
+  }
+
+  .assumptions-header-label {
+    min-width: 70px;
+  }
+
+  /* Mobile bottom tab bar */
+  .mobile-tab-bar {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
+    background: var(--bg-primary);
+    border-top: 1px solid var(--border-color);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    z-index: 100;
+    padding: 0 var(--space-xs);
+    gap: 0;
+    scrollbar-width: none;
+  }
+
+  .mobile-tab-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-tab-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-width: 64px;
+    padding: 6px 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    font-family: inherit;
+    transition: color var(--transition-fast);
+  }
+
+  .mobile-tab-item.active {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  .mobile-tab-icon {
+    font-size: 1.125rem;
+    line-height: 1;
+  }
+
+  .mobile-tab-label {
+    font-size: 0.5625rem;
+    line-height: 1;
+    white-space: nowrap;
   }
 }
