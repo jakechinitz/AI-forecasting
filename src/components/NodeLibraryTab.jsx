@@ -94,7 +94,7 @@ function NodeLibraryTab({ nodes, groups: groupsProp, selectedNode, onSelectNode 
           <table className="data-table">
             <thead>
               <tr>
-                <th style={{ width: '40px' }}>Group</th>
+                <th style={{ width: '120px' }}>Group</th>
                 <th>Node</th>
                 <th>Unit</th>
                 <th style={{ width: '100px' }}>Base Capacity</th>
@@ -117,10 +117,16 @@ function NodeLibraryTab({ nodes, groups: groupsProp, selectedNode, onSelectNode 
                   >
                     <td>
                       <span
-                        className="node-group-dot"
-                        style={{ background: getGroupColor(node.group) }}
-                        title={groups[node.group]?.name}
-                      />
+                        className="node-group-badge"
+                        style={{
+                          background: getGroupColor(node.group) + '14',
+                          color: getGroupColor(node.group),
+                          borderColor: getGroupColor(node.group) + '30'
+                        }}
+                      >
+                        <span className="node-group-dot" style={{ background: getGroupColor(node.group) }} />
+                        {groups[node.group]?.name || node.group}
+                      </span>
                     </td>
                     <td className="text-cell">
                       <div style={{ fontWeight: 500 }}>{node.name}</div>
