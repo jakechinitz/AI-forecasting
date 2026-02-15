@@ -527,9 +527,27 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   const efficiencyGain = softEfficiencyCap(rawEfficiencyGain, MAX_EFFICIENCY_GAIN);
 
   // Per-segment GPU demand (with demandScale applied to token volumes)
-  const consumerTokens = (inferenceDemand.consumer || 0) * demandScale;
-  const enterpriseTokens = (inferenceDemand.enterprise || 0) * demandScale;
-  const agenticTokens = (inferenceDemand.agentic || 0) * demandScale;
+  const consumerTokensTotal = (inferenceDemand.consumer || 0) * demandScale;
+  const enterpriseTokensTotal = (inferenceDemand.enterprise || 0) * demandScale;
+  const agenticTokensTotal = (inferenceDemand.agentic || 0) * demandScale;
+
+  // Edge offload: fraction of inference tokens served on-device (phones, laptops, NPUs).
+  // These tokens never hit the datacenter supply chain — no GPUs, no transformers, no cooling.
+  // The share is user-configurable per segment and ramps over time (S-curve adoption).
+  const edgeOffload = block?.edgeOffload || {};
+  const edgeConsumer = clamp(resolveGrowthRate(edgeOffload.consumer, 0), 0, 1);
+  const edgeEnterprise = clamp(resolveGrowthRate(edgeOffload.enterprise, 0), 0, 1);
+  const edgeAgentic = clamp(resolveGrowthRate(edgeOffload.agentic, 0), 0, 1);
+
+  // Datacenter tokens = total tokens × (1 - edge share)
+  const consumerTokens = consumerTokensTotal * (1 - edgeConsumer);
+  const enterpriseTokens = enterpriseTokensTotal * (1 - edgeEnterprise);
+  const agenticTokens = agenticTokensTotal * (1 - edgeAgentic);
+
+  // Track offloaded tokens for reporting
+  const edgeTokensTotal = (consumerTokensTotal * edgeConsumer)
+    + (enterpriseTokensTotal * edgeEnterprise)
+    + (agenticTokensTotal * edgeAgentic);
 
   const consumerGpus = consumerTokens / Math.max(consumerTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
   const enterpriseGpus = enterpriseTokens / Math.max(enterpriseTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
@@ -562,7 +580,13 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
     requiredInference,
     requiredTraining,
     inferenceDemand,
-    trainingDemand
+    trainingDemand,
+    edgeOffloadShare: {
+      consumer: edgeConsumer,
+      enterprise: edgeEnterprise,
+      agentic: edgeAgentic
+    },
+    edgeTokensTotal
   };
 }
 
@@ -700,7 +724,13 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     months: [],
     nodes: {},
     summary: { shortages: [], gluts: [], bottlenecks: [] },
-    warnings: []
+    warnings: [],
+    edgeOffload: {
+      tokensOffloaded: [],      // total tokens/month served on-device
+      shareConsumer: [],         // edge share for consumer segment
+      shareEnterprise: [],       // edge share for enterprise segment
+      shareAgentic: []           // edge share for agentic segment
+    }
   };
 
   const nodeIntensityMap = buildIntensityMap();
@@ -876,6 +906,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const scaleUsed = (demandScale === null || demandScale === undefined) ? 1 : demandScale;
 
     const req = computeRequiredGpus(month, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed);
+
+    // Track edge offload series
+    results.edgeOffload.tokensOffloaded.push(req.edgeTokensTotal || 0);
+    results.edgeOffload.shareConsumer.push(req.edgeOffloadShare?.consumer || 0);
+    results.edgeOffload.shareEnterprise.push(req.edgeOffloadShare?.enterprise || 0);
+    results.edgeOffload.shareAgentic.push(req.edgeOffloadShare?.agentic || 0);
 
     // Forward-looking demand ratio cache for capacity planning.
     // Uses precomputed trajectories to forecast how much total GPU demand grows

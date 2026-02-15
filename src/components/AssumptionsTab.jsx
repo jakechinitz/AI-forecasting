@@ -33,6 +33,14 @@ const TABLE_DEFS = {
       { path: ['trainingGrowth', 'midtier'], label: 'Mid-tier Runs', suffix: '%/yr' }
     ]
   },
+  'edge-offload': {
+    category: 'demand',
+    columns: [
+      { path: ['edgeOffload', 'consumer'], label: 'Consumer', suffix: '%', isShare: true, help: 'On-device (phone/laptop NPU)' },
+      { path: ['edgeOffload', 'enterprise'], label: 'Enterprise', suffix: '%', isShare: true, help: 'Edge inference servers' },
+      { path: ['edgeOffload', 'agentic'], label: 'Agentic', suffix: '%', isShare: true, help: 'On-device agent loops' }
+    ]
+  },
   'model-eff': {
     category: 'efficiency',
     columns: [
@@ -721,6 +729,15 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
           <div className="section">
             <h4 className="section-title">Training Demand</h4>
             {renderEditableTable('train-demand')}
+          </div>
+
+          <div className="section">
+            <h4 className="section-title">Edge Offload</h4>
+            <p className="section-description">
+              Fraction of inference tokens served on-device (phones, laptops, NPUs) rather than in datacenter GPUs.
+              Offloaded tokens bypass the entire DC supply chain — no transformers, no cooling, no grid interconnect.
+            </p>
+            {renderEditableTable('edge-offload')}
           </div>
 
           {/* ── Implied Human-Equivalent AIs ── */}
