@@ -1006,13 +1006,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     gpuState.inventory = (gpuState.inventory + gpuProduced) - actualDeployTotal;
     if (gpuState.inventory < -1e-6) gpuState.inventory = 0;
 
-    // GPU backlog: only accumulate shortfall from GPU production constraints,
-    // not component gating. Component shortfalls are tracked in component
-    // backlogs. Without this separation, component bottlenecks inflate the GPU
-    // plan (via backlog paydown), which inflates component demand, creating a
-    // positive feedback spiral.
-    const gpuLimitedDeploy = Math.min(baselinePlan, gpuAvailable);
-    gpuState.backlog = Math.max(0, oldGpuBacklog + baselinePlan - gpuLimitedDeploy);
+    // GPU backlog grows from all deployment shortfalls (including component
+    // gating). This inflates planDeployTotal via backlog paydown, which
+    // increases planDemand for components, driving expansion of the bottleneck.
+    // The effectiveDemand cap on production prevents this from causing runaway
+    // inventory in non-binding components — only the investment signal grows.
+    gpuState.backlog = Math.max(0, oldGpuBacklog + baselinePlan - actualDeployTotal);
 
     const shareDc = baselinePlan > EPSILON ? (planDeployDc / baselinePlan) : 0.7;
     const actualDc = actualDeployTotal * shareDc;
@@ -1156,13 +1155,17 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const unmetThisMonth = Math.max(0, effectiveDemand - delivered);
       state.backlog = Math.max(0, backlogIn + effectiveDemand - delivered);
 
-      const totalLoad = effectiveDemand + (backlogIn / BACKLOG_PAYDOWN_MONTHS_COMPONENTS);
+      // Tightness and expansion use full plan demand (not effectiveDemand).
+      // The investment signal reflects the full market opportunity — companies
+      // build fabs based on 5-year order books, not current throughput. Only
+      // day-to-day production responds to actual consumption.
+      const totalLoad = planDemand + (backlogIn / BACKLOG_PAYDOWN_MONTHS_COMPONENTS);
       const tightness = totalLoad / Math.max(potentialSupply, EPSILON);
       const priceIndex = calculatePriceIndex(tightness);
 
       // Forward-looking capacity expansion for components
-      // Uses effective demand (consumption-based) rather than plan demand, so
-      // expansion decisions reflect actual market need, not speculative order books.
+      // Uses plan demand (order book) for forecasting — companies invest based on
+      // expected market trajectory, not current consumption.
       state.tightnessHistory.push(tightness);
 
       // Organic growth: base expansion always applies; shortage adds extra growth on top
@@ -1172,7 +1175,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const compCooldown = Math.max(Math.floor(compLeadTime / 2), 6);
       if ((month - state.lastExpansionMonth) > compCooldown) {
         const growthRatio = getDemandGrowthRatio(compLeadTime);
-        const forecastDemand = effectiveDemand * growthRatio;
+        const forecastDemand = planDemand * growthRatio;
         const compFutureMonth = Math.min(month + compLeadTime, months - 1);
         const futureSMult = runningSupplyMult[node.id] || 1;
         const futureCap = calculateCapacity(node, compFutureMonth, scenarioOverrides, state.dynamicExpansions, futureSMult);
