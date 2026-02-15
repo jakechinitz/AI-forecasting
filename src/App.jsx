@@ -286,6 +286,19 @@ function App() {
           </div>
         </main>
       </div>
+
+      <nav className="mobile-tab-bar">
+        {TABS.map(tab => (
+          <button
+            key={tab.id}
+            className={`mobile-tab-item ${activeTab === tab.id ? 'active' : ''}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            <span className="mobile-tab-icon">{tab.icon}</span>
+            <span className="mobile-tab-label">{tab.label}</span>
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }
