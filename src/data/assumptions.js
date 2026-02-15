@@ -241,6 +241,16 @@ const DEMAND_TEMPLATE_YEAR1 = {
     dcInferenceShare: { value: 0.60, confidence: 'medium', source: 'Inference ~60% of datacenter GPU fleet; training clusters concentrated at frontier labs' }
   },
 
+  // Edge offload: fraction of inference tokens served on-device (phones, laptops, NPUs)
+  // rather than in datacenter GPUs. Offloaded tokens bypass the entire DC supply chain
+  // (no transformers, no cooling, no grid interconnect). Driven by model distillation
+  // (Llama-4-Small, Gemma, Phi) running on Apple Neural Engine, Snapdragon NPU, etc.
+  edgeOffload: {
+    consumer: { value: 0.02, confidence: 'low', source: 'Apple Intelligence, on-device Gemini Nano; ~2% of consumer tokens on-device in 2026', historicalRange: [0.00, 0.10] },
+    enterprise: { value: 0.00, confidence: 'medium', source: 'Enterprise inference is overwhelmingly cloud/on-prem datacenter today', historicalRange: [0.00, 0.05] },
+    agentic: { value: 0.00, confidence: 'medium', source: 'Agentic workloads require large context + tool access; edge infeasible near-term', historicalRange: [0.00, 0.03] }
+  },
+
   contextLength: {
     averageTokens: 4000,
     growthRate: 0.30,
@@ -280,6 +290,10 @@ const buildDemandBlocks = () => {
   blocks.year2.inferenceGrowth.agentic.value = 14.00;    // 15x
   blocks.year2.trainingGrowth.frontier.value = 1.50;
   blocks.year2.trainingGrowth.midtier.value = 3.00;
+  // Edge offload Year 2: Apple Intelligence / Gemini Nano adoption growing
+  blocks.year2.edgeOffload.consumer.value = 0.05;
+  blocks.year2.edgeOffload.enterprise.value = 0.01;
+  blocks.year2.edgeOffload.agentic.value = 0.00;
 
   // Year 3: Growth moderating, market maturing (net GPU growth ~1.8x with ~2.5x efficiency)
   blocks.year3.inferenceGrowth.consumer.value = 2.00;    // 3x
@@ -287,6 +301,10 @@ const buildDemandBlocks = () => {
   blocks.year3.inferenceGrowth.agentic.value = 7.00;     // 8x
   blocks.year3.trainingGrowth.frontier.value = 0.80;
   blocks.year3.trainingGrowth.midtier.value = 1.50;
+  // Edge offload Year 3: distilled models becoming mainstream on flagships
+  blocks.year3.edgeOffload.consumer.value = 0.12;
+  blocks.year3.edgeOffload.enterprise.value = 0.03;
+  blocks.year3.edgeOffload.agentic.value = 0.01;
 
   // Year 4: Supply catching up, growth normalizing (net GPU growth ~1.3x with ~2x efficiency)
   blocks.year4.inferenceGrowth.consumer.value = 1.00;    // 2x
@@ -294,6 +312,10 @@ const buildDemandBlocks = () => {
   blocks.year4.inferenceGrowth.agentic.value = 3.00;     // 4x
   blocks.year4.trainingGrowth.frontier.value = 0.40;
   blocks.year4.trainingGrowth.midtier.value = 0.80;
+  // Edge offload Year 4: mid-range phones get capable NPUs; enterprise edge pilots
+  blocks.year4.edgeOffload.consumer.value = 0.22;
+  blocks.year4.edgeOffload.enterprise.value = 0.08;
+  blocks.year4.edgeOffload.agentic.value = 0.02;
 
   // Year 5: Maturing market (net GPU growth ~1.1x with ~1.8x efficiency)
   blocks.year5.inferenceGrowth.consumer.value = 0.60;    // 1.6x
@@ -301,6 +323,10 @@ const buildDemandBlocks = () => {
   blocks.year5.inferenceGrowth.agentic.value = 1.50;     // 2.5x
   blocks.year5.trainingGrowth.frontier.value = 0.25;
   blocks.year5.trainingGrowth.midtier.value = 0.50;
+  // Edge offload Year 5: most consumer queries handled locally for simple tasks
+  blocks.year5.edgeOffload.consumer.value = 0.35;
+  blocks.year5.edgeOffload.enterprise.value = 0.15;
+  blocks.year5.edgeOffload.agentic.value = 0.05;
 
   // Years 6-10
   blocks.years6_10.inferenceGrowth.consumer.value = 0.20;
@@ -311,6 +337,11 @@ const buildDemandBlocks = () => {
   blocks.years6_10.contextLength.averageTokens = 32000;
   blocks.years6_10.contextLength.growthRate = 0.25;
   blocks.years6_10.intensityGrowth.value = 0.25;
+  // Edge offload Years 6-10: mature ecosystem, on-device becomes default for simple inference
+  blocks.years6_10.edgeOffload.consumer.value = 0.50;
+  blocks.years6_10.edgeOffload.enterprise.value = 0.25;
+  blocks.years6_10.edgeOffload.agentic.value = 0.10;
+
   // Years 11-15
   blocks.years11_15.inferenceGrowth.consumer.value = 0.12;
   blocks.years11_15.inferenceGrowth.enterprise.value = 0.18;
@@ -320,6 +351,10 @@ const buildDemandBlocks = () => {
   blocks.years11_15.contextLength.averageTokens = 64000;
   blocks.years11_15.contextLength.growthRate = 0.12;
   blocks.years11_15.intensityGrowth.value = 0.15;
+  // Edge offload Years 11-15: edge AI pervasive; cloud reserved for frontier/long-context
+  blocks.years11_15.edgeOffload.consumer.value = 0.60;
+  blocks.years11_15.edgeOffload.enterprise.value = 0.35;
+  blocks.years11_15.edgeOffload.agentic.value = 0.15;
 
   // Years 16-20
   blocks.years16_20.inferenceGrowth.consumer.value = 0.08;
@@ -330,6 +365,10 @@ const buildDemandBlocks = () => {
   blocks.years16_20.contextLength.averageTokens = 128000;
   blocks.years16_20.contextLength.growthRate = 0.05;
   blocks.years16_20.intensityGrowth.value = 0.10;
+  // Edge offload Years 16-20: steady state — cloud for frontier, edge for everything else
+  blocks.years16_20.edgeOffload.consumer.value = 0.65;
+  blocks.years16_20.edgeOffload.enterprise.value = 0.40;
+  blocks.years16_20.edgeOffload.agentic.value = 0.20;
 
   return blocks;
 };
