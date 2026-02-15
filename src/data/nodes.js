@@ -1010,7 +1010,7 @@ const NODES_BASE = [
     inputIntensity: 0.05,
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 15000,
+    startingCapacity: 35000,
     committedExpansions: [
       { date: '2025-06', capacityAdd: 10000, type: 'committed' },
       { date: '2026-01', capacityAdd: 20000, type: 'optional' }
