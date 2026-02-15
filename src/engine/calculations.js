@@ -956,6 +956,18 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuAvailable = gpuState.inventory + gpuEffCap;
     const preUpdateGpuInventory = gpuState.inventory;
 
+    // Off-grid offset: behind-the-meter generation (gas turbines, solar+storage,
+    // SMRs) bypasses grid infrastructure entirely. Power generation PPAs and
+    // large power transformers are only needed for the grid-connected fraction
+    // of total power delivery. As off-grid capacity grows, demand on grid
+    // infrastructure (PPAs, LPTs) shrinks proportionally.
+    const gridPotential = potentials['grid_interconnect'] || 0;
+    const offGridPotential = potentials['off_grid_power'] || 0;
+    const totalPowerPotential = gridPotential + offGridPotential;
+    const gridShare = totalPowerPotential > EPSILON
+      ? gridPotential / totalPowerPotential
+      : 1.0; // default to full grid dependency if no power yet
+
     let maxSupported = Infinity;
     let constraintCount = 0;
 
@@ -971,7 +983,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         if (!pooledPotentials[pool]) pooledPotentials[pool] = { potential: 0, intensity };
         pooledPotentials[pool].potential += potential;
       } else {
-        const supported = potential / intensity;
+        // Grid-dependent infrastructure: scale intensity by grid share so that
+        // off-grid MW reduces the constraint from PPAs and transformers.
+        const effectiveIntensity = (nodeId === 'power_generation' || nodeId === 'transformers_lpt')
+          ? intensity * gridShare
+          : intensity;
+        const supported = (effectiveIntensity > EPSILON) ? potential / effectiveIntensity : Infinity;
         if (supported < maxSupported) maxSupported = supported;
         constraintCount++;
       }
@@ -1101,7 +1118,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
       const nodeRes = results.nodes[node.id];
       const state = nodeState[node.id];
-      const intensity = nodeIntensityMap[node.id] || 0;
+      const baseIntensity = nodeIntensityMap[node.id] || 0;
+
+      // Grid-dependent infrastructure: scale intensity by grid share. Off-grid
+      // generation bypasses PPAs and large transformers, so these nodes only
+      // need to serve the grid-connected fraction of total power delivery.
+      const intensity = (node.id === 'power_generation' || node.id === 'transformers_lpt')
+        ? baseIntensity * gridShare
+        : baseIntensity;
 
       const planDemand = planDeployTotal * intensity;
       const actualConsumption = actualDeployTotal * intensity;
