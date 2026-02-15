@@ -807,7 +807,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // Nodes with real parallelism bottlenecks (labor, permitting, materials) define
   // maxAnnualExpansion to encode the actual constraint. Lead time only governs
   // *when* new capacity arrives, not *how much* can be started in parallel.
-  const compoundOrganicGrowth = (nodeId, month, tightness) => {
+  // Utilization threshold: capacity expansion (both organic and discrete)
+  // throttles when utilization is below this level. No board greenlights a
+  // new fab when existing lines are running at 40% — you fill what you have
+  // first. Below the floor, expansion stops entirely; between floor and
+  // threshold it ramps linearly.
+  const UTILIZATION_GATE_THRESHOLD = 0.65;
+  const UTILIZATION_GATE_FLOOR = 0.30;
+
+  const compoundOrganicGrowth = (nodeId, month, tightness, utilization) => {
     const cat = SUPPLY_CATEGORY_MAP[nodeId];
     if (!cat) return;
     const blockKey = getBlockKeyForMonth(month);
@@ -826,7 +834,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       ? Math.min(dynamicRate, node.maxAnnualExpansion)
       : dynamicRate;
 
-    runningSupplyMult[nodeId] *= Math.pow(1 + cappedRate, 1 / 12);
+    // Utilization gate: throttle investment when existing capacity is underused.
+    // Below floor → no expansion. Between floor and threshold → linear ramp.
+    // Above threshold → full expansion rate.
+    const util = (utilization !== undefined && utilization !== null) ? utilization : 1.0;
+    const utilizationFactor = (util >= UTILIZATION_GATE_THRESHOLD)
+      ? 1.0
+      : Math.max(0, (util - UTILIZATION_GATE_FLOOR) / (UTILIZATION_GATE_THRESHOLD - UTILIZATION_GATE_FLOOR));
+
+    runningSupplyMult[nodeId] *= Math.pow(1 + cappedRate * utilizationFactor, 1 / 12);
   };
 
   for (let month = 0; month < months; month++) {
@@ -1049,14 +1065,18 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Look ahead by GPU lead time, forecast demand using trajectories, trigger build if shortage projected
     gpuState.tightnessHistory.push(gpuTightness);
 
+    // GPU utilization: actual deployment vs effective capacity
+    const gpuUtilization = gpuEffCap > EPSILON ? actualDeployTotal / gpuEffCap : 1.0;
+
     // Organic growth: base expansion always applies (exogenous datacenter growth);
     // when tightness > 1 (demand exceeds supply), shortage-driven growth adds on top.
-    compoundOrganicGrowth('gpu_datacenter', month, gpuTightness);
-    compoundOrganicGrowth('gpu_inference', month, gpuTightness);
+    // Throttled by utilization — don't invest in new lines when existing ones are idle.
+    compoundOrganicGrowth('gpu_datacenter', month, gpuTightness, gpuUtilization);
+    compoundOrganicGrowth('gpu_inference', month, gpuTightness, gpuUtilization);
 
     const gpuLeadTime = gpuNode.leadTimeDebottleneck || 6;
     const gpuCooldown = Math.max(Math.floor(gpuLeadTime / 2), 6);
-    if ((month - gpuState.lastExpansionMonth) > gpuCooldown) {
+    if ((month - gpuState.lastExpansionMonth) > gpuCooldown && gpuUtilization >= UTILIZATION_GATE_FLOOR) {
       const gpuGrowthRatio = getDemandGrowthRatio(gpuLeadTime);
       const forecastGpuDemand = planDeployTotal * gpuGrowthRatio;
       const gpuFutureMonth = Math.min(month + gpuLeadTime, months - 1);
@@ -1192,12 +1212,19 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // expected market trajectory, not current consumption.
       state.tightnessHistory.push(tightness);
 
-      // Organic growth: base expansion always applies; shortage adds extra growth on top
-      compoundOrganicGrowth(node.id, month, tightness);
+      // Component utilization: delivered output vs effective capacity.
+      // For STOCK nodes, use production vs capacity; for FLOW, delivered vs capacity.
+      const compUtilization = effCap > EPSILON
+        ? (state.type === 'STOCK' ? production : delivered) / effCap
+        : 1.0;
+
+      // Organic growth: base expansion always applies; shortage adds extra growth on top.
+      // Throttled by utilization — don't build capacity you can't fill.
+      compoundOrganicGrowth(node.id, month, tightness, compUtilization);
 
       const compLeadTime = node.leadTimeDebottleneck || 12;
       const compCooldown = Math.max(Math.floor(compLeadTime / 2), 6);
-      if ((month - state.lastExpansionMonth) > compCooldown) {
+      if ((month - state.lastExpansionMonth) > compCooldown && compUtilization >= UTILIZATION_GATE_FLOOR) {
         const growthRatio = getDemandGrowthRatio(compLeadTime);
         const forecastDemand = planDemand * growthRatio;
         const compFutureMonth = Math.min(month + compLeadTime, months - 1);
