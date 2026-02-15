@@ -279,7 +279,7 @@ const NODES_BASE = [
     description: 'Intel Xeon, AMD EPYC server processors',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.25,
+    inputIntensity: 0.5,
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
     startingCapacity: 2500000,
