@@ -93,7 +93,7 @@ export const GLOBAL_PARAMS = {
     startingWattsPerBrainEquiv: 10000, // Starting AI watts per brain-equivalent of cognitive work
     maxEfficiencyVsBrain: 10,         // Asymptote: AI can be at most 10x more efficient than the brain
     // At 10x efficiency, AI does brain-equivalent work at 30W / 10 = 3W
-    minWattsPerBrainEquiv: 3          // = humanBrainWatts / maxEfficiencyVsBrain
+    minWattsPerBrainEquiv: 0.5          // = humanBrainWatts / maxEfficiencyVsBrain
   }
 };
 
