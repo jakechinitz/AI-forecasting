@@ -91,9 +91,10 @@ export const GLOBAL_PARAMS = {
   brainEquivalency: {
     humanBrainWatts: 30,              // Human brain power consumption in watts
     startingWattsPerBrainEquiv: 10000, // Starting AI watts per brain-equivalent of cognitive work
-    maxEfficiencyVsBrain: 10,         // Asymptote: AI can be at most 10x more efficient than the brain
+    maxEfficiencyVsBrain: 60,         // Asymptote: AI can be at most 10x more efficient than the brain
     // At 10x efficiency, AI does brain-equivalent work at 30W / 10 = 3W
-    minWattsPerBrainEquiv: 0.5          // = humanBrainWatts / maxEfficiencyVsBrain
+    // 0.5 watts maximum efficiency (thermodynamic limit adjusted for resilency/brittlness)
+    minWattsPerBrainEquiv: 0.5          // = humanBrainWatts / maxEfficiencyVsBrain 
   }
 };
 
