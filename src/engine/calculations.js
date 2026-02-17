@@ -156,7 +156,7 @@ const EPSILON = 1e-10;
 // improvements continue but at a dramatically slower pace — reflecting engineering
 // diminishing returns rather than a hard thermodynamic wall.
 export const CURRENT_GPU_WATTS = 700;
-export const THERMODYNAMIC_FLOOR_WATTS = 3;
+export const THERMODYNAMIC_FLOOR_WATTS = 0.5;
 export const MAX_EFFICIENCY_GAIN = CURRENT_GPU_WATTS / THERMODYNAMIC_FLOOR_WATTS;  // ~233×
 
 /**
