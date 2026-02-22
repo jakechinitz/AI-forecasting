@@ -1235,17 +1235,23 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const unmetThisMonth = Math.max(0, effectiveDemand - delivered);
       state.backlog = Math.max(0, backlogIn + effectiveDemand - delivered);
 
-      // Tightness and expansion use full plan demand (not effectiveDemand).
-      // The investment signal reflects the full market opportunity — companies
-      // build fabs based on 5-year order books, not current throughput. Only
-      // day-to-day production responds to actual consumption.
+      // Market tightness: uses plan demand for price signals and reporting.
+      // Reflects the full order-book pressure that drives market pricing.
       const totalLoad = planDemand + (backlogIn / BACKLOG_PAYDOWN_MONTHS_COMPONENTS);
       const tightness = totalLoad / Math.max(potentialSupply, EPSILON);
       const priceIndex = calculatePriceIndex(tightness);
 
+      // Operational tightness: uses effective demand for capacity expansion.
+      // When a different component is the fleet bottleneck (GPU gating), plan
+      // demand can be 2-3× actual consumption. Expanding capacity against the
+      // unconstrained order book builds factories that sit idle — no board
+      // greenlights a new line when the existing one ships 30% of capacity.
+      // Operational tightness ensures organic growth and discrete expansion
+      // respond to what customers actually take, not phantom demand.
+      const operationalLoad = effectiveDemand + (backlogIn / BACKLOG_PAYDOWN_MONTHS_COMPONENTS);
+      const operationalTightness = operationalLoad / Math.max(potentialSupply, EPSILON);
+
       // Forward-looking capacity expansion for components
-      // Uses plan demand (order book) for forecasting — companies invest based on
-      // expected market trajectory, not current consumption.
       state.tightnessHistory.push(tightness);
 
       // Component utilization: delivered output vs effective capacity.
@@ -1255,14 +1261,21 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         : 1.0;
 
       // Organic growth: base expansion always applies; shortage adds extra growth on top.
+      // Uses operationalTightness (effective demand) so non-binding components don't
+      // expand chasing unconstrained plan demand they'll never ship against.
       // Throttled by utilization — don't build capacity you can't fill.
-      compoundOrganicGrowth(node.id, month, tightness, compUtilization);
+      compoundOrganicGrowth(node.id, month, operationalTightness, compUtilization);
 
       const compLeadTime = node.leadTimeDebottleneck || 12;
       const compCooldown = Math.max(Math.floor(compLeadTime / 2), 6);
       if ((month - state.lastExpansionMonth) > compCooldown && compUtilization >= UTILIZATION_GATE_FLOOR) {
         const growthRatio = getDemandGrowthRatio(compLeadTime);
-        const forecastDemand = planDemand * growthRatio;
+        // Forecast from effective demand, not plan. When GPU gating limits
+        // actual deployment, the unconstrained plan inflates forecasts for
+        // non-binding components, triggering discrete expansions that produce
+        // capacity nobody can use. Effective demand tracks what's actually
+        // being consumed (+ headroom), giving a realistic expansion signal.
+        const forecastDemand = effectiveDemand * growthRatio;
         const compFutureMonth = Math.min(month + compLeadTime, months - 1);
         const futureSMult = runningSupplyMult[node.id] || 1;
         const futureCap = calculateCapacity(node, compFutureMonth, scenarioOverrides, state.dynamicExpansions, futureSMult);
