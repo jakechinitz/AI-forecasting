@@ -614,7 +614,7 @@ function buildIntensityMap() {
 
   map['cowos_capacity'] = resolveAssumptionValue(gpuToComp.cowosWaferEquivPerGpu?.value, 0.3);
   map['dram_server'] = resolveAssumptionValue(gpuToComp.serverDramGbPerGpu?.value, 128);
-  map['ssd_datacenter'] = 2;  // TB per GPU
+  map['ssd_datacenter'] = resolveAssumptionValue(gpuToComp.ssdTbPerGpu?.value, 2);
 
   // Hybrid bonding: initial static value (overridden monthly with adoption curve in sim loop)
   const hbIntensity = resolveAssumptionValue(gpuToComp.hybridBondingPerGpu?.value, 0.35);
@@ -635,8 +635,10 @@ function buildIntensityMap() {
   map['transformers_lpt'] = mwPerGpu * transformersPerMw;
   map['power_generation'] = mwPerGpu;
   map['backup_power'] = mwPerGpu * redundancyFactor;
-  map['dc_construction'] = mwPerGpu * 400;   // ~400 worker-months per MW
-  map['dc_ops_staff'] = mwPerGpu * 8;        // ~8 FTEs per MW
+  const workerMonthsPerMw = resolveAssumptionValue(serverToInfra.workerMonthsPerMw?.value, 400);
+  const ftesPerMw = resolveAssumptionValue(serverToInfra.ftesPerMw?.value, 8);
+  map['dc_construction'] = mwPerGpu * workerMonthsPerMw;
+  map['dc_ops_staff'] = mwPerGpu * ftesPerMw;
 
   // Downstream deployable nodes with GPU parents: explicitly set per-GPU intensities.
   // These were previously auto-mapped by a "fill gaps" loop, but that loop also pulled in
@@ -777,18 +779,22 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const defaultInfInstalled = 1500000;
 
   // Default starting backlogs for base case: reflects current massive shortage
-  // NVIDIA 6-12 month wait lists; every hyperscaler capacity-constrained
-  // GPU backlog ~4M units, components scaled by their per-GPU intensity
-  const DEFAULT_STARTING_BACKLOGS = {
-    gpu_datacenter: 4000000,
-    hbm_stacks: 32000000,    // 8 stacks/GPU * 4M
-    cowos_capacity: 1200000,  // 0.3 wafer-equiv/GPU * 4M
-    advanced_wafers: 1200000, // 0.3 wafers/GPU * 4M
-    dram_server: 512000000,   // 128 GB/GPU * 4M
-    ssd_datacenter: 8000000,  // 2 TB/GPU * 4M
-    server_assembly: 500000,  // (1/8 server/GPU) * 4M
-    datacenter_mw: 5200       // 0.0013 MW/GPU * 4M
-  };
+  // (NVIDIA 6-12 month wait lists; every hyperscaler capacity-constrained).
+  // Component backlogs are derived from the GPU backlog × per-GPU intensity so
+  // they stay consistent with the centralized intensities — change an intensity
+  // assumption and the implied component backlog follows automatically.
+  const GPU_STARTING_BACKLOG = 4000000;
+  const BACKLOG_COMPONENT_IDS = [
+    'hbm_stacks', 'cowos_capacity', 'advanced_wafers',
+    'dram_server', 'ssd_datacenter', 'server_assembly', 'datacenter_mw'
+  ];
+  const DEFAULT_STARTING_BACKLOGS = { gpu_datacenter: GPU_STARTING_BACKLOG };
+  for (const id of BACKLOG_COMPONENT_IDS) {
+    const intensity = nodeIntensityMap[id];
+    if (intensity && intensity > 0) {
+      DEFAULT_STARTING_BACKLOGS[id] = GPU_STARTING_BACKLOG * intensity;
+    }
+  }
 
   const dcInstalledOverride = startOverrides.datacenterInstalledBase ?? startOverrides.installedBaseDatacenter ?? startOverrides.installedBase;
   const infInstalledOverride = startOverrides.inferenceInstalledBase ?? startOverrides.installedBaseInference;
@@ -1288,9 +1294,16 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
             ? cap * (node.maxAnnualExpansion / 12)
             : cap * 1.0;
           const expansionAmount = Math.min(gap * 0.5, maxDynamic);
+          // Floor at 5% of capacity for uncapped nodes (keeps progress on shortages);
+          // for capped nodes, never exceed the monthly parallelism cap — otherwise
+          // the floor would silently bypass maxAnnualExpansion (e.g., grid_interconnect
+          // at 10%/yr would still gain 5% per trigger, ~33%/yr effective).
+          const expansionFloor = node.maxAnnualExpansion != null
+            ? Math.min(cap * 0.05, maxDynamic)
+            : cap * 0.05;
           state.dynamicExpansions.push({
             month: month + compLeadTime,
-            capacityAdd: Math.max(expansionAmount, cap * 0.05)
+            capacityAdd: Math.max(expansionAmount, expansionFloor)
           });
           state.lastExpansionMonth = month;
         }

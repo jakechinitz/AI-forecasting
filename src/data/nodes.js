@@ -398,6 +398,12 @@ const NODES_BASE = [
     geoRiskFlag: true,
     exportControlSensitivity: 'high',
 
+    // Parallelism constraint: HBM advanced packaging (TSV, microbump) requires
+    // specialized lines. SK Hynix grew ~80% in 2024 at peak crisis effort; 100%
+    // allows headroom for Samsung/Micron simultaneous ramps but caps unrealistic
+    // 150%+ growth that shortage elasticity could otherwise produce.
+    maxAnnualExpansion: 1.00,
+
     baseRate: {
       value: 7000000,
       confidence: 'high',
@@ -535,6 +541,11 @@ const NODES_BASE = [
     geoRiskFlag: true,
     exportControlSensitivity: 'critical',
 
+    // Parallelism constraint: TSMC CoWoS doubled in 18 months at peak (~67%/yr).
+    // 100% cap allows continued aggressive build-out (Amkor, ASE entering) but
+    // prevents unrealistic 150%+ rates the shortage elasticity could otherwise drive.
+    maxAnnualExpansion: 1.00,
+
     baseRate: {
       value: 120000,
       confidence: 'high',
@@ -584,6 +595,11 @@ const NODES_BASE = [
     geoRiskFlag: true,
     exportControlSensitivity: 'critical',
 
+    // Parallelism constraint: emerging tech with limited tool supply (EVG, ASMPT)
+    // and process know-how. 80% allows fast scale from a low base but caps the
+    // shortage-driven runaway rates the elasticity formula could otherwise hit.
+    maxAnnualExpansion: 0.80,
+
     baseRate: {
       value: 20000,
       confidence: 'low',
@@ -629,6 +645,11 @@ const NODES_BASE = [
     geoRiskFlag: true,
     exportControlSensitivity: 'medium',
 
+    // Parallelism constraint: ABF is supplied by a handful of Japanese chemical
+    // makers (Ajinomoto and a few competitors); throughput limited by reactor
+    // capacity and feedstock supply. Historical industry growth ~20-30%/yr.
+    maxAnnualExpansion: 0.50,
+
     baseRate: {
       value: 100000,
       confidence: 'medium',
@@ -672,6 +693,10 @@ const NODES_BASE = [
 
     geoRiskFlag: true,
     exportControlSensitivity: 'medium',
+
+    // Parallelism constraint: OSAT (ASE, Amkor, JCET) growth limited by clean-room
+    // build-out and tester capex. Industry historically grows ~20-40%/yr in boom.
+    maxAnnualExpansion: 0.80,
 
     baseRate: {
       value: 800000,
@@ -720,6 +745,11 @@ const NODES_BASE = [
 
     geoRiskFlag: true,
     exportControlSensitivity: 'critical',
+
+    // Parallelism constraint: leading-edge fab capex is multi-year (36mo new build)
+    // and gated by EUV tool throughput from ASML. Historical TSMC advanced-node
+    // capacity grew ~25-35%/yr at peak. 50% cap allows aggressive scenarios.
+    maxAnnualExpansion: 0.50,
 
     baseRate: {
       value: 180000,

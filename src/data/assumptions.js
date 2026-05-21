@@ -380,13 +380,14 @@ export const DEMAND_ASSUMPTIONS_BASE = buildDemandBlocks();
 // EFFICIENCY ASSUMPTIONS
 // ============================================
 
-// Efficiency calibration (Year 1 targets ~4.2x = 76% inference cost reduction):
-//   Google achieved ~80% (5x) in 2024; Stanford: 280x cost drop over 18mo
+// Efficiency calibration (Year 1 targets ~5.25x inference compute efficiency gain):
+//   Google achieved ~80% (5x) cost reduction in 2024; Stanford: 280x over 18mo
 //   Epoch AI: compute needs halving every 8 months for LLMs
 //   Software: 33x energy reduction per prompt in 12 months
 //   Hardware: H100→B200 ~4x inference perf in ~2 years
-// Formula: inferenceGain = 1 / ((1-m) / ((1+s) * (1+h)))
-// Year 1: 1/(0.45/(1.35*1.40)) = 1/0.238 = 4.20x ✓
+// Inference is memory-bandwidth bound, so HBM gains (h_memory) directly raise tok/s.
+// Engine formula: efficiencyGain = (1 / (1 - m)) * (1 + s) * (1 + h) * (1 + h_memory)
+// Year 1: (1/0.45) * 1.35 * 1.40 * 1.25 = 5.25x ✓
 const EFFICIENCY_TEMPLATE_YEAR1 = {
   label: SEGMENT_LABELS.year1,
 
@@ -577,11 +578,11 @@ export const TRANSLATION_INTENSITIES = {
     cowosWaferEquivPerGpu: { value: 0.3, confidence: 'medium', source: 'Package wafer-equivalent normalization' },
 
     hybridBondingPerGpu: { value: 0.35, confidence: 'low', source: 'Hybrid bonding roadmap estimates' },
-    hybridBondingPackageShare: { value: 0.2, confidence: 'low', source: '3D / SoIC penetration assumptions' },
-    hybridBondingAdoption: { initial: 0.02, target: 0.25, halflifeMonths: 36, confidence: 'low', source: 'Adoption curve' },
+    hybridBondingAdoption: { initial: 0.02, target: 0.25, halflifeMonths: 36, confidence: 'low', source: 'Adoption curve (share of GPUs using hybrid bonding over time)' },
 
     advancedWafersPerGpu: { value: 0.3, confidence: 'high', source: 'Reticle/multi-die normalization' },
-    serverDramGbPerGpu: { value: 128, confidence: 'medium', source: 'System DRAM per GPU (DDR5, 8-channel)' }
+    serverDramGbPerGpu: { value: 128, confidence: 'medium', source: 'System DRAM per GPU (DDR5, 8-channel)' },
+    ssdTbPerGpu: { value: 2, confidence: 'medium', source: 'Datacenter NVMe storage per GPU' }
   },
 
   // Servers → Infrastructure
@@ -589,7 +590,9 @@ export const TRANSLATION_INTENSITIES = {
     gpusPerServer: { value: 8, confidence: 'high' },
     serversPerRack: { value: 4, confidence: 'high' },
     kwPerGpu: { value: 1.0, confidence: 'medium', source: 'GPU + overhead' },
-    pue: { value: 1.3, confidence: 'high', source: 'Hyperscaler PUE' }
+    pue: { value: 1.3, confidence: 'high', source: 'Hyperscaler PUE' },
+    workerMonthsPerMw: { value: 400, confidence: 'low', source: 'DC construction labor intensity per MW (electricians, mechanical trades)' },
+    ftesPerMw: { value: 8, confidence: 'low', source: 'Ongoing ops staffing per MW (technicians, security, NOC)' }
   },
 
   powerChain: {
