@@ -115,16 +115,34 @@ const SUPPLY_CATEGORY_MAP = {
  * Substitution pools: nodes mapped to the same pool have their potentials
  * summed in the gating step. This models interchangeable supply sources.
  *
- * mw_delivery: All three nodes deliver MW to run GPUs through different paths.
- * datacenter_mw = grid-connected DC capacity, grid_interconnect = utility hookup
- * approvals, off_grid_power = behind-the-meter generation. A GPU needs MW from
- * ANY of these paths, not all three independently.
+ * power_hookup: grid_interconnect (utility hookup approvals) and off_grid_power
+ * (behind-the-meter generation) are alternative ways to energize a datacenter —
+ * a GPU needs MW from EITHER path. datacenter_mw (the built facility itself) is
+ * NOT a substitute for power: a deployment needs a building AND a hookup, so it
+ * gates separately.
  */
 const SUBSTITUTION_POOLS = {
-  datacenter_mw: 'mw_delivery',
-  grid_interconnect: 'mw_delivery',
-  off_grid_power: 'mw_delivery'
+  grid_interconnect: 'power_hookup',
+  off_grid_power: 'power_hookup'
 };
+
+/**
+ * Infrastructure nodes provision long-lived capacity tied to the installed
+ * fleet, not per-GPU consumables. A replacement GPU reuses the retiring GPU's
+ * building, hookup, transformers, and staffing, so demand on these nodes is
+ * driven by NET fleet growth (deployments minus retirements), and in gating
+ * the capacity freed by retirements supports that many replacement deployments.
+ */
+const INFRASTRUCTURE_NODES = new Set([
+  'datacenter_mw',
+  'grid_interconnect',
+  'off_grid_power',
+  'power_generation',
+  'transformers_lpt',
+  'backup_power',
+  'dc_construction',
+  'dc_ops_staff'
+]);
 
 const EXPECTED_UNITS = {
   'hbm_stacks': 'stacks/month',
@@ -647,7 +665,7 @@ function buildIntensityMap() {
   map['liquid_cooling'] = resolveAssumptionValue(NODE_MAP.get('liquid_cooling')?.inputIntensity, 0.05);
   map['osat_test'] = resolveAssumptionValue(NODE_MAP.get('osat_test')?.inputIntensity, 1);
   map['rack_pdu'] = resolveAssumptionValue(NODE_MAP.get('rack_pdu')?.inputIntensity, 0.025);
-  map['cpu_server'] = resolveAssumptionValue(NODE_MAP.get('cpu_server')?.inputIntensity, 0.25);
+  map['cpu_server'] = resolveAssumptionValue(NODE_MAP.get('cpu_server')?.inputIntensity, 0.5);
   map['dpu_nic'] = resolveAssumptionValue(NODE_MAP.get('dpu_nic')?.inputIntensity, 1);
   map['switch_asics'] = resolveAssumptionValue(NODE_MAP.get('switch_asics')?.inputIntensity, 0.125);
   map['optical_transceivers'] = resolveAssumptionValue(NODE_MAP.get('optical_transceivers')?.inputIntensity, 1);
@@ -850,13 +868,37 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // threshold it ramps linearly.
   const UTILIZATION_GATE_THRESHOLD = 0.65;
   const UTILIZATION_GATE_FLOOR = 0.30;
+  // Contraction: deeply idle lines in a glutted market get mothballed or
+  // repurposed. Up to 10%/yr at full idleness, never below half of the
+  // accumulated multiplier (committed/base capacity is not demolished).
+  const CONTRACTION_RATE_ANNUAL = 0.10;
+  const CONTRACTION_MULT_FLOOR = 0.5;
 
   const compoundOrganicGrowth = (nodeId, month, tightness, utilization) => {
     const cat = SUPPLY_CATEGORY_MAP[nodeId];
     if (!cat) return;
+    const util = (utilization !== undefined && utilization !== null) ? utilization : 1.0;
+
+    // Contraction path: utilization below the investment floor AND a glutted
+    // market → capacity slowly exits instead of holding forever.
+    if (util < UTILIZATION_GATE_FLOOR && tightness < glutThresholds.soft) {
+      const idleFactor = (UTILIZATION_GATE_FLOOR - util) / UTILIZATION_GATE_FLOOR;
+      const monthlyDecay = Math.pow(1 - CONTRACTION_RATE_ANNUAL * idleFactor, 1 / 12);
+      runningSupplyMult[nodeId] = Math.max(
+        runningSupplyMult[nodeId] * monthlyDecay,
+        CONTRACTION_MULT_FLOOR
+      );
+      return;
+    }
+
     const blockKey = getBlockKeyForMonth(month);
     const block = supplyAssumptions?.[blockKey];
-    const baseRate = resolveGrowthRate(block?.expansionRates?.[cat], 0.15);
+    // In a glut, organic base expansion pauses — otherwise capacity keeps
+    // compounding until utilization hits the gate (~1.5× overcapacity),
+    // making glut a guaranteed end state for every node.
+    const baseRate = tightness < glutThresholds.soft
+      ? 0
+      : resolveGrowthRate(block?.expansionRates?.[cat], 0.15);
 
     // Scale growth by how severe the shortage is, using the node's long-run elasticity
     const node = NODE_MAP.get(nodeId);
@@ -873,7 +915,6 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Utilization gate: throttle investment when existing capacity is underused.
     // Below floor → no expansion. Between floor and threshold → linear ramp.
     // Above threshold → full expansion rate.
-    const util = (utilization !== undefined && utilization !== null) ? utilization : 1.0;
     const utilizationFactor = (util >= UTILIZATION_GATE_THRESHOLD)
       ? 1.0
       : Math.max(0, (util - UTILIZATION_GATE_FLOOR) / (UTILIZATION_GATE_THRESHOLD - UTILIZATION_GATE_FLOOR));
@@ -931,7 +972,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         return 1;
       }
       const futureReq = computeRequiredGpus(futureMonth, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed);
-      const ratio = Math.max(futureReq.requiredTotal / req.requiredTotal, 1);
+      // Allow ratios below 1 so capacity planning can see demand decline —
+      // flooring at 1 made contraction invisible to every expansion decision.
+      const ratio = Math.max(futureReq.requiredTotal / req.requiredTotal, 0.1);
       demandForecastCache[lookAheadMonths] = ratio;
       return ratio;
     };
@@ -1011,8 +1054,22 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuYield = calculateNodeYield(gpuNode, month);
     const gpuEffCap = gpuCap * 0.95 * gpuYield;
 
-    const gpuAvailable = gpuState.inventory + gpuEffCap;
-    const preUpdateGpuInventory = gpuState.inventory;
+    // gpu_inference fab capacity supplies the same accelerator pool. Both fab
+    // lines feed one inventory (tracked on gpuState) from which DC and
+    // inference deployments draw.
+    const infNode = NODE_MAP.get('gpu_inference');
+    const infSMult = runningSupplyMult['gpu_inference'] || 1;
+    const infCap = calculateCapacity(infNode, month, scenarioOverrides, infState.dynamicExpansions, infSMult);
+    const infYield = calculateNodeYield(infNode, month);
+    const infEffCap = infCap * 0.95 * infYield;
+
+    const gpuEffCapTotal = gpuEffCap + infEffCap;
+    const gpuAvailable = gpuState.inventory + gpuEffCapTotal;
+
+    // Capacity freed by retiring GPUs: replacement deployments reuse the
+    // retired units' buildings, hookups, transformers, and staff, so
+    // infrastructure only constrains NET fleet additions.
+    const totalRetirements = dcRetirements + infRetirements;
 
     // Off-grid offset: behind-the-meter generation (gas turbines, solar+storage,
     // SMRs) bypasses grid infrastructure entirely. Power generation PPAs and
@@ -1029,9 +1086,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     let maxSupported = Infinity;
     let constraintCount = 0;
 
-    // Substitution pooling: nodes that deliver the same resource (e.g., MW to
-    // datacenters) have their potentials summed before gating. This lets
-    // off-grid power absorb demand when the grid interconnect queue is full.
+    // Substitution pooling: grid and off-grid hookups deliver the same MW and
+    // have their potentials summed before gating, so off-grid power can absorb
+    // demand when the grid interconnect queue is full. Built datacenter
+    // capacity (datacenter_mw) gates separately — a building is not a hookup.
+    // Infrastructure nodes constrain net fleet additions only: the capacity
+    // freed by this month's retirements supports that many replacements.
     const pooledPotentials = {};
     for (const [nodeId, intensity] of Object.entries(nodeIntensityMap)) {
       const potential = potentials[nodeId];
@@ -1046,13 +1106,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         const effectiveIntensity = (nodeId === 'power_generation' || nodeId === 'transformers_lpt')
           ? intensity * gridShare
           : intensity;
-        const supported = (effectiveIntensity > EPSILON) ? potential / effectiveIntensity : Infinity;
+        let supported = (effectiveIntensity > EPSILON) ? potential / effectiveIntensity : Infinity;
+        if (INFRASTRUCTURE_NODES.has(nodeId)) supported += totalRetirements;
         if (supported < maxSupported) maxSupported = supported;
         constraintCount++;
       }
     }
     for (const { potential, intensity } of Object.values(pooledPotentials)) {
-      const supported = potential / intensity;
+      // The power_hookup pool is infrastructure: retirements free hookups too.
+      const supported = potential / intensity + totalRetirements;
       if (supported < maxSupported) maxSupported = supported;
       constraintCount++;
     }
@@ -1074,7 +1136,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // full plan just piles up chips that can't deploy.
     const gpuBufferTarget = actualDeployTotal * DEFAULT_BUFFER_MONTHS;
     const gpuProdTarget = actualDeployTotal + Math.max(0, gpuBufferTarget - gpuState.inventory);
-    const gpuProduced = Math.min(gpuEffCap, gpuProdTarget);
+    const gpuProduced = Math.min(gpuEffCapTotal, gpuProdTarget);
 
     const oldGpuBacklog = gpuState.backlog;
 
@@ -1098,17 +1160,19 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     gpuState.installedBase = Math.max(0, gpuState.installedBase + actualDc - dcRetirements);
     infState.installedBase = Math.max(0, infState.installedBase + actualInf - infRetirements);
 
+    // Tightness compares demand flow against production capacity (flow vs
+    // flow). Inventory buffers delivery but is not monthly supply — dividing
+    // by (inventory + capacity) made every balanced market read as glut.
     const gpuTotalLoad = baselinePlan + (oldGpuBacklog / BACKLOG_PAYDOWN_MONTHS_GPU);
-    const gpuPotential = preUpdateGpuInventory + gpuEffCap;
-    const gpuTightness = gpuTotalLoad / Math.max(gpuPotential, EPSILON);
+    const gpuTightness = gpuTotalLoad / Math.max(gpuEffCapTotal, EPSILON);
     const gpuPriceIndex = calculatePriceIndex(gpuTightness);
 
     // Forward-looking capacity expansion for GPUs
     // Look ahead by GPU lead time, forecast demand using trajectories, trigger build if shortage projected
     gpuState.tightnessHistory.push(gpuTightness);
 
-    // GPU utilization: actual deployment vs effective capacity
-    const gpuUtilization = gpuEffCap > EPSILON ? actualDeployTotal / gpuEffCap : 1.0;
+    // GPU utilization: actual deployment vs combined effective capacity
+    const gpuUtilization = gpuEffCapTotal > EPSILON ? actualDeployTotal / gpuEffCapTotal : 1.0;
 
     // Organic growth: base expansion always applies (exogenous datacenter growth);
     // when tightness > 1 (demand exceeds supply), shortage-driven growth adds on top.
@@ -1124,7 +1188,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const gpuFutureMonth = Math.min(month + gpuLeadTime, months - 1);
       const forecastGpuSMult = runningSupplyMult['gpu_datacenter'] || 1;
       const forecastGpuCap = calculateCapacity(gpuNode, gpuFutureMonth, scenarioOverrides, gpuState.dynamicExpansions, forecastGpuSMult);
-      const forecastGpuEffCap = forecastGpuCap * 0.95 * calculateNodeYield(gpuNode, gpuFutureMonth);
+      const forecastInfSMult = runningSupplyMult['gpu_inference'] || 1;
+      const forecastInfCap = calculateCapacity(infNode, gpuFutureMonth, scenarioOverrides, infState.dynamicExpansions, forecastInfSMult);
+      const forecastGpuEffCap = (forecastGpuCap * calculateNodeYield(gpuNode, gpuFutureMonth)
+        + forecastInfCap * calculateNodeYield(infNode, gpuFutureMonth)) * 0.95;
 
       if (forecastGpuDemand > forecastGpuEffCap) {
         const gap = forecastGpuDemand - forecastGpuEffCap;
@@ -1152,9 +1219,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       res.demand.push(planDeployTotal * share);
       res.planDeploy.push(planDeployTotal * share);
       res.supply.push(isDc ? actualDc : actualInf);
-      res.capacity.push(isDc ? gpuEffCap : 0);
-      res.supplyPotential.push(gpuEffCap * share);
-      res.potential.push(gpuEffCap * share);
+      res.capacity.push(isDc ? gpuEffCap : infEffCap);
+      res.supplyPotential.push(isDc ? gpuEffCap : infEffCap);
+      res.potential.push(isDc ? gpuEffCap : infEffCap);
       res.inventory.push(isDc ? gpuState.inventory : 0);
       res.backlog.push(gpuState.backlog * share);
       res.installedBase.push(isDc ? gpuState.installedBase : infState.installedBase);
@@ -1164,7 +1231,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       res.idleGpus.push(isDc ? blockedDc : blockedInf);
       res.tightness.push(gpuTightness);
       res.priceIndex.push(gpuPriceIndex);
-      res.yield.push(gpuYield);
+      res.yield.push(isDc ? gpuYield : infYield);
       res.shortage.push(gpuIsShort ? 1 : 0);
       res.glut.push(gpuIsGlut ? (gpuIsHardGlut ? 2 : 1) : 0);
       res.unmetDemand.push(Math.max(0, (planDeployTotal * share) - (isDc ? actualDc : actualInf)));
@@ -1185,12 +1252,23 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // Grid-dependent infrastructure: scale intensity by grid share. Off-grid
       // generation bypasses PPAs and large transformers, so these nodes only
       // need to serve the grid-connected fraction of total power delivery.
-      const intensity = (node.id === 'power_generation' || node.id === 'transformers_lpt')
-        ? baseIntensity * gridShare
-        : baseIntensity;
+      // Grid and off-grid hookups likewise split the MW demand by share —
+      // they are substitutes, so neither sees the full load.
+      let intensity = baseIntensity;
+      if (node.id === 'power_generation' || node.id === 'transformers_lpt' || node.id === 'grid_interconnect') {
+        intensity = baseIntensity * gridShare;
+      } else if (node.id === 'off_grid_power') {
+        intensity = baseIntensity * (1 - gridShare);
+      }
 
-      const planDemand = planDeployTotal * intensity;
-      const actualConsumption = actualDeployTotal * intensity;
+      // Infrastructure demand tracks NET fleet growth: replacement GPUs reuse
+      // the retiring units' buildings, hookups, transformers, and staff.
+      const isInfra = INFRASTRUCTURE_NODES.has(node.id);
+      const planUnits = isInfra ? Math.max(0, planDeployTotal - totalRetirements) : planDeployTotal;
+      const actualUnits = isInfra ? Math.max(0, actualDeployTotal - totalRetirements) : actualDeployTotal;
+
+      const planDemand = planUnits * intensity;
+      const actualConsumption = actualUnits * intensity;
 
       // Effective demand: producers respond to what customers actually consume,
       // not the unconstrained order book. When a different component is the fleet
@@ -1243,8 +1321,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
       // Market tightness: uses plan demand for price signals and reporting.
       // Reflects the full order-book pressure that drives market pricing.
+      // Compares demand FLOW against production capacity (flow vs flow) —
+      // inventory buffers delivery but is not monthly supply, and dividing by
+      // (inventory + capacity) made every balanced STOCK market read as glut.
       const totalLoad = planDemand + (backlogIn / BACKLOG_PAYDOWN_MONTHS_COMPONENTS);
-      const tightness = totalLoad / Math.max(potentialSupply, EPSILON);
+      const tightness = totalLoad / Math.max(effCap, EPSILON);
       const priceIndex = calculatePriceIndex(tightness);
 
       // Operational tightness: uses effective demand for capacity expansion.
@@ -1255,7 +1336,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // Operational tightness ensures organic growth and discrete expansion
       // respond to what customers actually take, not phantom demand.
       const operationalLoad = effectiveDemand + (backlogIn / BACKLOG_PAYDOWN_MONTHS_COMPONENTS);
-      const operationalTightness = operationalLoad / Math.max(potentialSupply, EPSILON);
+      const operationalTightness = operationalLoad / Math.max(effCap, EPSILON);
 
       // Forward-looking capacity expansion for components
       state.tightnessHistory.push(tightness);

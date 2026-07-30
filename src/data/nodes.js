@@ -514,7 +514,9 @@ const NODES_BASE = [
     description: 'TSMC CoWoS 2.5D packaging for AI chips',
 
     demandDriverType: 'derived',
-    inputIntensity: 1.0,
+    // Engine sources this intensity from TRANSLATION_INTENSITIES.gpuToComponents
+    // .cowosWaferEquivPerGpu in assumptions.js; kept in sync for display.
+    inputIntensity: 0.3,
     parentNodeIds: ['gpu_datacenter'],
 
     startingCapacity: 120000,    // TSMC doubled CoWoS capacity through 2025
@@ -720,7 +722,9 @@ const NODES_BASE = [
     description: '5nm/4nm/3nm wafer starts for AI chips',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.5,
+    // Engine sources this intensity from TRANSLATION_INTENSITIES.gpuToComponents
+    // .advancedWafersPerGpu in assumptions.js; kept in sync for display.
+    inputIntensity: 0.3,
     parentNodeIds: ['gpu_datacenter'],
 
     startingCapacity: 180000,
