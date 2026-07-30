@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import { ASSUMPTION_SEGMENTS, GLOBAL_PARAMS, TRANSLATION_INTENSITIES } from '../data/assumptions.js';
+import { ASSUMPTION_UPDATE_LOG } from '../data/nodes.js';
 import { formatNumber, softEfficiencyCap } from '../engine/calculations.js';
 
 /* ── Brain equivalency constants ── */
@@ -60,6 +61,16 @@ const TABLE_DEFS = {
     columns: [
       { path: ['hardwareEfficiency', 'h'], label: 'Accelerator Perf/$', suffix: '%/yr' },
       { path: ['hardwareEfficiency', 'h_memory'], label: 'Memory Bandwidth', suffix: '%/yr' }
+    ]
+  },
+  'supply-exp': {
+    category: 'supply',
+    columns: [
+      { path: ['expansionRates', 'packaging'], label: 'Packaging', suffix: '%/yr' },
+      { path: ['expansionRates', 'foundry'], label: 'Foundry', suffix: '%/yr' },
+      { path: ['expansionRates', 'memory'], label: 'Memory', suffix: '%/yr' },
+      { path: ['expansionRates', 'datacenter'], label: 'Datacenter', suffix: '%/yr' },
+      { path: ['expansionRates', 'power'], label: 'Power', suffix: '%/yr' }
     ]
   }
 };
@@ -941,8 +952,47 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
             </p>
             {renderBrainEquivalencyTable()}
           </div>
+
+          <div className="section">
+            <h4 className="section-title">Supply Expansion Ceilings</h4>
+            <p className="section-description">
+              Maximum annual capacity expansion rates by supply category. These are physical
+              ceilings — actual expansion is demand-driven, scaled by market tightness and
+              each node's elasticity in the simulation engine.
+            </p>
+            {renderEditableTable('supply-exp')}
+          </div>
         </div>
       </div>
+
+      {ASSUMPTION_UPDATE_LOG.length > 0 && (
+        <div className="card" style={{ marginTop: 'var(--space-lg)' }}>
+          <div className="card-header">
+            <h3 className="card-title">Monthly Assumption Updates</h3>
+          </div>
+          {ASSUMPTION_UPDATE_LOG.map((entry, idx) => (
+            <div key={entry.month || idx} className="section" style={{ marginTop: idx === 0 ? 0 : 'var(--space-md)' }}>
+              <h4 className="section-title">{entry.month}</h4>
+              {entry.summary && <p className="section-description">{entry.summary}</p>}
+              {Array.isArray(entry.materialHeadlines) && entry.materialHeadlines.length > 0 && (
+                <ul style={{ margin: '0 0 var(--space-sm)', paddingLeft: '1.25rem', fontSize: '0.8125rem' }}>
+                  {entry.materialHeadlines.map((headline, i) => <li key={i}>{headline}</li>)}
+                </ul>
+              )}
+              {Array.isArray(entry.changes) && entry.changes.length > 0 && (
+                <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: '0.8125rem' }}>
+                  {entry.changes.map((change, i) => (
+                    <li key={i}>
+                      <code>{change.target}.{change.field}</code>: {change.previous} → {change.next}
+                      {change.rationale ? ` — ${change.rationale}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="card" style={{ marginTop: 'var(--space-lg)' }}>
         <div className="card-header">

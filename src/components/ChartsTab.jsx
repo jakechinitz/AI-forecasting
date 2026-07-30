@@ -3,7 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area, ComposedChart, Bar, ReferenceLine
 } from 'recharts';
-import { NODES, NODE_GROUPS, getNode } from '../data/nodes.js';
+import { NODES, NODE_GROUP_MAP, getNode } from '../data/nodes.js';
 import { formatMonth, formatNumber } from '../engine/calculations.js';
 
 function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
@@ -87,7 +87,8 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
             <div key={index} style={{ color: entry.color, marginBottom: '2px' }}>
               {entry.name}: {
                 ['Tightness', 'Price Index', 'Yield'].includes(entry.name)
-                  ? (entry.name === 'Yield' ? entry.value.toFixed(1) + '%' : entry.value.toFixed(2))
+                  ? (typeof entry.value !== 'number' ? '-'
+                    : entry.name === 'Yield' ? entry.value.toFixed(1) + '%' : entry.value.toFixed(2))
                   : formatNumber(entry.value)
               }
             </div>
@@ -132,7 +133,7 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
           <h2 className="section-title">Select Node</h2>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-sm)' }}>
-          {NODES.filter(n => n.startingCapacity).slice(0, 20).map(n => (
+          {NODES.filter(n => n.startingCapacity).map(n => (
             <button
               key={n.id}
               className={`btn ${selectedNode === n.id ? 'btn-primary' : 'btn-secondary'}`}
@@ -144,7 +145,7 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
                   width: 8,
                   height: 8,
                   borderRadius: '50%',
-                  background: NODE_GROUPS[n.group]?.color
+                  background: NODE_GROUP_MAP[n.group]?.color
                 }}
               />
               {n.name}
@@ -165,7 +166,7 @@ function ChartsTab({ results, selectedNode, onSelectNode, scenario }) {
                     width: 12,
                     height: 12,
                     borderRadius: '50%',
-                    background: NODE_GROUPS[node.group]?.color,
+                    background: NODE_GROUP_MAP[node.group]?.color,
                     marginRight: 'var(--space-sm)'
                   }}
                 />

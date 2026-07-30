@@ -98,6 +98,11 @@ Purpose: produce accurate, reasonable forecasts tied to the most recent month an
 
 Return JSON only, following the schema. Include a concise reasoning log that references the sources and highlights what changed vs the prior month.
 
+STRUCTURE REQUIREMENTS (values placed elsewhere are silently ignored by the app):
+- assumptionOverrides must have top-level keys among "demand", "efficiency", "supply". Inside each, keys MUST be time-block keys (year1, year2, year3, year4, year5, years6_10, years11_15, years16_20), and inside each block use the same nested paths as the base assumptions file (e.g. {"demand": {"year1": {"inferenceGrowth": {"consumer": 9.0}}}}).
+- nodeOverrides must nest every node under a top-level "nodes" key, keyed by node id (e.g. {"nodes": {"hbm_stacks": {"startingCapacity": 8000000}}}). Do NOT include an "updateLog" key inside nodeOverrides; the update log is supplied separately via updateLogEntry.
+- Only override node fields the model reads (startingCapacity, committedExpansions, yield fields, elasticityLong, maxAnnualExpansion, inputIntensity where applicable). Most component intensities live in TRANSLATION_INTENSITIES in the assumptions file, not on nodes.
+
 Current month: ${currentMonth}
 As-of date: ${asOfDate}
 
@@ -217,7 +222,17 @@ Fetched sources (scraped, use what is relevant):\n${JSON.stringify(fetchedSource
     throw new Error(`OpenAI response missing expected keys. Got: ${Object.keys(parsed).join(', ')}`);
   }
   const mergedAssumptions = deepMerge(assumptionOverrides || {}, parsed.assumptionOverrides || {});
-  const mergedNodes = deepMerge(nodeOverrides || {}, parsed.nodeOverrides || {});
+
+  // Defensive fixups: node overrides must live under a "nodes" key, and the
+  // updateLog history must never be overwritten by model output (arrays merge
+  // by replacement, so an echoed updateLog would truncate history).
+  let nodePatch = parsed.nodeOverrides || {};
+  delete nodePatch.updateLog;
+  if (!isPlainObject(nodePatch.nodes) && Object.keys(nodePatch).length > 0) {
+    console.warn('nodeOverrides missing "nodes" wrapper; wrapping model output.');
+    nodePatch = { nodes: nodePatch };
+  }
+  const mergedNodes = deepMerge(nodeOverrides || {}, nodePatch);
 
   mergedAssumptions.metadata = {
     ...(mergedAssumptions.metadata || {}),

@@ -306,7 +306,7 @@ function precomputeSupplyMultipliers(totalMonths, supplyAssumptions) {
     for (let m = 1; m < totalMonths; m++) {
       const blockKey = getBlockKeyForMonth(m);
       const block = supplyAssumptions?.[blockKey];
-      const annualRate = resolveAssumptionValue(block?.expansionRates?.[cat]?.value, 0);
+      const annualRate = resolveGrowthRate(block?.expansionRates?.[cat], 0);
       const monthlyFactor = Math.pow(1 + annualRate, 1 / 12);
       arr[m] = arr[m - 1] * monthlyFactor;
     }
@@ -856,7 +856,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     if (!cat) return;
     const blockKey = getBlockKeyForMonth(month);
     const block = supplyAssumptions?.[blockKey];
-    const baseRate = resolveAssumptionValue(block?.expansionRates?.[cat]?.value, 0.15);
+    const baseRate = resolveGrowthRate(block?.expansionRates?.[cat], 0.15);
 
     // Scale growth by how severe the shortage is, using the node's long-run elasticity
     const node = NODE_MAP.get(nodeId);
@@ -937,7 +937,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     };
 
     // Allocation: training => DC; inference split by configurable share
-    const dcInfShare = resolveAssumptionValue(demandBlock?.allocation?.dcInferenceShare?.value, 0.60);
+    const dcInfShare = resolveGrowthRate(demandBlock?.allocation?.dcInferenceShare, 0.60);
     const requiredDcBase = req.requiredTraining + (req.requiredInference * dcInfShare);
     const requiredInfBase = req.requiredInference * (1 - dcInfShare);
 

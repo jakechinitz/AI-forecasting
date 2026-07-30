@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea } from 'recharts';
-import { NODES, NODE_GROUPS, getNode } from '../data/nodes.js';
+import { NODES, NODE_GROUP_MAP, getNode } from '../data/nodes.js';
 import { formatMonth, formatNumber } from '../engine/calculations.js';
 
 function MarketClearingTab({ results, selectedNode, onSelectNode }) {
@@ -97,7 +97,7 @@ function MarketClearingTab({ results, selectedNode, onSelectNode }) {
             <div key={index} style={{ color: entry.color, marginBottom: '2px' }}>
               {entry.name}: {
                 entry.name === 'Tightness' || entry.name === 'Price Index'
-                  ? entry.value.toFixed(2)
+                  ? (typeof entry.value === 'number' ? entry.value.toFixed(2) : '-')
                   : formatNumber(entry.value)
               }
             </div>
@@ -158,7 +158,7 @@ function MarketClearingTab({ results, selectedNode, onSelectNode }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-sm)' }}>
                 <div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '2px' }}>
-                    {NODE_GROUPS[item.group]?.name}
+                    {NODE_GROUP_MAP[item.group]?.name}
                   </div>
                   <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{item.name}</div>
                 </div>

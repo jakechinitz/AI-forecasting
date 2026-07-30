@@ -3,15 +3,6 @@ import { NODES } from '../data/nodes.js';
 import { formatMonth } from '../engine/calculations.js';
 
 function GrowthRatesTab({ results }) {
-  if (!results) {
-    return (
-      <div className="loading-state">
-        <div className="spinner" />
-        <p>Running simulation...</p>
-      </div>
-    );
-  }
-
   const { rows, monthLabels } = useMemo(() => {
     if (!results?.months?.length) return { rows: [], monthLabels: [] };
     const monthLabelsLocal = results.months.map((month) => formatMonth(month));
@@ -40,6 +31,15 @@ function GrowthRatesTab({ results }) {
 
     return { rows: rowData, monthLabels: monthLabelsLocal };
   }, [results]);
+
+  if (!results) {
+    return (
+      <div className="loading-state">
+        <div className="spinner" />
+        <p>Running simulation...</p>
+      </div>
+    );
+  }
 
   const formatPercent = (value) => {
     if (value === null || value === undefined || Number.isNaN(value)) return '-';

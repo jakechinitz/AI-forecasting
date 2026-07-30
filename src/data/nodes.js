@@ -45,6 +45,9 @@ export const NODE_GROUPS = [
   { id: 'J', name: 'Logistics & Other', color: '#6B7280' }
 ];
 
+// Id-keyed lookup for components that resolve a node's group letter to name/color.
+export const NODE_GROUP_MAP = Object.fromEntries(NODE_GROUPS.map((g) => [g.id, g]));
+
 // ========================================
 // NODE DEFINITIONS
 // ========================================
