@@ -10,7 +10,7 @@ const NODES_PATH = path.join(ROOT, 'src', 'data', 'nodes.js');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_API_KEY) {
-  console.error('Missing OPENAI_API_KEY.');
+  console.error('Missing OPENAI_API_KEY. Set it locally (export OPENAI_API_KEY=...) or add it as a GitHub Actions secret named OPENAI_API_KEY (repo Settings > Secrets and variables > Actions).');
   process.exit(1);
 }
 
@@ -123,27 +123,20 @@ Fetched sources (scraped, use what is relevant):\n${JSON.stringify(fetchedSource
       input: [
         {
           role: 'system',
-          content: [
-            {
-              type: 'text',
-              text: 'You are GPT. Your task is to update monthly assumptions and node baselines using current data. Be conservative with changes and explain them clearly.'
-            }
-          ]
+          content: 'You are GPT. Your task is to update monthly assumptions and node baselines using current data. Be conservative with changes and explain them clearly.'
         },
         {
           role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: prompt
-            }
-          ]
+          content: prompt
         }
       ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
+      text: {
+        format: {
+          type: 'json_schema',
           name: 'assumption_update',
+          // strict mode is off because assumptionOverrides/nodeOverrides are
+          // free-form objects (additionalProperties: true), which strict rejects.
+          strict: false,
           schema: {
             type: 'object',
             additionalProperties: false,
@@ -191,8 +184,7 @@ Fetched sources (scraped, use what is relevant):\n${JSON.stringify(fetchedSource
               }
             },
             required: ['assumptionOverrides', 'nodeOverrides', 'updateLogEntry']
-          },
-          strict: true
+          }
         }
       }
     })
@@ -205,14 +197,25 @@ Fetched sources (scraped, use what is relevant):\n${JSON.stringify(fetchedSource
 
   const result = await response.json();
   const outputText = result?.output_text
-    ?? result?.output?.flatMap((item) => item.content || [])
+    ?? result?.output
+      ?.filter((item) => item.type === 'message')
+      .flatMap((item) => item.content || [])
+      .filter((content) => content?.type === 'output_text')
       .map((content) => content?.text)
       .find((text) => typeof text === 'string' && text.trim().length > 0);
   if (!outputText) {
-    throw new Error('No output_text in OpenAI response.');
+    throw new Error(`No output text in OpenAI response. Raw response: ${limitText(JSON.stringify(result), 2000)}`);
   }
 
-  const parsed = JSON.parse(outputText);
+  let parsed;
+  try {
+    parsed = JSON.parse(outputText);
+  } catch (error) {
+    throw new Error(`OpenAI returned invalid JSON: ${error.message}\n${limitText(outputText, 2000)}`);
+  }
+  if (!isPlainObject(parsed.assumptionOverrides) || !isPlainObject(parsed.nodeOverrides) || !isPlainObject(parsed.updateLogEntry)) {
+    throw new Error(`OpenAI response missing expected keys. Got: ${Object.keys(parsed).join(', ')}`);
+  }
   const mergedAssumptions = deepMerge(assumptionOverrides || {}, parsed.assumptionOverrides || {});
   const mergedNodes = deepMerge(nodeOverrides || {}, parsed.nodeOverrides || {});
 
