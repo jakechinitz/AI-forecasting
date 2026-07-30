@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { NODES, NODE_GROUPS, getNode } from '../data/nodes.js';
+import { NODES, NODE_GROUP_MAP, getNode } from '../data/nodes.js';
 import { formatMonth, formatNumber } from '../engine/calculations.js';
 
 function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
@@ -123,7 +123,7 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
               <div className="node-card-header">
                 <span
                   className="node-group-dot"
-                  style={{ background: NODE_GROUPS[n.group]?.color }}
+                  style={{ background: NODE_GROUP_MAP[n.group]?.color }}
                 />
                 <span className="node-card-name">{n.name}</span>
               </div>
@@ -163,7 +163,7 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
                   width: 12,
                   height: 12,
                   borderRadius: '50%',
-                  background: NODE_GROUPS[node.group]?.color,
+                  background: NODE_GROUP_MAP[node.group]?.color,
                   marginRight: 'var(--space-sm)'
                 }}
               />

@@ -512,9 +512,29 @@ export const SUPPLY_ASSUMPTIONS_BASE = buildSupplyBlocks();
 // APPLY JSON OVERRIDES (with normalization)
 // ============================================
 
-const DEMAND_OVERRIDES_NORM = normalizeOverridesToTemplate(DEMAND_ASSUMPTIONS_BASE.year1, assumptionOverrides?.demand || {});
-const EFF_OVERRIDES_NORM = normalizeOverridesToTemplate(EFFICIENCY_ASSUMPTIONS_BASE.year1, assumptionOverrides?.efficiency || {});
-const SUPPLY_OVERRIDES_NORM = normalizeOverridesToTemplate(SUPPLY_ASSUMPTIONS_BASE.year1, assumptionOverrides?.supply || {});
+/**
+ * Overrides must be block-keyed ({ year1: {...}, years6_10: {...}, ... }) to
+ * match the structures the engine reads. Each block's contents are normalized
+ * against that block's base template so numeric shorthand becomes { value }
+ * objects. Keys that aren't valid block keys would merge into paths nothing
+ * reads, so they are skipped with a warning instead.
+ */
+const normalizeBlockedOverrides = (baseBlocks, overrides, label) => {
+  if (!isPlainObject(overrides)) return {};
+  const out = {};
+  Object.entries(overrides).forEach(([blockKey, blockOverride]) => {
+    if (isPlainObject(baseBlocks[blockKey])) {
+      out[blockKey] = normalizeOverridesToTemplate(baseBlocks[blockKey], blockOverride);
+    } else {
+      console.warn(`Ignoring ${label} override key "${blockKey}": not a valid time block (expected one of ${Object.keys(baseBlocks).join(', ')}).`);
+    }
+  });
+  return out;
+};
+
+const DEMAND_OVERRIDES_NORM = normalizeBlockedOverrides(DEMAND_ASSUMPTIONS_BASE, assumptionOverrides?.demand || {}, 'demand');
+const EFF_OVERRIDES_NORM = normalizeBlockedOverrides(EFFICIENCY_ASSUMPTIONS_BASE, assumptionOverrides?.efficiency || {}, 'efficiency');
+const SUPPLY_OVERRIDES_NORM = normalizeBlockedOverrides(SUPPLY_ASSUMPTIONS_BASE, assumptionOverrides?.supply || {}, 'supply');
 
 export const DEMAND_ASSUMPTIONS = deepMerge(DEMAND_ASSUMPTIONS_BASE, DEMAND_OVERRIDES_NORM);
 export const EFFICIENCY_ASSUMPTIONS = deepMerge(EFFICIENCY_ASSUMPTIONS_BASE, EFF_OVERRIDES_NORM);
@@ -617,14 +637,6 @@ const applyOverridesToYears = (overrides = {}) => {
   }, {});
 };
 
-/**
- * Inherit year1 demand block while allowing partial overrides.
- */
-function inheritYear1Demand(overrides = {}) {
-  const b0 = DEMAND_ASSUMPTIONS_BASE[FIRST_ASSUMPTION_KEY];
-  return deepMerge(cloneBlock(b0), overrides);
-}
-
 export const SCENARIOS = {
   base: {
     id: 'base',
@@ -700,7 +712,6 @@ export const SCENARIOS = {
     id: 'tight2026',
     name: '2026 Tight Market (Backlog + Allocation)',
     description: 'Sold-out components + large order backlogs; shortages visible immediately.',
-    demandAssumptions: inheritYear1Demand({ asOfDate: '2026-01-01' }),
     overrides: {
       startingState: {
         installedBase: 1200000,
