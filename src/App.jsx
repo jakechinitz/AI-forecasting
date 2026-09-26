@@ -5,6 +5,7 @@ import {
   DEMAND_ASSUMPTIONS,
   EFFICIENCY_ASSUMPTIONS,
   SUPPLY_ASSUMPTIONS,
+  FINANCING_ASSUMPTIONS,
   SCENARIOS
 } from './data/assumptions.js';
 import { runSimulation, formatMonth, formatNumber } from './engine/calculations.js';
@@ -22,6 +23,8 @@ import ChartsTab from './components/ChartsTab.jsx';
 import ScenarioTab from './components/ScenarioTab.jsx';
 import GrowthRatesTab from './components/GrowthRatesTab.jsx';
 import PrintoutTab from './components/PrintoutTab.jsx';
+import FundingTab from './components/FundingTab.jsx';
+import OutputsTab from './components/OutputsTab.jsx';
 
 import './styles/app.css';
 
@@ -30,13 +33,17 @@ const TABS = [
   { id: 'nodes', label: 'Node Library', icon: '\u25CE', description: 'Supply chain map' },
   { id: 'demand', label: 'Demand Drivers', icon: '\u2197', description: 'Workload demand' },
   { id: 'supply', label: 'Supply Buildout', icon: '\u25A3', description: 'Capacity growth' },
+  { id: 'funding', label: 'Capital & Funding', icon: '$', description: 'Who pays for the build' },
   { id: 'market', label: 'Market Clearing', icon: '\u2696', description: 'Tightness & pricing' },
   { id: 'analysis', label: 'Market Stress', icon: '\u26A0', description: 'Shortages & gluts' },
   { id: 'growth', label: 'YoY Growth', icon: '\u2191', description: 'Demand vs supply' },
   { id: 'charts', label: 'Node Trends', icon: '\u2500', description: 'Detailed charts' },
   { id: 'scenarios', label: 'Scenarios', icon: '\u2630', description: 'Compare cases' },
+  { id: 'outputs', label: 'Model Outputs', icon: '\u25A6', description: 'Annual output sheet' },
   { id: 'printout', label: 'Printout', icon: '\u2193', description: 'Snapshot summary' }
 ];
+
+const cloneFinancing = () => JSON.parse(JSON.stringify(FINANCING_ASSUMPTIONS));
 
 function App() {
   // State
@@ -51,7 +58,8 @@ function App() {
   const [customAssumptions, setCustomAssumptions] = useState({
     demand: JSON.parse(JSON.stringify(DEMAND_ASSUMPTIONS)),
     efficiency: JSON.parse(JSON.stringify(EFFICIENCY_ASSUMPTIONS)),
-    supply: JSON.parse(JSON.stringify(SUPPLY_ASSUMPTIONS))
+    supply: JSON.parse(JSON.stringify(SUPPLY_ASSUMPTIONS)),
+    financing: cloneFinancing()
   });
 
   // Run simulation when assumptions or scenario change
@@ -109,6 +117,25 @@ function App() {
 
       return updated;
     });
+  }, []);
+
+  // Financing edits: path is an array into the financing object, e.g.
+  // ['scalars', 'cashTaxRate'], ['tiers', 1, 'debt'], ['paths', 'utilization', '2027']
+  const handleFinancingChange = useCallback((path, value) => {
+    setCustomAssumptions(prev => {
+      const updated = JSON.parse(JSON.stringify(prev));
+      let current = updated.financing;
+      for (let i = 0; i < path.length - 1; i++) {
+        if (current[path[i]] === undefined) current[path[i]] = {};
+        current = current[path[i]];
+      }
+      current[path[path.length - 1]] = value;
+      return updated;
+    });
+  }, []);
+
+  const handleResetFinancing = useCallback(() => {
+    setCustomAssumptions(prev => ({ ...prev, financing: cloneFinancing() }));
   }, []);
 
   // Render active tab content
@@ -221,6 +248,24 @@ function App() {
             results={simulationResults}
           />
         );
+      case 'funding':
+        return (
+          <FundingTab
+            results={simulationResults}
+            financing={customAssumptions.financing}
+            onFinancingChange={handleFinancingChange}
+            onResetFinancing={handleResetFinancing}
+          />
+        );
+
+      case 'outputs':
+        return (
+          <OutputsTab
+            results={simulationResults}
+            scenario={SCENARIOS[selectedScenario]}
+          />
+        );
+
       case 'printout':
         return (
           <PrintoutTab

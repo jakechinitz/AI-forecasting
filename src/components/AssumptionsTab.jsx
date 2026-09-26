@@ -60,7 +60,8 @@ const TABLE_DEFS = {
     category: 'efficiency',
     columns: [
       { path: ['hardwareEfficiency', 'h'], label: 'Accelerator Perf/$', suffix: '%/yr' },
-      { path: ['hardwareEfficiency', 'h_memory'], label: 'Memory Bandwidth', suffix: '%/yr' }
+      { path: ['hardwareEfficiency', 'h_memory'], label: 'Memory Bandwidth', suffix: '%/yr' },
+      { path: ['hardwareEfficiency', 'kw_growth'], label: 'kW per Accelerator', suffix: '%/yr', help: 'IT power per new accelerator' }
     ]
   },
   'supply-exp': {
@@ -458,7 +459,9 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
       const dcInstalled = results.nodes?.gpu_datacenter?.installedBase?.[monthIdx] || 0;
       const infInstalled = results.nodes?.gpu_inference?.installedBase?.[monthIdx] || 0;
       const totalInstalled = dcInstalled + infInstalled;
-      const totalPowerWatts = totalInstalled * WATTS_PER_GPU;
+      // Facility power: vintage-tracked IT GW from the engine × PUE
+      const itGW = results.fleet?.installedGW?.[monthIdx];
+      const totalPowerWatts = itGW != null ? itGW * 1e9 * PUE : totalInstalled * WATTS_PER_GPU;
 
       // Use capped wattsPerBrainEquiv from brain equivalency, hard-floored at 6W
       const rawWpbe = brainEquivalency.perBlock[block.key]?.wattsPerBrainEquiv ?? BRAIN.startingWattsPerBrainEquiv;
@@ -499,7 +502,8 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
       // Unconstrained demand: requiredBase is the GPU fleet size the demand model wants
       const dcRequired = results.nodes?.gpu_datacenter?.requiredBase?.[endMonth] || 0;
       const infRequired = results.nodes?.gpu_inference?.requiredBase?.[endMonth] || 0;
-      const demandGW = (dcRequired + infRequired) * WATTS_PER_GPU / 1e9;
+      const reqItGW = results.fleet?.requiredGW?.[endMonth];
+      const demandGW = reqItGW != null ? reqItGW * PUE : (dcRequired + infRequired) * WATTS_PER_GPU / 1e9;
 
       // Constrained: what actually got built (from installedBase via impliedAIs)
       const constrainedGW = row.totalPowerGW;

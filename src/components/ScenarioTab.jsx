@@ -180,11 +180,7 @@ function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results })
             <div className="card">
               <h4 style={{ marginBottom: 'var(--space-sm)' }}>Scenario Characteristics</h4>
               <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-                {selectedScenario === 'base' && 'Balanced assumptions with moderate growth and efficiency gains.'}
-                {selectedScenario === 'highDemandSlowEfficiency' && 'Aggressive adoption with disappointing efficiency improvements creates persistent shortages.'}
-                {selectedScenario === 'highDemandFastEfficiency' && 'Strong demand offset by rapid efficiency gains leads to balanced markets.'}
-                {selectedScenario === 'demandSlowdown' && 'Weaker-than-expected adoption may lead to overcapacity and gluts.'}
-                {selectedScenario === 'geopoliticalShock' && 'Regional supply disruption causes severe temporary constraints.'}
+                {scenarios[selectedScenario]?.description}
               </p>
             </div>
           </div>
@@ -210,10 +206,10 @@ function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results })
             <tbody>
               <tr className={selectedScenario === 'base' ? 'selected' : ''}>
                 <td className="text-cell"><strong>Base Case</strong></td>
-                <td>Moderate (40-55% CAGR)</td>
-                <td>Moderate (25-40% annual)</td>
+                <td>Tokens ~3.6x in Year 1, decelerating</td>
+                <td>Software ~1.7x in Year 1, decelerating</td>
                 <td>Normal</td>
-                <td style={{ color: 'var(--status-stressed)' }}>Periodic constraints, mostly balanced</td>
+                <td style={{ color: 'var(--status-stressed)' }}>Funding binds the build 2027–2033</td>
               </tr>
               <tr className={selectedScenario === 'highDemandSlowEfficiency' ? 'selected' : ''}>
                 <td className="text-cell"><strong>High Demand / Slow Efficiency</strong></td>
@@ -242,6 +238,13 @@ function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results })
                 <td>Moderate</td>
                 <td style={{ color: 'var(--status-tight)' }}>50% capacity loss</td>
                 <td style={{ color: 'var(--status-tight)' }}>Severe short-term shortages</td>
+              </tr>
+              <tr className={selectedScenario === 'creditCrunch' ? 'selected' : ''}>
+                <td className="text-cell"><strong>Credit Crunch</strong></td>
+                <td>Base</td>
+                <td>Base</td>
+                <td style={{ color: 'var(--status-tight)' }}>AI debt capacity −60%, equity −80%</td>
+                <td style={{ color: 'var(--status-tight)' }}>Slower build; hyperscalers market-limited</td>
               </tr>
             </tbody>
           </table>

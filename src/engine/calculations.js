@@ -13,9 +13,12 @@
  *    which avoids circularity and makes constraints visible immediately.
  */
 
-import { NODES, getNode, getChildNodes } from '../data/nodes.js';
+import { NODES } from '../data/nodes.js';
+import { createFinancingModel } from './financing.js';
 import {
   GLOBAL_PARAMS,
+  FLEET_ANCHOR,
+  FINANCING_ASSUMPTIONS,
   DEMAND_ASSUMPTIONS,
   EFFICIENCY_ASSUMPTIONS,
   SUPPLY_ASSUMPTIONS,
@@ -189,6 +192,7 @@ export function softEfficiencyCap(raw, knee) {
 }
 
 // Planning knobs
+const DEFAULT_CALIBRATION_RATIO = 1.15;
 const CATCHUP_MONTHS = 6;
 const DEFAULT_BUFFER_MONTHS = 2;
 
@@ -443,7 +447,7 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
   if (cache[month]) return cache[month];
 
   if (month === 0) {
-    cache[0] = { M_inference: 1, M_training: 1, S_inference: 1, S_training: 1, H: 1, H_memory: 1 };
+    cache[0] = { M_inference: 1, M_training: 1, S_inference: 1, S_training: 1, H: 1, H_memory: 1, KW: 1 };
     return cache[0];
   }
 
@@ -460,6 +464,7 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
 
   const hAnnual = resolveGrowthRate(block?.hardwareEfficiency?.h, 0.15);
   const hMemAnnual = resolveGrowthRate(block?.hardwareEfficiency?.h_memory, 0.10);
+  const kwAnnual = resolveGrowthRate(block?.hardwareEfficiency?.kw_growth, 0);
 
   const decayInf = Math.pow(1 - mInfAnnual, 1 / 12);
   const decayTrn = Math.pow(1 - mTrnAnnual, 1 / 12);
@@ -468,6 +473,7 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
   const growSTrn = Math.pow(1 + sTrnAnnual, 1 / 12);
   const growH = Math.pow(1 + hAnnual, 1 / 12);
   const growHMem = Math.pow(1 + hMemAnnual, 1 / 12);
+  const growKW = Math.pow(1 + kwAnnual, 1 / 12);
 
   const cur = {
     M_inference: prev.M_inference * decayInf,
@@ -475,7 +481,9 @@ function getEfficiencyMultipliers(month, assumptions, cache, warnings, warnedSet
     S_inference: prev.S_inference * growSInf,
     S_training: prev.S_training * growSTrn,
     H: prev.H * growH,
-    H_memory: prev.H_memory * growHMem
+    H_memory: prev.H_memory * growHMem,
+    // IT power per NEW accelerator relative to the opening fleet's kW/accelerator
+    KW: prev.KW * growKW
   };
 
   // Safety: M should not increase (cost multiplier should trend down)
@@ -541,8 +549,16 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   // Soft efficiency ceiling: below ~233× (700W / 3W), gains are linear. Above the knee,
   // diminishing returns kick in — improvements continue but at logarithmic pace,
   // reflecting practical engineering limits rather than a hard thermodynamic wall.
-  const rawEfficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference * eff.H * eff.H_memory;
-  const efficiencyGain = softEfficiencyCap(rawEfficiencyGain, MAX_EFFICIENCY_GAIN);
+  //
+  // VINTAGE TRACKING: results are in "effective units" = month-0 frontier
+  // accelerators. Software gains (1/M × S) apply to the whole fleet, so they
+  // reduce required effective units. Hardware gains (H × H_memory) apply only
+  // to accelerators installed after month 0; the engine credits each new GPU
+  // with its install-month hardware index, so old vintages keep old throughput.
+  // The soft efficiency cap is applied to the total and charged to software.
+  const hwIndex = eff.H * eff.H_memory;
+  const rawEfficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference * hwIndex;
+  const efficiencyGain = softEfficiencyCap(rawEfficiencyGain, MAX_EFFICIENCY_GAIN) / Math.max(hwIndex, EPSILON);
 
   // Per-segment GPU demand (with demandScale applied to token volumes)
   const consumerTokensTotal = (inferenceDemand.consumer || 0) * demandScale;
@@ -586,17 +602,20 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   const hoursPerMonth = PHYSICS_DEFAULTS.hoursPerMonth;
 
   const totalTrainingHours = (frontierRuns * hoursFrontier) + (midtierRuns * hoursMidtier);
-  const denomTraining = hoursPerMonth * utilTrn * eff.S_training * eff.H;
-  // Soft cap training efficiency: compute raw gain = (S*H) / M, apply soft knee,
-  // then convert back to a cost factor. Gains continue past the knee but slow dramatically.
-  const rawTrainingGain = eff.S_training * eff.H / Math.max(eff.M_training, EPSILON);
-  const cappedTrainingGain = softEfficiencyCap(rawTrainingGain, MAX_EFFICIENCY_GAIN);
+  // Soft cap training efficiency: compute raw gain = (S*H) / M, apply soft knee.
+  // Hardware is credited through the vintage-tracked fleet (same index as
+  // inference), so only the software part reduces required effective units.
+  const rawTrainingGain = eff.S_training * hwIndex / Math.max(eff.M_training, EPSILON);
+  const cappedTrainingGain = softEfficiencyCap(rawTrainingGain, MAX_EFFICIENCY_GAIN) / Math.max(hwIndex, EPSILON);
   const requiredTraining = totalTrainingHours / (hoursPerMonth * utilTrn * cappedTrainingGain);
 
   return {
+    // All in effective units (month-0 frontier accelerators)
     requiredTotal: requiredInference + requiredTraining,
     requiredInference,
     requiredTraining,
+    hwIndex,
+    kwIndex: eff.KW,
     inferenceDemand,
     trainingDemand,
     edgeOffloadShare: {
@@ -762,6 +781,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const demandAssumptions = deepMerge(assumptions?.demand || DEMAND_ASSUMPTIONS, scenarioOverrides?.demand);
   const efficiencyAssumptions = deepMerge(assumptions?.efficiency || EFFICIENCY_ASSUMPTIONS, scenarioOverrides?.efficiency);
   const supplyAssumptions = deepMerge(assumptions?.supply || SUPPLY_ASSUMPTIONS, scenarioOverrides?.supplyAssumptions);
+  const financingAssumptions = deepMerge(assumptions?.financing || FINANCING_ASSUMPTIONS, scenarioOverrides?.financing);
 
   // Precompute demand trajectories (block-chained, no discontinuities)
   const demandTrajectories = precomputeDemandTrajectories(months, demandAssumptions);
@@ -792,9 +812,25 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const nodeState = {};
   const startOverrides = scenarioOverrides?.startingState || {};
 
-  // Realistic 2026 installed base: ~5M datacenter GPUs, ~1.5M inference accelerators
-  const defaultDcInstalled = 5000000;
-  const defaultInfInstalled = 1500000;
+  // Opening fleet from FLEET_ANCHOR (Excel funding model: ~24 GW IT end-2025).
+  // Three measures per pool: physical accelerators, effective units (each
+  // accelerator × its vintage throughput relative to the month-0 frontier), and
+  // IT kW. New accelerators add hwIndex effective units and kW0 × kwIndex kW.
+  const kw0 = resolveAssumptionValue(TRANSLATION_INTENSITIES?.serverToInfra?.kwPerGpu?.value, FLEET_ANCHOR.kwPerAccelerator || 1.4);
+  const frontierTok0 = FLEET_ANCHOR.frontierTokensPerKwhM || 7;
+  const anchorPhys = FLEET_ANCHOR.vintages.reduce((sum, v) => sum + (v.gw * 1e6) / kw0, 0);
+  const anchorEff = FLEET_ANCHOR.vintages.reduce((sum, v) => sum + ((v.gw * 1e6) / kw0) * (v.tokensPerKwhM / frontierTok0), 0);
+  const fleetEffRatio0 = anchorPhys > 0 ? anchorEff / anchorPhys : 1;
+
+  // Split the opening fleet between the datacenter and inference pools in the
+  // same proportion as month-0 requirements (training + DC share of inference).
+  const raw0 = computeRequiredGpus(0, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, 1);
+  const dcInfShare0 = resolveGrowthRate(getDemandBlockForMonth(0, demandAssumptions)?.allocation?.dcInferenceShare, 0.60);
+  const dcShare0 = raw0.requiredTotal > EPSILON
+    ? (raw0.requiredTraining + raw0.requiredInference * dcInfShare0) / raw0.requiredTotal
+    : 0.75;
+  const defaultDcInstalled = anchorPhys * dcShare0;
+  const defaultInfInstalled = anchorPhys * (1 - dcShare0);
 
   // Default starting backlogs for base case: reflects current massive shortage
   // (NVIDIA 6-12 month wait lists; every hyperscaler capacity-constrained).
@@ -823,6 +859,26 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     let installedBase = 0;
     if (node.id === 'gpu_datacenter') installedBase = (dcInstalledOverride !== undefined) ? dcInstalledOverride : defaultDcInstalled;
     if (node.id === 'gpu_inference') installedBase = (infInstalledOverride !== undefined) ? infInstalledOverride : defaultInfInstalled;
+    // Opening vintages as monthly cohorts (install month relative to model
+    // start), scaled to this pool's share of the fleet.
+    const cohorts = [];
+    if (installedBase > 0 && anchorPhys > 0) {
+      const poolScale = installedBase / anchorPhys;
+      for (const v of FLEET_ANCHOR.vintages) {
+        const physPerMonth = ((v.gw * 1e6) / kw0) * poolScale / 12;
+        for (let k = 0; k < 12; k++) {
+          cohorts.push({
+            month: (v.year - GLOBAL_PARAMS.startYear) * 12 + k,
+            phys: physPerMonth,
+            eff: physPerMonth * (v.tokensPerKwhM / frontierTok0),
+            kw: physPerMonth * kw0
+          });
+        }
+      }
+      cohorts.sort((x, y) => x.month - y.month);
+    }
+    const installedEff = cohorts.reduce((sum, c) => sum + c.eff, 0) || installedBase * fleetEffRatio0;
+    const installedKW = cohorts.reduce((sum, c) => sum + c.kw, 0) || installedBase * kw0;
 
     const overrideBacklog = startOverrides.backlogByNode?.[node.id];
     const initialBacklog = (overrideBacklog !== undefined) ? overrideBacklog : (DEFAULT_STARTING_BACKLOGS[node.id] ?? node.startingBacklog ?? 0);
@@ -832,6 +888,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       inventory: (type === 'STOCK') ? (node.startingInventory || 0) : 0,
       backlog: initialBacklog,
       installedBase,
+      installedEff,
+      installedKW,
+      cohorts,
+      cohortHead: 0,
       dynamicExpansions: [],
       lastExpansionMonth: -Infinity,
       tightnessHistory: []
@@ -849,7 +909,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // --- calibration ---
   const calibrationCfg = {
     enabled: scenarioOverrides?.calibration?.enabled ?? true,
-    targetRatio: scenarioOverrides?.calibration?.targetRatio ?? 1.50,
+    // Month-0 required ÷ installed (effective units). Set so 2026 average
+    // required compute ≈ the Excel funding model's 2026 figure (~37.5 GW):
+    // the market starts modestly short and the gap widens through the year.
+    targetRatio: scenarioOverrides?.calibration?.targetRatio ?? DEFAULT_CALIBRATION_RATIO,
     minScale: scenarioOverrides?.calibration?.minScale ?? 0.02,
     maxScale: scenarioOverrides?.calibration?.maxScale ?? 50
   };
@@ -922,8 +985,23 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     runningSupplyMult[nodeId] *= Math.pow(1 + cappedRate * utilizationFactor, 1 / 12);
   };
 
+  // --- financing layer (port of the Excel funding model) ---
+  const pue = resolveAssumptionValue(TRANSLATION_INTENSITIES?.serverToInfra?.pue?.value, 1.3);
+  const financing = createFinancingModel(financingAssumptions, { startYear: GLOBAL_PARAMS.startYear, pue });
+  const computeLifeMonths = Math.max(12, Math.round((financingAssumptions?.scalars?.computeLifeYears || 6) * 12));
+  const startMonthIndex = (GLOBAL_PARAMS.startMonth || 1) - 1;
+  results.fleet = {
+    installedGW: [], requiredGW: [], deployedGW: [], retiredGW: [],
+    fundingCapGW: [], binding: [], installedAccelerators: [],
+    fleetTokPerKwhM: [], frontierTokPerKwhM: [], kwPerNewAccelerator: [],
+    trainingShare: []
+  };
+  let yearAccum = null;
+
   for (let month = 0; month < months; month++) {
     results.months.push(month);
+    const monthOfYear = (startMonthIndex + month) % 12;
+    const calendarYear = GLOBAL_PARAMS.startYear + Math.floor((startMonthIndex + month) / 12);
 
     // Update hybrid bonding intensity with month-dependent adoption curve
     // S-curve: starts at initial share (~2%), ramps toward target (~25%) with halflife of 36 months
@@ -933,11 +1011,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const demandBlock = getDemandBlockForMonth(month, demandAssumptions);
 
     const currentInstalled = (nodeState['gpu_datacenter']?.installedBase || 0) + (nodeState['gpu_inference']?.installedBase || 0);
+    const currentInstalledEff = (nodeState['gpu_datacenter']?.installedEff || 0) + (nodeState['gpu_inference']?.installedEff || 0);
 
     if (month === 0 && (demandScale === null || demandScale === undefined)) {
       const raw = computeRequiredGpus(0, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, 1);
       const rawReq = Math.max(raw.requiredTotal, 1);
-      const desired = currentInstalled * calibrationCfg.targetRatio;
+      const desired = currentInstalledEff * calibrationCfg.targetRatio;
 
       let suggested = desired / rawReq;
       suggested = clamp(suggested, calibrationCfg.minScale, calibrationCfg.maxScale);
@@ -945,7 +1024,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       demandScale = calibrationCfg.enabled ? suggested : 1;
 
       results.warnings.push(
-        `INFO: Month 0 calibration: installed=${formatNumber(currentInstalled)} GPUs, raw required=${formatNumber(raw.requiredTotal)} GPUs. ` +
+        `INFO: Month 0 calibration: installed=${formatNumber(currentInstalled)} accelerators (${formatNumber(currentInstalledEff)} frontier-equivalent), raw required=${formatNumber(raw.requiredTotal)}. ` +
         `Applying demandScale=${demandScale.toFixed(2)} (enabled=${calibrationCfg.enabled}).`
       );
     }
@@ -1008,20 +1087,76 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuState = nodeState['gpu_datacenter'];
     const infState = nodeState['gpu_inference'];
 
-    // 1. Calculate natural decay (what dies this month)
-    const dcRetirements = gpuState.installedBase / 48;
-    const infRetirements = infState.installedBase / 48;
+    // Vintage indices for accelerators installed this month
+    const hwIdx = Math.max(req.hwIndex || 1, EPSILON);
+    const kwNew = kw0 * (req.kwIndex || 1);
 
-    // 2. Calculate "Do Nothing" outcome (Projected Remaining Fleet)
-    //    If we buy 0 GPUs, this is what we will have left.
-    const dcProjectedRemaining = Math.max(0, gpuState.installedBase - dcRetirements);
-    const infProjectedRemaining = Math.max(0, infState.installedBase - infRetirements);
+    // Per-month intensities: power/infrastructure needs scale with IT kW per
+    // new accelerator (intensities were built at the opening fleet's kW).
+    const monthIntensity = { ...nodeIntensityMap };
+    for (const id of INFRASTRUCTURE_NODES) {
+      if (monthIntensity[id] !== undefined) monthIntensity[id] *= (req.kwIndex || 1);
+    }
 
-    // 3. Smart Ordering Logic
-    //    Only buy if Required > Projected.
-    //    If Required < Projected, this returns 0 (orders stop, fleet shrinks).
-    const planDeployDc = Math.max(0, (requiredDcBase - dcProjectedRemaining) / CATCHUP_MONTHS);
-    const planDeployInf = Math.max(0, (requiredInfBase - infProjectedRemaining) / CATCHUP_MONTHS);
+    // 1. Retirements: each monthly cohort retires when it reaches the compute
+    //    life (Excel funding model: 6 years; the same input drives depreciation).
+    //    Nobody scraps working accelerators early in a shortage.
+    const retireCohorts = (pool) => {
+      const out = { phys: 0, eff: 0, kw: 0 };
+      while (pool.cohortHead < pool.cohorts.length && month - pool.cohorts[pool.cohortHead].month >= computeLifeMonths) {
+        const c = pool.cohorts[pool.cohortHead];
+        out.phys += c.phys; out.eff += c.eff; out.kw += c.kw;
+        pool.cohortHead += 1;
+      }
+      return out;
+    };
+    const dcRet = retireCohorts(gpuState);
+    const infRet = retireCohorts(infState);
+    const dcRetirements = dcRet.phys;
+    const infRetirements = infRet.phys;
+    const dcEffRetire = dcRet.eff;
+    const infEffRetire = infRet.eff;
+    const dcKwRetire = dcRet.kw;
+    const infKwRetire = infRet.kw;
+    const retiredKW = dcKwRetire + infKwRetire;
+
+    // 2. "Do Nothing" outcome in effective units (projected remaining fleet)
+    const dcProjectedRemaining = Math.max(0, gpuState.installedEff - dcEffRetire);
+    const infProjectedRemaining = Math.max(0, infState.installedEff - infEffRetire);
+
+    // 3. Smart ordering: close the effective-capacity gap over CATCHUP_MONTHS,
+    //    converted to physical accelerators at this month's hardware index.
+    const planDeployDc = Math.max(0, (requiredDcBase - dcProjectedRemaining) / CATCHUP_MONTHS) / hwIdx;
+    const planDeployInf = Math.max(0, (requiredInfBase - infProjectedRemaining) / CATCHUP_MONTHS) / hwIdx;
+
+    // Financing: open the calendar year (fundable capex computed on opening balances)
+    if (monthOfYear === 0 || month === 0) {
+      const totalEff = gpuState.installedEff + infState.installedEff;
+      const totalKW = gpuState.installedKW + infState.installedKW;
+      let trainSum = 0, reqSum = 0, reqNextSum = 0;
+      for (let m = month; m < Math.min(month + 12, months); m++) {
+        const r = computeRequiredGpus(m, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed);
+        trainSum += r.requiredTotal > EPSILON ? r.requiredTraining / r.requiredTotal : 0;
+        reqSum += r.requiredTotal;
+      }
+      const yearLen = Math.min(12, months - month);
+      for (let m = month + 12; m < Math.min(month + 24, months); m++) {
+        reqNextSum += computeRequiredGpus(m, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed).requiredTotal;
+      }
+      const nextLen = Math.max(0, Math.min(12, months - month - 12));
+      const midEff = getEfficiencyMultipliers(Math.min(month + 6, months - 1), efficiencyAssumptions, effCache, results.warnings, warnedSet);
+      const reqAvg = reqSum / Math.max(yearLen, 1);
+      financing.startYear(calendarYear, {
+        openingGW: totalKW / 1e6,
+        openingFleetTokPerKwhM: totalKW > EPSILON ? frontierTok0 * kw0 * totalEff / totalKW : frontierTok0,
+        frontierTokPerKwhM: frontierTok0 * (midEff.H * midEff.H_memory) / Math.max(midEff.KW, EPSILON),
+        trainingShare: trainSum / Math.max(yearLen, 1),
+        servedFraction: totalEff > EPSILON ? reqAvg / totalEff : 1,
+        priorScarcityRatio: totalEff > EPSILON ? Math.max(0, req.requiredTotal - totalEff) / totalEff : 0,
+        preSpendRatio: nextLen > 0 && reqAvg > EPSILON ? (reqNextSum / nextLen) / reqAvg : 1
+      });
+      yearAccum = { requiredGWSum: 0, months: 0, tokens: 0 };
+    }
 
     const backlogPaydown = gpuState.backlog / BACKLOG_PAYDOWN_MONTHS_GPU;
 
@@ -1068,8 +1203,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     // Capacity freed by retiring GPUs: replacement deployments reuse the
     // retired units' buildings, hookups, transformers, and staff, so
-    // infrastructure only constrains NET fleet additions.
-    const totalRetirements = dcRetirements + infRetirements;
+    // infrastructure only constrains NET fleet additions. Expressed in
+    // new-accelerator equivalents (retired kW ÷ kW per new accelerator).
+    const totalRetirements = retiredKW / Math.max(kwNew, EPSILON);
 
     // Off-grid offset: behind-the-meter generation (gas turbines, solar+storage,
     // SMRs) bypasses grid infrastructure entirely. Power generation PPAs and
@@ -1084,6 +1220,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       : 1.0; // default to full grid dependency if no power yet
 
     let maxSupported = Infinity;
+    let maxSupportedNode = null;
     let constraintCount = 0;
 
     // Substitution pooling: grid and off-grid hookups deliver the same MW and
@@ -1093,9 +1230,13 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Infrastructure nodes constrain net fleet additions only: the capacity
     // freed by this month's retirements supports that many replacements.
     const pooledPotentials = {};
-    for (const [nodeId, intensity] of Object.entries(nodeIntensityMap)) {
+    for (const [nodeId, intensity] of Object.entries(monthIntensity)) {
       const potential = potentials[nodeId];
       if (potential === undefined || intensity <= 0) continue;
+      // Hybrid bonding is not a hard gate: when bonding capacity is short,
+      // designs fall back to CoWoS-only packaging (already required for every
+      // accelerator). It still reports demand, tightness and expansion signals.
+      if (nodeId === 'hybrid_bonding') continue;
       const pool = SUBSTITUTION_POOLS[nodeId];
       if (pool) {
         if (!pooledPotentials[pool]) pooledPotentials[pool] = { potential: 0, intensity };
@@ -1108,14 +1249,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
           : intensity;
         let supported = (effectiveIntensity > EPSILON) ? potential / effectiveIntensity : Infinity;
         if (INFRASTRUCTURE_NODES.has(nodeId)) supported += totalRetirements;
-        if (supported < maxSupported) maxSupported = supported;
+        if (supported < maxSupported) { maxSupported = supported; maxSupportedNode = NODE_MAP.get(nodeId)?.name || nodeId; }
         constraintCount++;
       }
     }
-    for (const { potential, intensity } of Object.values(pooledPotentials)) {
+    for (const [poolName, { potential, intensity }] of Object.entries(pooledPotentials)) {
       // The power_hookup pool is infrastructure: retirements free hookups too.
       const supported = potential / intensity + totalRetirements;
-      if (supported < maxSupported) maxSupported = supported;
+      if (supported < maxSupported) { maxSupported = supported; maxSupportedNode = poolName === 'power_hookup' ? 'Power hookups (grid + on-site)' : poolName; }
       constraintCount++;
     }
 
@@ -1124,9 +1265,24 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       maxSupported = Infinity;
     }
 
+    // Funding gate: the year's fundable capex, paced monthly (Excel funding model)
+    const fundingCap = financing.capForMonth({
+      monthOfYear,
+      kwPerNewAccel: kwNew,
+      retiredGW: retiredKW / 1e6
+    });
+
     const demandCeiling = planDeployTotal;
-    const actualDeployTotal = Math.min(demandCeiling, gpuAvailable, maxSupported);
-    const blockedByComponents = Math.max(0, Math.min(demandCeiling, gpuAvailable) - actualDeployTotal);
+    const physicalMax = Math.min(demandCeiling, gpuAvailable, maxSupported);
+    const actualDeployTotal = Math.min(physicalMax, fundingCap);
+    const blockedByComponents = Math.max(0, Math.min(demandCeiling, gpuAvailable) - Math.min(demandCeiling, gpuAvailable, maxSupported));
+    const lostToFundingGW = Math.max(0, physicalMax - actualDeployTotal) * kwNew / 1e6;
+
+    // Binding constraint this month (what set actual deployments)
+    let binding = 'Demand';
+    if (actualDeployTotal < physicalMax - 1e-6) binding = 'Funding';
+    else if (maxSupported <= Math.min(demandCeiling, gpuAvailable) + 1e-6 && maxSupported < demandCeiling - 1e-6) binding = maxSupportedNode ? `Components: ${maxSupportedNode}` : 'Components';
+    else if (gpuAvailable < demandCeiling - 1e-6) binding = 'GPU supply';
 
     // =======================================================
     // STEP 3: UPDATES
@@ -1149,6 +1305,18 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // The effectiveDemand cap on production prevents this from causing runaway
     // inventory in non-binding components — only the investment signal grows.
     gpuState.backlog = Math.max(0, oldGpuBacklog + baselinePlan - actualDeployTotal);
+    // Orders only stay on the books while the capacity is still needed: cap the
+    // backlog at the remaining effective gap (in physical accelerators at this
+    // month's hardware index). Without this, years of funding- or supply-limited
+    // builds pile up a backlog that keeps driving deployments after the fleet
+    // has already caught up with demand (the gap was counted twice: once in
+    // the plan, once in backlog paydown).
+    {
+      const installedEffAfter = gpuState.installedEff + infState.installedEff
+        + actualDeployTotal * hwIdx - dcEffRetire - infEffRetire;
+      const remainingGapPhys = Math.max(0, req.requiredTotal - installedEffAfter) / hwIdx;
+      gpuState.backlog = Math.min(gpuState.backlog, remainingGapPhys);
+    }
 
     const shareDc = baselinePlan > EPSILON ? (planDeployDc / baselinePlan) : 0.7;
     const actualDc = actualDeployTotal * shareDc;
@@ -1159,6 +1327,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     gpuState.installedBase = Math.max(0, gpuState.installedBase + actualDc - dcRetirements);
     infState.installedBase = Math.max(0, infState.installedBase + actualInf - infRetirements);
+    gpuState.installedEff = Math.max(0, gpuState.installedEff + actualDc * hwIdx - dcEffRetire);
+    infState.installedEff = Math.max(0, infState.installedEff + actualInf * hwIdx - infEffRetire);
+    gpuState.installedKW = Math.max(0, gpuState.installedKW + actualDc * kwNew - dcKwRetire);
+    infState.installedKW = Math.max(0, infState.installedKW + actualInf * kwNew - infKwRetire);
+    if (actualDc > 0) gpuState.cohorts.push({ month, phys: actualDc, eff: actualDc * hwIdx, kw: actualDc * kwNew });
+    if (actualInf > 0) infState.cohorts.push({ month, phys: actualInf, eff: actualInf * hwIdx, kw: actualInf * kwNew });
 
     // Tightness compares demand flow against production capacity (flow vs
     // flow). Inventory buffers delivery but is not monthly supply — dividing
@@ -1225,7 +1399,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       res.inventory.push(isDc ? gpuState.inventory : 0);
       res.backlog.push(gpuState.backlog * share);
       res.installedBase.push(isDc ? gpuState.installedBase : infState.installedBase);
-      res.requiredBase.push(isDc ? requiredDcBase : requiredInfBase);
+      // Required accelerators at the pool's current average vintage mix, so it
+      // compares like-for-like with installedBase.
+      const pool = isDc ? gpuState : infState;
+      const physPerEff = pool.installedEff > EPSILON ? pool.installedBase / pool.installedEff : 1 / hwIdx;
+      res.requiredBase.push((isDc ? requiredDcBase : requiredInfBase) * physPerEff);
       res.consumption.push(actualDeployTotal * share);
       res.gpuDelivered.push(isDc ? actualDc : actualInf);
       res.idleGpus.push(isDc ? blockedDc : blockedInf);
@@ -1247,7 +1425,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
       const nodeRes = results.nodes[node.id];
       const state = nodeState[node.id];
-      const baseIntensity = nodeIntensityMap[node.id] || 0;
+      const baseIntensity = monthIntensity[node.id] || 0;
 
       // Grid-dependent infrastructure: scale intensity by grid share. Off-grid
       // generation bypasses PPAs and large transformers, so these nodes only
@@ -1419,8 +1597,47 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         nodeRes.consumption.push(actualConsumption);
       }
     }
+
+    // ---- Fleet + financing bookkeeping (end of month) ----
+    const fleetKW = gpuState.installedKW + infState.installedKW;
+    const fleetEff = gpuState.installedEff + infState.installedEff;
+    const fleetPhys = gpuState.installedBase + infState.installedBase;
+    const kwPerEff = fleetEff > EPSILON ? fleetKW / fleetEff : kwNew / hwIdx;
+    const requiredGW = req.requiredTotal * kwPerEff / 1e6;
+    const deployedGW = actualDeployTotal * kwNew / 1e6;
+    const retiredGW = retiredKW / 1e6;
+
+    results.fleet.installedGW.push(fleetKW / 1e6);
+    results.fleet.requiredGW.push(requiredGW);
+    results.fleet.deployedGW.push(deployedGW);
+    results.fleet.retiredGW.push(retiredGW);
+    results.fleet.fundingCapGW.push(Number.isFinite(fundingCap) ? fundingCap * kwNew / 1e6 : null);
+    results.fleet.binding.push(binding);
+    results.fleet.installedAccelerators.push(fleetPhys);
+    results.fleet.fleetTokPerKwhM.push(fleetKW > EPSILON ? frontierTok0 * kw0 * fleetEff / fleetKW : frontierTok0);
+    results.fleet.frontierTokPerKwhM.push(frontierTok0 * hwIdx / Math.max(req.kwIndex || 1, EPSILON));
+    results.fleet.kwPerNewAccelerator.push(kwNew);
+    results.fleet.trainingShare.push(req.requiredTotal > EPSILON ? req.requiredTraining / req.requiredTotal : 0);
+
+    financing.recordMonth({ deployedGW, retiredGW, binding, lostToFundingGW });
+    if (yearAccum) {
+      yearAccum.requiredGWSum += requiredGW;
+      yearAccum.months += 1;
+      yearAccum.tokens += (req.inferenceDemand.consumer || 0) + (req.inferenceDemand.enterprise || 0) + (req.inferenceDemand.agentic || 0);
+    }
+    if (monthOfYear === 11 || month === months - 1) {
+      financing.closeYear({
+        tokenDemandIndex: yearAccum ? yearAccum.tokens * scaleUsed : 0,
+        requiredGW: yearAccum && yearAccum.months ? yearAccum.requiredGWSum / yearAccum.months : requiredGW,
+        requiredGWYearEnd: requiredGW,
+        installedGW: fleetKW / 1e6,
+        scarcityRatio: fleetEff > EPSILON ? Math.max(0, req.requiredTotal - fleetEff) / fleetEff : 0
+      });
+    }
   }
 
+  results.financing = financing.finalize();
+  results.annual = results.financing.years;
   results.summary = analyzeResults(results);
   return results;
 }

@@ -30,17 +30,43 @@ const formatMonthYear = (date) => `${MONTH_NAMES[date.getUTCMonth()]} ${date.get
 const formatAsOfDate = (year, month) => `${year}-${pad2(month)}-01`;
 const addMonths = (date, months) => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1));
 
-const NOW = new Date();
-const CURRENT_YEAR = NOW.getUTCFullYear();
-const CURRENT_MONTH = NOW.getUTCMonth() + 1; // 1..12
-const START_DATE = new Date(Date.UTC(CURRENT_YEAR, CURRENT_MONTH - 1, 1));
-const DEFAULT_AS_OF_DATE = formatAsOfDate(CURRENT_YEAR, CURRENT_MONTH);
+// ============================================
+// FLEET ANCHOR (opening balances)
+// ============================================
+/**
+ * The model starts in January of the year after the fleet anchor, so the
+ * opening fleet, cash, and debt are all year-end actuals (the Excel funding
+ * model's convention: 2025 is the base year). Roll this forward once a new
+ * year-end is known and the whole model moves with it.
+ *
+ * GW are IT (critical) load. PUE is applied separately for facility power.
+ * Tokens/kWh at install per vintage come from the AI Capex Funding Model
+ * (~7M tok/kWh for early Blackwell, Elastix; Hopper-era vintages lower).
+ */
+export const FLEET_ANCHOR = {
+  asOfYearEnd: 2025,
+  vintages: [
+    { year: 2023, gw: 4, tokensPerKwhM: 3.0 },
+    { year: 2024, gw: 8, tokensPerKwhM: 4.5 },
+    { year: 2025, gw: 12, tokensPerKwhM: 7.0 }
+  ],
+  // Frontier (newest-vintage) serving efficiency at the model start
+  frontierTokensPerKwhM: 7.0,
+  // IT kW per accelerator for the opening fleet. GB200 NVL72 ≈ 120 kW / 72 GPUs
+  // ≈ 1.7 kW; HGX H100 ≈ 10.2 kW / 8 ≈ 1.3 kW; TPU/Trainium lower. Fleet blend ≈ 1.4.
+  kwPerAccelerator: 1.4,
+  source: 'AI Capex Funding Model (Sept 2026): opening AI fleet ≈ 24 GW end-2025'
+};
+
+const MODEL_START_YEAR = FLEET_ANCHOR.asOfYearEnd + 1;
+const START_DATE = new Date(Date.UTC(MODEL_START_YEAR, 0, 1));
+const DEFAULT_AS_OF_DATE = formatAsOfDate(MODEL_START_YEAR, 1);
 
 export const GLOBAL_PARAMS = {
   // Simulation horizon
   horizonYears: 20,
-  startYear: CURRENT_YEAR,
-  startMonth: CURRENT_MONTH,
+  startYear: MODEL_START_YEAR,
+  startMonth: 1,
 
   // Price index shape parameters (global, not per-node)
   priceIndex: {
@@ -198,22 +224,30 @@ const applyBlockLabel = (block, segmentKey, includeAsOfDate) => {
  * should never see missing workloadBase.
  */
 const WORKLOAD_BASE_DEFAULT = {
-  // Calibrated to Feb 2026 installed base (~10M AI accelerators, ~70% inference utilization)
-  // Google alone: 480T tokens/month (Apr 2025); total industry: ~1,500T+ mid-2025
-  // At 30 tok/s/GPU blended throughput, 500T tokens needs ~6.4M GPU-equivalents
+  // Token LEVEL is rescaled by the month-0 calibration (required = targetRatio ×
+  // installed fleet), so only the segment MIX and the growth rates matter here.
+  // Mix reflects 2026: coding/agent workloads are now the largest API consumers
+  // (OpenRouter: programming >50% of tokens; Anthropic run-rate driven by
+  // Claude Code/API), while consumer surfaces (Google 3.2Q tokens/mo incl. AI
+  // Overviews, Gemini app 950M MAU, ChatGPT) remain the largest single block.
   inferenceTokensPerMonth: {
-    consumer: 250e12,     // 250T — ChatGPT 810M WAU, Gemini 750M MAU, Claude, etc.
-    enterprise: 200e12,   // 200T — 71% of orgs using GenAI, copilots, RAG
-    agentic: 50e12        // 50T — emerging but doubling every 4 months
+    consumer: 225e12,     // 45%
+    enterprise: 175e12,   // 35%
+    agentic: 100e12       // 20%
   },
   trainingRunsPerMonth: {
-    frontier: 3,          // more frontier labs (OpenAI, Anthropic, Google, Meta, xAI, Mistral)
-    midtier: 300           // explosion of enterprise fine-tuning
+    frontier: 3,          // frontier-class runs completing per month, all labs incl. China
+    midtier: 300          // post-training, RL, fine-tuning, research runs
   },
-  // Assumption is accelerator-hours per run (not tokens)
+  // Accelerator-hours per run (not tokens). Sized so training + research is
+  // ~38% of the fleet at the start, matching the Excel funding model (42% in
+  // 2025 → 38% in 2026). A 2026 frontier run is ~150K accelerators × 4-6 months.
+  // Calibration scales training and inference together, so this baseline sets
+  // the training share directly: 2.4e9 accelerator-hours/month vs 500T tokens
+  // at 30 tok/s ≈ 38% training at the start.
   trainingComputePerRun: {
-    frontier: 50e6,       // ~70K GPUs for 1 month (100K GPU cluster at 70% utilization)
-    midtier: 200000       // ~280 GPUs for 1 month
+    frontier: 550e6,
+    midtier: 2.5e6
   }
 };
 
@@ -223,19 +257,27 @@ const DEMAND_TEMPLATE_YEAR1 = {
 
   workloadBase: cloneBlock(WORKLOAD_BASE_DEFAULT),
 
-  // Growth rates as annual fractions: 1.00 = 100% = 2x, 9.00 = 900% = 10x
-  // Google: 49.5x token growth in 12mo; OpenAI: 65x in 20mo; ChatGPT: 200M→810M WAU
-  // Net GPU demand growth = token_growth / efficiency_gain. At 4.2x efficiency:
-  //   Blended ~13.5x token growth → ~3.2x net GPU growth → real supply tension
+  // Growth rates as annual fractions: 1.00 = 100% = 2x, 2.50 = 250% = 3.5x
+  // Evidence (Sept 2026 research):
+  //   Google surface tokens: 9.7T/mo (May-24) → 480T (May-25, ~50x) → 3.2Q (May-26, ~7x).
+  //     Still 3.2Q at the Jul-26 earnings call → current annualized pace ~3-4x.
+  //   Google API: 16B → 22B tokens/min in one quarter (~3.6x annualized).
+  //   OpenAI API: 6B tokens/min (Oct-25) → 15B (Mar-26), then flat into GPT-5.4.
+  //   Revenue cross-check: Anthropic $9B → $65B run-rate (Dec-25 → Jul-26);
+  //     OpenAI ~2x YoY to $40B (Aug-26). With blended $/token falling 30-50%/yr,
+  //     revenue growth implies token growth of ~5-7x trailing, decelerating.
+  // Forward Year 1 blended ≈ 3.6x: consumer slowest, coding/agents fastest.
+  // Net compute demand = token growth ÷ software efficiency (model + systems);
+  // hardware gains apply only to newly installed accelerators (vintage-tracked).
   inferenceGrowth: {
-    consumer: { value: 9.00, confidence: 'medium', source: 'Google 49.5x tokens/12mo; ChatGPT 810M WAU; usage/user 2-3x/yr; new modalities', historicalRange: [4.00, 15.00] },
-    enterprise: { value: 14.00, confidence: 'low', source: 'Enterprise adoption 33%→71%; OpenAI reasoning tokens 320x YoY; copilot saturation', historicalRange: [6.00, 25.00] },
-    agentic: { value: 24.00, confidence: 'low', source: '1B AI agents by 2026; 10-25x compute per task vs chat; coding agents mainstream', historicalRange: [10.00, 40.00] }
+    consumer: { value: 1.50, confidence: 'medium', source: 'Google surfaces 7x YoY to May-26 but flat May→Jul; Gemini app 950M MAU; ChatGPT consumer growth slowing', historicalRange: [1.00, 4.00] },
+    enterprise: { value: 2.50, confidence: 'medium', source: 'Google API ~3.6x annualized (Q1→Q2-26); MSFT Foundry 1T-token customers 4x YoY', historicalRange: [1.50, 5.00] },
+    agentic: { value: 5.00, confidence: 'low', source: 'Coding agents: Anthropic run-rate 7x in 7 months; OpenRouter weekly tokens 5x in 6 months', historicalRange: [2.50, 10.00] }
   },
 
   trainingGrowth: {
     frontier: { value: 2.00, confidence: 'medium', source: 'More frontier labs + bigger clusters; GPT-5/Gemini 2/Claude 4 class runs', historicalRange: [0.50, 4.00] },
-    midtier: { value: 4.00, confidence: 'low', source: 'Enterprise fine-tuning explosion; 31% reaching production; RLHF ubiquitous', historicalRange: [2.00, 8.00] }
+    midtier: { value: 1.50, confidence: 'low', source: 'Post-training/RL and fine-tuning now a large compute block; growth slower than frontier', historicalRange: [0.75, 3.00] }
   },
 
   allocation: {
@@ -259,11 +301,15 @@ const DEMAND_TEMPLATE_YEAR1 = {
     source: 'Model releases, long-context adoption'
   },
 
+  // Extra tokens-per-request growth on top of inferenceGrowth. Zero for Years
+  // 1-5: those growth rates come from MEASURED token counts (Google, OpenAI,
+  // OpenRouter), which already include longer reasoning and agent chains.
+  // Years 6-20 keep their original per-request growth + intensity structure.
   intensityGrowth: {
-    value: 0.20,
+    value: 0,
     confidence: 'medium',
-    source: 'Reasoning models, agent loops, tool use',
-    historicalRange: [0.25, 0.60]
+    source: 'Already embedded in measured token growth (reasoning models, agent loops, tool use)',
+    historicalRange: [0, 0.60]
   },
 
 };
@@ -285,45 +331,47 @@ const buildDemandBlocks = () => {
   });
 
   // Targeted tweaks (only the values that should change by period)
-  // Year 2: Decelerating but still very strong (net GPU growth ~2.5x with ~3.1x efficiency)
-  blocks.year2.inferenceGrowth.consumer.value = 5.00;   // 6x
-  blocks.year2.inferenceGrowth.enterprise.value = 7.00;  // 8x
-  blocks.year2.inferenceGrowth.agentic.value = 14.00;    // 15x
+  // Token growth continues the observed deceleration (~50x → ~7x → ~3.6x):
+  // blended ≈ 2.6x (Y2), 2.1x (Y3), 1.8x (Y4), 1.6x (Y5). Agentic share keeps rising.
+  // Year 2
+  blocks.year2.inferenceGrowth.consumer.value = 1.00;   // 2x
+  blocks.year2.inferenceGrowth.enterprise.value = 1.50;  // 2.5x
+  blocks.year2.inferenceGrowth.agentic.value = 3.00;     // 4x
   blocks.year2.trainingGrowth.frontier.value = 1.50;
-  blocks.year2.trainingGrowth.midtier.value = 3.00;
+  blocks.year2.trainingGrowth.midtier.value = 1.20;
   // Edge offload Year 2: Apple Intelligence / Gemini Nano adoption growing
   blocks.year2.edgeOffload.consumer.value = 0.05;
   blocks.year2.edgeOffload.enterprise.value = 0.01;
   blocks.year2.edgeOffload.agentic.value = 0.00;
 
-  // Year 3: Growth moderating, market maturing (net GPU growth ~1.8x with ~2.5x efficiency)
-  blocks.year3.inferenceGrowth.consumer.value = 2.00;    // 3x
-  blocks.year3.inferenceGrowth.enterprise.value = 3.00;  // 4x
-  blocks.year3.inferenceGrowth.agentic.value = 7.00;     // 8x
-  blocks.year3.trainingGrowth.frontier.value = 0.80;
-  blocks.year3.trainingGrowth.midtier.value = 1.50;
+  // Year 3
+  blocks.year3.inferenceGrowth.consumer.value = 0.70;    // 1.7x
+  blocks.year3.inferenceGrowth.enterprise.value = 1.00;  // 2x
+  blocks.year3.inferenceGrowth.agentic.value = 2.00;     // 3x
+  blocks.year3.trainingGrowth.frontier.value = 1.0;
+  blocks.year3.trainingGrowth.midtier.value = 0.9;
   // Edge offload Year 3: distilled models becoming mainstream on flagships
   blocks.year3.edgeOffload.consumer.value = 0.12;
   blocks.year3.edgeOffload.enterprise.value = 0.03;
   blocks.year3.edgeOffload.agentic.value = 0.01;
 
-  // Year 4: Supply catching up, growth normalizing (net GPU growth ~1.3x with ~2x efficiency)
-  blocks.year4.inferenceGrowth.consumer.value = 1.00;    // 2x
-  blocks.year4.inferenceGrowth.enterprise.value = 1.50;  // 2.5x
-  blocks.year4.inferenceGrowth.agentic.value = 3.00;     // 4x
-  blocks.year4.trainingGrowth.frontier.value = 0.40;
-  blocks.year4.trainingGrowth.midtier.value = 0.80;
+  // Year 4
+  blocks.year4.inferenceGrowth.consumer.value = 0.50;    // 1.5x
+  blocks.year4.inferenceGrowth.enterprise.value = 0.75;  // 1.75x
+  blocks.year4.inferenceGrowth.agentic.value = 1.30;     // 2.3x
+  blocks.year4.trainingGrowth.frontier.value = 0.7;
+  blocks.year4.trainingGrowth.midtier.value = 0.6;
   // Edge offload Year 4: mid-range phones get capable NPUs; enterprise edge pilots
   blocks.year4.edgeOffload.consumer.value = 0.22;
   blocks.year4.edgeOffload.enterprise.value = 0.08;
   blocks.year4.edgeOffload.agentic.value = 0.02;
 
-  // Year 5: Maturing market (net GPU growth ~1.1x with ~1.8x efficiency)
-  blocks.year5.inferenceGrowth.consumer.value = 0.60;    // 1.6x
-  blocks.year5.inferenceGrowth.enterprise.value = 0.80;  // 1.8x
-  blocks.year5.inferenceGrowth.agentic.value = 1.50;     // 2.5x
-  blocks.year5.trainingGrowth.frontier.value = 0.25;
-  blocks.year5.trainingGrowth.midtier.value = 0.50;
+  // Year 5
+  blocks.year5.inferenceGrowth.consumer.value = 0.35;    // 1.35x
+  blocks.year5.inferenceGrowth.enterprise.value = 0.55;  // 1.55x
+  blocks.year5.inferenceGrowth.agentic.value = 0.90;     // 1.9x
+  blocks.year5.trainingGrowth.frontier.value = 0.5;
+  blocks.year5.trainingGrowth.midtier.value = 0.45;
   // Edge offload Year 5: most consumer queries handled locally for simple tasks
   blocks.year5.edgeOffload.consumer.value = 0.35;
   blocks.year5.edgeOffload.enterprise.value = 0.15;
@@ -333,8 +381,8 @@ const buildDemandBlocks = () => {
   blocks.years6_10.inferenceGrowth.consumer.value = 0.20;
   blocks.years6_10.inferenceGrowth.enterprise.value = 0.30;
   blocks.years6_10.inferenceGrowth.agentic.value = 0.50;
-  blocks.years6_10.trainingGrowth.frontier.value = 0.10;
-  blocks.years6_10.trainingGrowth.midtier.value = 0.20;
+  blocks.years6_10.trainingGrowth.frontier.value = 0.25;
+  blocks.years6_10.trainingGrowth.midtier.value = 0.3;
   blocks.years6_10.contextLength.averageTokens = 32000;
   blocks.years6_10.contextLength.growthRate = 0.25;
   blocks.years6_10.intensityGrowth.value = 0.25;
@@ -347,8 +395,8 @@ const buildDemandBlocks = () => {
   blocks.years11_15.inferenceGrowth.consumer.value = 0.12;
   blocks.years11_15.inferenceGrowth.enterprise.value = 0.18;
   blocks.years11_15.inferenceGrowth.agentic.value = 0.25;
-  blocks.years11_15.trainingGrowth.frontier.value = 0.08;
-  blocks.years11_15.trainingGrowth.midtier.value = 0.12;
+  blocks.years11_15.trainingGrowth.frontier.value = 0.15;
+  blocks.years11_15.trainingGrowth.midtier.value = 0.2;
   blocks.years11_15.contextLength.averageTokens = 64000;
   blocks.years11_15.contextLength.growthRate = 0.12;
   blocks.years11_15.intensityGrowth.value = 0.15;
@@ -361,8 +409,8 @@ const buildDemandBlocks = () => {
   blocks.years16_20.inferenceGrowth.consumer.value = 0.08;
   blocks.years16_20.inferenceGrowth.enterprise.value = 0.10;
   blocks.years16_20.inferenceGrowth.agentic.value = 0.15;
-  blocks.years16_20.trainingGrowth.frontier.value = 0.05;
-  blocks.years16_20.trainingGrowth.midtier.value = 0.08;
+  blocks.years16_20.trainingGrowth.frontier.value = 0.1;
+  blocks.years16_20.trainingGrowth.midtier.value = 0.12;
   blocks.years16_20.contextLength.averageTokens = 128000;
   blocks.years16_20.contextLength.growthRate = 0.05;
   blocks.years16_20.intensityGrowth.value = 0.10;
@@ -380,30 +428,42 @@ export const DEMAND_ASSUMPTIONS_BASE = buildDemandBlocks();
 // EFFICIENCY ASSUMPTIONS
 // ============================================
 
-// Efficiency calibration (Year 1 targets ~5.25x inference compute efficiency gain):
-//   Google achieved ~80% (5x) cost reduction in 2024; Stanford: 280x over 18mo
-//   Epoch AI: compute needs halving every 8 months for LLMs
-//   Software: 33x energy reduction per prompt in 12 months
-//   Hardware: H100→B200 ~4x inference perf in ~2 years
-// Inference is memory-bandwidth bound, so HBM gains (h_memory) directly raise tok/s.
-// Engine formula: efficiencyGain = (1 / (1 - m)) * (1 + s) * (1 + h) * (1 + h_memory)
-// Year 1: (1/0.45) * 1.35 * 1.40 * 1.25 = 5.25x ✓
+// Efficiency calibration.
+// SOFTWARE gains (model + systems) raise tokens per GPU-hour for the WHOLE fleet:
+//   softwareGain = (1 / (1 - m)) * (1 + s)
+// HARDWARE gains (h, h_memory) apply only to newly installed accelerators; the
+// engine tracks the fleet by vintage, so old GPUs keep their install-year
+// throughput. kw_growth is the rise in IT power per new accelerator, so
+// tokens/kWh of a new vintage grows at (1 + h)(1 + h_memory) / (1 + kw_growth).
+//
+// Software efficiency ≈ token growth ÷ growth in hardware-adjusted compute
+// (H100-equivalents). It decelerates with token growth: effective compute
+// demand grows ~2.1x (Y1), 1.8x, 1.6x, 1.45x, 1.35x (Y5).
+// Year 1 is set so net compute demand growth matches observed evidence:
+//   tokens ~3.6x ÷ software 1.71x ≈ 2.1x effective compute demand, vs ~2.25x/yr
+//   growth in global AI compute (Epoch) with demand still outrunning supply.
+//   (Previous 5.25x total efficiency implied demand falling once token growth
+//   slowed from ~50x to ~4x, which contradicts every hyperscaler being
+//   capacity-constrained through 2026.)
+// New-vintage tokens/kWh: 1.75 / 1.20 ≈ 1.46x in Year 1, matching the Excel
+//   funding model's frontier path (7 → 11 → 16M tok/kWh, ~1.45-1.57x/yr).
 const EFFICIENCY_TEMPLATE_YEAR1 = {
   label: SEGMENT_LABELS.year1,
 
   modelEfficiency: {
-    m_inference: { value: 0.55, confidence: 'medium', source: 'Distillation, MoE, speculative decoding; Epoch AI: halving every 8mo', historicalRange: [0.30, 0.65] },
-    m_training: { value: 0.35, confidence: 'low', source: 'Optimizer + architecture; ARK: training cost declining 60%/yr', historicalRange: [0.15, 0.45] }
+    m_inference: { value: 0.30, confidence: 'medium', source: 'Distillation, MoE, speculative decoding. Net of mix shift toward frontier/reasoning tokens, which use more compute per token', historicalRange: [0.15, 0.55] },
+    m_training: { value: 0.25, confidence: 'low', source: 'Optimizer + architecture gains, partly reinvested in bigger runs (training ~38% of fleet, Excel model)', historicalRange: [0.10, 0.40] }
   },
 
   systemsEfficiency: {
-    s_inference: { value: 0.35, confidence: 'medium', source: 'vLLM/TRT-LLM 2-3x; speculative decoding; Google 33x energy/prompt', historicalRange: [0.15, 0.50] },
-    s_training: { value: 0.20, confidence: 'medium', source: 'Distributed training, better data pipelines, compiler optimizations', historicalRange: [0.10, 0.30] }
+    s_inference: { value: 0.20, confidence: 'medium', source: 'Serving stacks (vLLM/TRT-LLM), batching, KV-cache reuse, disaggregated prefill/decode', historicalRange: [0.10, 0.40] },
+    s_training: { value: 0.10, confidence: 'medium', source: 'Distributed training, better data pipelines, compiler optimizations', historicalRange: [0.05, 0.25] }
   },
 
   hardwareEfficiency: {
     h: { value: 0.40, confidence: 'high', source: 'H200/B100/B200 deployment; ~2-4x gen-over-gen for inference', historicalRange: [0.20, 0.50] },
-    h_memory: { value: 0.25, confidence: 'medium', source: 'HBM3E, larger capacity stacks', historicalRange: [0.12, 0.35] }
+    h_memory: { value: 0.25, confidence: 'medium', source: 'HBM3E, larger capacity stacks', historicalRange: [0.12, 0.35] },
+    kw_growth: { value: 0.20, confidence: 'medium', source: 'IT power per new accelerator: B200 ~1.0 kW → B300 ~1.4 kW → Rubin higher; rack power 120 → 200+ kW', historicalRange: [0.00, 0.35] }
   }
 };
 
@@ -414,60 +474,67 @@ const buildEfficiencyBlocks = () => {
   });
 
   // Year 2: Still aggressive but decelerating (~3.1x = 67% cost reduction)
-  blocks.year2.modelEfficiency.m_inference.value = 0.45;
-  blocks.year2.modelEfficiency.m_training.value = 0.28;
-  blocks.year2.systemsEfficiency.s_inference.value = 0.28;
-  blocks.year2.systemsEfficiency.s_training.value = 0.16;
+  blocks.year2.modelEfficiency.m_inference.value = 0.2;
+  blocks.year2.modelEfficiency.m_training.value = 0.22;
+  blocks.year2.systemsEfficiency.s_inference.value = 0.12;
+  blocks.year2.systemsEfficiency.s_training.value = 0.08;
   blocks.year2.hardwareEfficiency.h.value = 0.32;
   blocks.year2.hardwareEfficiency.h_memory.value = 0.22;
+  blocks.year2.hardwareEfficiency.kw_growth.value = 0.07;
 
   // Year 3: Still strong (~2.5x = 60% cost reduction)
-  blocks.year3.modelEfficiency.m_inference.value = 0.38;
-  blocks.year3.modelEfficiency.m_training.value = 0.22;
-  blocks.year3.systemsEfficiency.s_inference.value = 0.22;
-  blocks.year3.systemsEfficiency.s_training.value = 0.13;
+  blocks.year3.modelEfficiency.m_inference.value = 0.15;
+  blocks.year3.modelEfficiency.m_training.value = 0.15;
+  blocks.year3.systemsEfficiency.s_inference.value = 0.1;
+  blocks.year3.systemsEfficiency.s_training.value = 0.06;
   blocks.year3.hardwareEfficiency.h.value = 0.25;
   blocks.year3.hardwareEfficiency.h_memory.value = 0.18;
+  blocks.year3.hardwareEfficiency.kw_growth.value = 0;
 
   // Year 4: Moderating (~2.0x = 50% cost reduction)
-  blocks.year4.modelEfficiency.m_inference.value = 0.30;
-  blocks.year4.modelEfficiency.m_training.value = 0.18;
-  blocks.year4.systemsEfficiency.s_inference.value = 0.18;
-  blocks.year4.systemsEfficiency.s_training.value = 0.10;
+  blocks.year4.modelEfficiency.m_inference.value = 0.12;
+  blocks.year4.modelEfficiency.m_training.value = 0.12;
+  blocks.year4.systemsEfficiency.s_inference.value = 0.08;
+  blocks.year4.systemsEfficiency.s_training.value = 0.05;
   blocks.year4.hardwareEfficiency.h.value = 0.20;
   blocks.year4.hardwareEfficiency.h_memory.value = 0.15;
+  blocks.year4.hardwareEfficiency.kw_growth.value = 0;
 
   // Year 5: Settling (~1.8x = 44% cost reduction)
-  blocks.year5.modelEfficiency.m_inference.value = 0.25;
-  blocks.year5.modelEfficiency.m_training.value = 0.15;
-  blocks.year5.systemsEfficiency.s_inference.value = 0.15;
-  blocks.year5.systemsEfficiency.s_training.value = 0.08;
+  blocks.year5.modelEfficiency.m_inference.value = 0.1;
+  blocks.year5.modelEfficiency.m_training.value = 0.1;
+  blocks.year5.systemsEfficiency.s_inference.value = 0.07;
+  blocks.year5.systemsEfficiency.s_training.value = 0.05;
   blocks.year5.hardwareEfficiency.h.value = 0.18;
   blocks.year5.hardwareEfficiency.h_memory.value = 0.12;
+  blocks.year5.hardwareEfficiency.kw_growth.value = 0;
 
   // Years 6-10: Diminishing returns (~1.5x = 33% cost reduction)
-  blocks.years6_10.modelEfficiency.m_inference.value = 0.18;
-  blocks.years6_10.modelEfficiency.m_training.value = 0.12;
-  blocks.years6_10.systemsEfficiency.s_inference.value = 0.12;
-  blocks.years6_10.systemsEfficiency.s_training.value = 0.06;
+  blocks.years6_10.modelEfficiency.m_inference.value = 0.15;
+  blocks.years6_10.modelEfficiency.m_training.value = 0.08;
+  blocks.years6_10.systemsEfficiency.s_inference.value = 0.08;
+  blocks.years6_10.systemsEfficiency.s_training.value = 0.04;
   blocks.years6_10.hardwareEfficiency.h.value = 0.12;
   blocks.years6_10.hardwareEfficiency.h_memory.value = 0.10;
+  blocks.years6_10.hardwareEfficiency.kw_growth.value = 0;
 
   // Years 11-15: Mature (~1.3x = 22% cost reduction)
   blocks.years11_15.modelEfficiency.m_inference.value = 0.12;
-  blocks.years11_15.modelEfficiency.m_training.value = 0.08;
+  blocks.years11_15.modelEfficiency.m_training.value = 0.05;
   blocks.years11_15.systemsEfficiency.s_inference.value = 0.08;
-  blocks.years11_15.systemsEfficiency.s_training.value = 0.05;
+  blocks.years11_15.systemsEfficiency.s_training.value = 0.03;
   blocks.years11_15.hardwareEfficiency.h.value = 0.08;
   blocks.years11_15.hardwareEfficiency.h_memory.value = 0.07;
+  blocks.years11_15.hardwareEfficiency.kw_growth.value = 0;
 
   // Years 16-20: Near-mature (~1.2x = 15% cost reduction)
   blocks.years16_20.modelEfficiency.m_inference.value = 0.08;
-  blocks.years16_20.modelEfficiency.m_training.value = 0.05;
+  blocks.years16_20.modelEfficiency.m_training.value = 0.03;
   blocks.years16_20.systemsEfficiency.s_inference.value = 0.05;
-  blocks.years16_20.systemsEfficiency.s_training.value = 0.04;
+  blocks.years16_20.systemsEfficiency.s_training.value = 0.02;
   blocks.years16_20.hardwareEfficiency.h.value = 0.06;
   blocks.years16_20.hardwareEfficiency.h_memory.value = 0.05;
+  blocks.years16_20.hardwareEfficiency.kw_growth.value = 0;
 
   return blocks;
 };
@@ -609,7 +676,8 @@ export const TRANSLATION_INTENSITIES = {
   serverToInfra: {
     gpusPerServer: { value: 8, confidence: 'high' },
     serversPerRack: { value: 4, confidence: 'high' },
-    kwPerGpu: { value: 1.0, confidence: 'medium', source: 'GPU + overhead' },
+    // Opening-fleet IT kW per accelerator. New vintages grow via hardwareEfficiency.kw_growth.
+    kwPerGpu: { value: FLEET_ANCHOR.kwPerAccelerator, confidence: 'medium', source: 'Fleet blend: HGX H100 ~1.3 kW, GB200 NVL72 ~1.7 kW per GPU incl. CPU/network; TPU/Trainium lower' },
     pue: { value: 1.3, confidence: 'high', source: 'Hyperscaler PUE' },
     workerMonthsPerMw: { value: 400, confidence: 'low', source: 'DC construction labor intensity per MW (electricians, mechanical trades)' },
     ftesPerMw: { value: 8, confidence: 'low', source: 'Ongoing ops staffing per MW (technicians, security, NOC)' }
@@ -620,6 +688,122 @@ export const TRANSLATION_INTENSITIES = {
     redundancyFactor: { value: 1.5, confidence: 'high' }
   }
 };
+
+// ============================================
+// CAPITAL FINANCING (ported from AI_Capex_Funding_Model.xlsx, Sept 2026)
+// ============================================
+/**
+ * Economics + funding layer. The physical engine decides what CAN be built;
+ * this layer decides what can be PAID FOR. When applyFundingConstraint is on,
+ * each year's fundable capex (by builder tier) caps monthly deployments.
+ *
+ * Linked from the physical engine (not inputs here): installed / required /
+ * deployed GW, fleet tokens/kWh by vintage, training share, scarcity ratio.
+ *
+ * Annual paths: 2026-2032 match the Excel; 2033+ extend with stated rules.
+ */
+const FIN_YEARS = Array.from({ length: GLOBAL_PARAMS.horizonYears }, (_, i) => MODEL_START_YEAR + i);
+const buildPath = (explicit, extend) => {
+  const out = {};
+  let prev = null;
+  FIN_YEARS.forEach((year) => {
+    const value = explicit[year] !== undefined ? explicit[year] : extend(year, prev);
+    out[year] = value;
+    prev = value;
+  });
+  return out;
+};
+
+export const FINANCING_ASSUMPTIONS_BASE = {
+  applyFundingConstraint: true,
+
+  // Base year (end-2025) anchors
+  baseYear: {
+    blendedPricePerMTokens: 0.55,  // $/M tokens, back-solved from ~$65B 2025 AI compute revenue
+    capexPerGw: 45                 // $B per GW energized (IT)
+  },
+
+  scalars: {
+    preSpendFraction: 0.40,        // share of next year's build paid this year (GPUs ahead of power)
+    computeShareOfCapex: 0.65,     // compute & networking share of $/GW (Barclays 65-70%)
+    computeLifeYears: 6,           // depreciation life, compute
+    facilityLifeYears: 20,         // depreciation life, facility & power
+    cashTaxRate: 0.20,
+    variableCostPctOfRevenue: 0.30, // lab margin / pass-through, model R&D, SG&A
+    otherOpexPerGwYr: 1.2,         // $B per GW-yr: staff, maintenance, network, software
+    electricityPricePerKwh: 0.085,
+    idlePowerShare: 0.50,          // power draw at zero utilization, share of peak
+    scarcityElasticity: 0.50,      // price premium per unit of unmet-demand ratio (prior year)
+    maxScarcityPremium: 2.0,
+    otherRevenuePerGwYr: 0         // $B, GPU rental / fine-tuning not captured as tokens
+  },
+
+  // Multipliers on all capital-markets channel capacity (scenario levers)
+  marketCapacityMultiplier: { debt: 1.0, equity: 1.0 },
+
+  paths: {
+    // Blended $/M token price change (base path, before scarcity premium)
+    priceChange: buildPath(
+      { 2026: -0.40, 2027: -0.30, 2028: -0.25, 2029: -0.20, 2030: -0.20, 2031: -0.15, 2032: -0.15 },
+      (year) => (year <= 2035 ? -0.12 : -0.10)
+    ),
+    // Effective utilization incl. MFU, idle, stranded GPUs awaiting power
+    utilization: buildPath(
+      { 2026: 0.50, 2027: 0.53, 2028: 0.56, 2029: 0.58, 2030: 0.60, 2031: 0.62, 2032: 0.65 },
+      (year, prev) => Math.min(0.70, +(prev + 0.01).toFixed(2))
+    ),
+    // All-in capex per GW energized ($B)
+    capexPerGw: buildPath(
+      { 2026: 60, 2027: 62, 2028: 64, 2029: 66, 2030: 68, 2031: 70, 2032: 72 },
+      (year, prev) => prev + 1
+    )
+  },
+
+  // Builder tiers. share = base allocation of each year's build (must sum to 1)
+  tiers: [
+    {
+      id: 'A', name: 'Big-4 hyperscalers', note: 'MSFT, GOOGL, AMZN, META',
+      share: 0.68, legacyOcf: 450, legacyOcfGrowth: 0.07, shareholderReturns: 180,
+      cash: 380, minCash: 150, debt: 260, legacyEbitda: 620, legacyEbitdaGrowth: 0.07,
+      maxExternalShareOfCapex: 0.45, costOfDebt: 0.05, maxDebtToEbitda: 1.5
+    },
+    {
+      id: 'B', name: 'Leveraged builders', note: 'Oracle, CoreWeave/Nebius/neoclouds, xAI',
+      share: 0.24, legacyOcf: 25, legacyOcfGrowth: 0.05, shareholderReturns: 5,
+      cash: 40, minCash: 15, debt: 170, legacyEbitda: 40, legacyEbitdaGrowth: 0.05,
+      maxExternalShareOfCapex: 0.70, costOfDebt: 0.09, maxDebtToEbitda: 4.0
+    },
+    {
+      id: 'C', name: 'Sovereign & other', note: 'Gulf, SoftBank/Stargate equity, other',
+      share: 0.08, legacyOcf: 0, legacyOcfGrowth: 0, shareholderReturns: 0,
+      cash: 20, minCash: 5, debt: 10, legacyEbitda: 0, legacyEbitdaGrowth: 0,
+      maxExternalShareOfCapex: 0.80, costOfDebt: 0.085, maxDebtToEbitda: 4.0
+    }
+  ],
+
+  // Capital-markets absorption capacity (AI-available, $B/yr). capacity = first
+  // model year; compounds at growth thereafter. alloc = share to tiers A/B/C.
+  channels: [
+    { id: 'us_ig', name: 'US investment-grade bonds', type: 'debt', capacity: 220, growth: 0.08, alloc: [0.8, 0.2, 0], note: 'Big-5 issued $121B in 2025; order-book coverage fell 5x → <2x Feb→Jul 2026' },
+    { id: 'exus_ig', name: 'Ex-US IG bonds (EUR/JPY/CHF)', type: 'debt', capacity: 50, growth: 0.10, alloc: [0.7, 0.3, 0], note: 'Reverse Yankee / Samurai' },
+    { id: 'private_credit', name: 'Private credit / direct lending', type: 'debt', capacity: 200, growth: 0.08, alloc: [0.3, 0.6, 0.1], note: 'Morgan Stanley: ~$800B of $1.5T gap through 2028' },
+    { id: 'abs', name: 'Data-center ABS / CMBS', type: 'debt', capacity: 35, growth: 0.10, alloc: [0.2, 0.7, 0.1], note: 'JPM $30-40B/yr' },
+    { id: 'hy', name: 'Leveraged loans / high yield', type: 'debt', capacity: 25, growth: 0.10, alloc: [0, 0.9, 0.1], note: '9-12.5% coupons' },
+    { id: 'converts', name: 'Convertibles', type: 'debt', capacity: 20, growth: 0.05, alloc: [0, 0.9, 0.1], note: 'CRWV converts at 1.75%' },
+    { id: 'bank', name: 'Bank loans / project finance', type: 'debt', capacity: 80, growth: 0.06, alloc: [0.3, 0.5, 0.2], note: 'AMZN $17.5B loan; DDTL facilities' },
+    { id: 'spv', name: 'SPV / JV / lease financing', type: 'debt', capacity: 120, growth: 0.10, alloc: [0.6, 0.3, 0.1], note: 'Meta Hyperion-style off-balance-sheet' },
+    { id: 'public_equity', name: 'Public equity follow-ons / ATM', type: 'equity', capacity: 100, growth: -1.0, alloc: [0.8, 0.2, 0], note: 'Hyperscalers done issuing after 2026 (Alphabet $84.75B Jun-2026)' },
+    { id: 'ipo_private', name: 'IPOs & private rounds', type: 'equity', capacity: 80, growth: -0.75, alloc: [0, 0.7, 0.3], note: 'Tail from lab/neocloud rounds only' },
+    { id: 'sovereign', name: 'Sovereign wealth', type: 'equity', capacity: 80, growth: -0.50, alloc: [0.1, 0.3, 0.6], note: 'MGX, PIF, QIA, Mubadala; tapering' },
+    { id: 'vendor', name: 'Strategic / vendor equity', type: 'equity', capacity: 40, growth: -0.50, alloc: [0.1, 0.6, 0.3], note: 'Circular financing flag (BIS)' }
+  ],
+
+  source: 'AI_Capex_Funding_Model.xlsx (Sept 2026 calibration anchors)'
+};
+
+// Monthly-updater overrides (assumptionOverrides.json → "financing"). Arrays
+// (tiers, channels) are replaced wholesale; objects merge key by key.
+export const FINANCING_ASSUMPTIONS = deepMerge(FINANCING_ASSUMPTIONS_BASE, assumptionOverrides?.financing || {});
 
 // ============================================
 // SCENARIOS
@@ -708,13 +892,23 @@ export const SCENARIOS = {
     }
   },
 
+  creditCrunch: {
+    id: 'creditCrunch',
+    name: 'Credit Crunch',
+    description: 'AI-available debt absorption falls 60% and new equity dries up; hyperscalers become market-limited instead of self-limited.',
+    overrides: {
+      financing: {
+        marketCapacityMultiplier: { debt: 0.4, equity: 0.2 }
+      }
+    }
+  },
+
   tight2026: {
     id: 'tight2026',
     name: '2026 Tight Market (Backlog + Allocation)',
     description: 'Sold-out components + large order backlogs; shortages visible immediately.',
     overrides: {
       startingState: {
-        installedBase: 1200000,
         backlogByNode: {
           gpu_datacenter: 900000,
           hbm_stacks: 7200000,

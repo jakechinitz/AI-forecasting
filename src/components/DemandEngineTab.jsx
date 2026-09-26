@@ -85,7 +85,9 @@ function DemandEngineTab({ results, assumptions }) {
       const totalInstalled = dcInstalled + infInstalled;
 
       // Power and brain equivalents
-      const totalPowerWatts = totalInstalled * WATTS_PER_GPU;
+      // Facility power: vintage-tracked IT GW from the engine × PUE
+      const itGW = results.fleet?.installedGW?.[i];
+      const totalPowerWatts = itGW != null ? itGW * 1e9 * PUE : totalInstalled * WATTS_PER_GPU;
       const totalPowerGW = totalPowerWatts / 1e9;
       const wattsPerBrainEquiv = computeBrainEquivAtMonth(month, assumptions?.efficiency);
       const brainEquivalents = totalPowerWatts / wattsPerBrainEquiv;
@@ -481,7 +483,7 @@ function DemandEngineTab({ results, assumptions }) {
               borderRadius: 'var(--radius-sm)',
               marginTop: 'var(--space-xs)'
             }}>
-              BrainEquiv = (InstalledGPUs x {WATTS_PER_GPU.toFixed(0)}W) / WattsPerBrainEquiv(t)
+              BrainEquiv = (Installed IT GW x PUE {PUE}) / WattsPerBrainEquiv(t)
             </div>
           </div>
           <div style={{ marginBottom: 'var(--space-md)' }}>
