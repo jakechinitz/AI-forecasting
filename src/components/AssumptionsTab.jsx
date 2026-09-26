@@ -975,11 +975,12 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
           </div>
 
           <div className="section">
-            <h4 className="section-title">Supply Expansion Ceilings</h4>
+            <h4 className="section-title">Baseline Supply Expansion</h4>
             <p className="section-description">
-              Maximum annual capacity expansion rates by supply category. These are physical
-              ceilings — actual expansion is demand-driven, scaled by market tightness and
-              each node's elasticity in the simulation engine.
+              Capacity growth that happens regardless of AI demand. Zero by default: capacity grows
+              when demand signals it (shortages and demand forecasts, with each node's lead time),
+              limited by genuine physical constraints (ASML EUV output, DRAM fab construction, turbine and
+              transformer factories, grid interconnection, skilled trades) and by builders&apos; capital.
             </p>
             {renderEditableTable('supply-exp')}
           </div>
