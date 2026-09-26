@@ -6,14 +6,15 @@
  * - Guarantees every time block has required baselines (no "drop to 0" after Year 5).
  * - Normalizes scenario overrides so numbers like { consumer: 0.55 } are treated as { consumer: { value: 0.55 } }.
  *
- * IMPORTANT (Efficiency math conventions used by calculations.js):
- * - Model efficiency M_t = (1 - m)^(t/12)  (compute per unit work decreases)
- * - Systems throughput S_t = (1 + s)^(t/12) (throughput increases)
- * - Hardware throughput H_t = (1 + h)^(t/12) (throughput increases)
- *
- * NOTE:
- * - calculations.js already applies M in the numerator and S/H in the denominator.
- * - This file ensures those values exist for every time block.
+ * Efficiency conventions used by calculations.js (monthly compounding within
+ * each time block):
+ * - Model efficiency M_t = (1 - m)^(t/12)   (compute per token falls)
+ * - Systems throughput S_t = (1 + s)^(t/12) (throughput rises)
+ * - Hardware H_t = (1 + h)^(t/12), memory H_mem,t = (1 + h_memory)^(t/12)
+ * - IT kW per new accelerator KW_t = (1 + kw_growth)^(t/12)
+ * Software (1/M × S) applies to the whole fleet. Hardware (H × H_mem) applies
+ * only to accelerators installed that month (vintage tracking), and kw_growth
+ * raises the IT power of each new accelerator.
  */
 
 import assumptionOverrides from './assumptionOverrides.json';
@@ -78,51 +79,21 @@ export const GLOBAL_PARAMS = {
     maxPrice: 5.0
   },
 
-  // Glut thresholds (can override per node)
+  // Glut thresholds: tightness below soft = glut, below hard = hard glut
   glutThresholds: {
     soft: 0.95,
-    hard: 0.80,
-    persistenceMonthsSoft: 3,
-    persistenceMonthsHard: 2
-  },
-
-  // Substitution damping
-  substitution: {
-    priceSignalSmaMonths: 4,
-    adjustmentSpeed: 0.15
-  },
-
-  // Capex trigger parameters (kept for UI / future enhancements)
-  capexTrigger: {
-    priceThreshold: 1.3,
-    persistenceMonths: 6,
-    maxCapacityAddPct: 0.30,
-    cooldownMonths: 12,
-    maxExpansions: 6
-  },
-
-  // Predictive supply elasticity
-  predictiveSupply: {
-    forecastHorizonMonths: 6,
-    shortageThreshold: 1.0,
-    expansionFraction: 0.10,
-    cooldownMonths: 12,
-    maxDynamicExpansions: 20
-  },
-
-  // Inventory display
-  inventoryDisplay: {
-    forwardMonths: 3
+    hard: 0.80
   },
 
   // Brain power equivalency parameters
   brainEquivalency: {
-    humanBrainWatts: 30,              // Human brain power consumption in watts
+    humanBrainWatts: 30,               // Human brain power consumption in watts
     startingWattsPerBrainEquiv: 10000, // Starting AI watts per brain-equivalent of cognitive work
-    maxEfficiencyVsBrain: 60,         // Asymptote: AI can be at most 10x more efficient than the brain
-    // At 10x efficiency, AI does brain-equivalent work at 30W / 10 = 3W
-    // 0.5 watts maximum efficiency (thermodynamic limit adjusted for resilency/brittlness)
-    minWattsPerBrainEquiv: 0.5          // = humanBrainWatts / maxEfficiencyVsBrain 
+    // Soft knee at 60× brain efficiency: 30 W / 60 = 0.5 W per brain-equivalent
+    // (a practical floor allowing for resilience/redundancy). Gains continue
+    // above the knee with logarithmic diminishing returns (softEfficiencyCap).
+    maxEfficiencyVsBrain: 60,
+    minWattsPerBrainEquiv: 0.5         // = humanBrainWatts / maxEfficiencyVsBrain
   }
 };
 
@@ -150,7 +121,6 @@ export const ASSUMPTION_SEGMENTS = SEGMENT_DEFS.map((segment) => {
   };
 });
 
-export const FIRST_ASSUMPTION_KEY = ASSUMPTION_SEGMENTS[0].key;
 export const FIRST_FIVE_YEAR_KEYS = ASSUMPTION_SEGMENTS.slice(0, 5).map(segment => segment.key);
 
 const SEGMENT_LABELS = ASSUMPTION_SEGMENTS.reduce((acc, segment) => {
@@ -238,7 +208,7 @@ const WORKLOAD_BASE_DEFAULT = {
     agentic: 100e12       // 20%
   },
   trainingRunsPerMonth: {
-    frontier: 3,          // frontier-class runs completing per month, all labs incl. China
+    frontier: 3,          // frontier-class runs completing per month, ex-China labs
     midtier: 300          // post-training, RL, fine-tuning, research runs
   },
   // Accelerator-hours per run (not tokens). Sized so training + research is
@@ -283,27 +253,20 @@ const DEMAND_TEMPLATE_YEAR1 = {
   },
 
   allocation: {
-    dcInferenceShare: { value: 0.60, confidence: 'medium', source: 'Inference ~60% of datacenter GPU fleet; training clusters concentrated at frontier labs' }
+    dcInferenceShare: { value: 0.60, confidence: 'medium', source: 'Share of inference served from the general datacenter pool; the rest runs on the inference-optimized pool. Training always uses the datacenter pool' }
   },
 
   // Edge offload: fraction of inference tokens served outside hyperscale
   // datacenters: phones and laptops, Macs, self-hosted small servers, and edge
-  // boxes (distributed compute). The total edge share is capped by
-  // TRANSLATION_INTENSITIES.edge.maxShareOfInference.
-  // rather than in datacenter GPUs. Offloaded tokens bypass the entire DC supply chain
-  // (no transformers, no cooling, no grid interconnect). Driven by model distillation
-  // (Llama-4-Small, Gemma, Phi) running on Apple Neural Engine, Snapdragon NPU, etc.
+  // boxes (distributed compute). Edge tokens skip datacenter GPUs, CoWoS, HBM,
+  // DC power and cooling, but still draw wafer and DRAM supply and use energy
+  // (0.6× datacenter energy per token). The total edge share is capped by
+  // TRANSLATION_INTENSITIES.edge.maxShareOfInference; the installed edge fleet
+  // ramps toward each block's share over a few months.
   edgeOffload: {
     consumer: { value: 0.02, confidence: 'low', source: 'Apple Intelligence, on-device Gemini Nano; ~2% of consumer tokens on-device in 2026', historicalRange: [0.00, 0.10] },
     enterprise: { value: 0.00, confidence: 'medium', source: 'Enterprise inference is overwhelmingly cloud/on-prem datacenter today', historicalRange: [0.00, 0.05] },
     agentic: { value: 0.00, confidence: 'medium', source: 'Agentic workloads require large context + tool access; edge infeasible near-term', historicalRange: [0.00, 0.03] }
-  },
-
-  contextLength: {
-    averageTokens: 4000,
-    growthRate: 0.30,
-    confidence: 'medium',
-    source: 'Model releases, long-context adoption'
   },
 
   // Extra tokens-per-request growth on top of inferenceGrowth. Zero for Years
@@ -339,10 +302,11 @@ const buildDemandBlocks = () => {
   });
 
   // Targeted tweaks (only the values that should change by period)
-  // Token growth decelerates from ~3.6x (Y1) to ~2.6x (Y2), then holds near
-  // 2x through Year 5 (≈2.3x, 2.1x, 2.0x), in line with the Excel funding
-  // model: better models raise tokens per task (agents, reasoning), so volume
-  // keeps compounding even as user growth saturates. Agentic share keeps rising.
+  // Blended token growth, calendar-year averages: 2027 3.1x, 2028 2.7x,
+  // 2029 2.6x, 2030 2.4x, 2031 2.0x. The blend runs above the segment rates
+  // because agentic work rises from 20% of tokens toward ~75% by Year 5.
+  // Better models raise tokens per task (agents, reasoning), so volume keeps
+  // compounding even as user growth saturates.
   // Year 2
   blocks.year2.inferenceGrowth.consumer.value = 1.00;   // 2x
   blocks.year2.inferenceGrowth.enterprise.value = 1.50;  // 2.5x
@@ -393,8 +357,6 @@ const buildDemandBlocks = () => {
   blocks.years6_10.inferenceGrowth.agentic.value = 0.50;
   blocks.years6_10.trainingGrowth.frontier.value = 0.25;
   blocks.years6_10.trainingGrowth.midtier.value = 0.3;
-  blocks.years6_10.contextLength.averageTokens = 32000;
-  blocks.years6_10.contextLength.growthRate = 0.25;
   blocks.years6_10.intensityGrowth.value = 0.25;
   // Edge offload Years 6-10: mature ecosystem, on-device becomes default for simple inference
   blocks.years6_10.edgeOffload.consumer.value = 0.5;
@@ -407,8 +369,6 @@ const buildDemandBlocks = () => {
   blocks.years11_15.inferenceGrowth.agentic.value = 0.25;
   blocks.years11_15.trainingGrowth.frontier.value = 0.15;
   blocks.years11_15.trainingGrowth.midtier.value = 0.2;
-  blocks.years11_15.contextLength.averageTokens = 64000;
-  blocks.years11_15.contextLength.growthRate = 0.12;
   blocks.years11_15.intensityGrowth.value = 0.26;
   // Edge offload Years 11-15: edge AI pervasive; cloud reserved for frontier/long-context
   blocks.years11_15.edgeOffload.consumer.value = 0.6;
@@ -421,8 +381,6 @@ const buildDemandBlocks = () => {
   blocks.years16_20.inferenceGrowth.agentic.value = 0.15;
   blocks.years16_20.trainingGrowth.frontier.value = 0.1;
   blocks.years16_20.trainingGrowth.midtier.value = 0.12;
-  blocks.years16_20.contextLength.averageTokens = 128000;
-  blocks.years16_20.contextLength.growthRate = 0.05;
   blocks.years16_20.intensityGrowth.value = 0.26;
   // Edge offload Years 16-20: steady state — cloud for frontier, edge for everything else
   blocks.years16_20.edgeOffload.consumer.value = 0.65;
@@ -447,8 +405,8 @@ export const DEMAND_ASSUMPTIONS_BASE = buildDemandBlocks();
 // tokens/kWh of a new vintage grows at (1 + h)(1 + h_memory) / (1 + kw_growth).
 //
 // Software efficiency ≈ token growth ÷ growth in hardware-adjusted compute
-// (H100-equivalents). It decelerates with token growth: effective compute
-// demand grows ~2.1x (Y1), 1.8x, 1.6x, 1.45x, 1.35x (Y5).
+// (H100-equivalents). Net effective-compute demand (tokens ÷ software gain)
+// grows ~2.1x in Year 1 and ~2x/yr through Year 5.
 // Year 1 is set so net compute demand growth matches observed evidence:
 //   tokens ~3.6x ÷ software 1.71x ≈ 2.1x effective compute demand, vs ~2.25x/yr
 //   growth in global AI compute (Epoch) with demand still outrunning supply.
@@ -462,7 +420,7 @@ const EFFICIENCY_TEMPLATE_YEAR1 = {
 
   modelEfficiency: {
     m_inference: { value: 0.30, confidence: 'medium', source: 'Distillation, MoE, speculative decoding. Net of mix shift toward frontier/reasoning tokens, which use more compute per token', historicalRange: [0.15, 0.55] },
-    m_training: { value: 0.25, confidence: 'low', source: 'Optimizer + architecture gains, partly reinvested in bigger runs (training ~38% of fleet, Excel model)', historicalRange: [0.10, 0.40] }
+    m_training: { value: 0.25, confidence: 'low', source: 'Optimizer + architecture gains, partly reinvested in bigger runs', historicalRange: [0.10, 0.40] }
   },
 
   systemsEfficiency: {
@@ -483,7 +441,11 @@ const buildEfficiencyBlocks = () => {
     blocks[seg.key] = applyBlockLabel(cloneBlock(EFFICIENCY_TEMPLATE_YEAR1), seg.key, false);
   });
 
-  // Year 2: Still aggressive but decelerating (~3.1x = 67% cost reduction)
+  // Per-block gains (software = (1/(1-m))(1+s) on the whole fleet; new-vintage
+  // tokens/kWh = (1+h)(1+h_memory)/(1+kw_growth)):
+  //   Y1 1.71x / 1.46x, Y2 1.40x / 1.40x, Y3 1.29x / 1.34x, Y4 1.23x / 1.31x,
+  //   Y5 1.19x / 1.32x, Y6-10 1.27x / 1.23x, Y11-15 1.23x / 1.16x, Y16-20 1.14x / 1.11x
+  // Year 2: still strong, decelerating
   blocks.year2.modelEfficiency.m_inference.value = 0.2;
   blocks.year2.modelEfficiency.m_training.value = 0.22;
   blocks.year2.systemsEfficiency.s_inference.value = 0.12;
@@ -492,7 +454,7 @@ const buildEfficiencyBlocks = () => {
   blocks.year2.hardwareEfficiency.h_memory.value = 0.22;
   blocks.year2.hardwareEfficiency.kw_growth.value = 0.15;
 
-  // Year 3: Still strong (~2.5x = 60% cost reduction)
+  // Year 3
   blocks.year3.modelEfficiency.m_inference.value = 0.15;
   blocks.year3.modelEfficiency.m_training.value = 0.15;
   blocks.year3.systemsEfficiency.s_inference.value = 0.1;
@@ -501,7 +463,7 @@ const buildEfficiencyBlocks = () => {
   blocks.year3.hardwareEfficiency.h_memory.value = 0.18;
   blocks.year3.hardwareEfficiency.kw_growth.value = 0.10;
 
-  // Year 4: Moderating (~2.0x = 50% cost reduction)
+  // Year 4: moderating
   blocks.year4.modelEfficiency.m_inference.value = 0.12;
   blocks.year4.modelEfficiency.m_training.value = 0.12;
   blocks.year4.systemsEfficiency.s_inference.value = 0.08;
@@ -510,7 +472,7 @@ const buildEfficiencyBlocks = () => {
   blocks.year4.hardwareEfficiency.h_memory.value = 0.15;
   blocks.year4.hardwareEfficiency.kw_growth.value = 0.05;
 
-  // Year 5: Settling (~1.8x = 44% cost reduction)
+  // Year 5: settling; kW per accelerator stops rising
   blocks.year5.modelEfficiency.m_inference.value = 0.1;
   blocks.year5.modelEfficiency.m_training.value = 0.1;
   blocks.year5.systemsEfficiency.s_inference.value = 0.07;
@@ -519,7 +481,7 @@ const buildEfficiencyBlocks = () => {
   blocks.year5.hardwareEfficiency.h_memory.value = 0.12;
   blocks.year5.hardwareEfficiency.kw_growth.value = 0;
 
-  // Years 6-10: Diminishing returns (~1.5x = 33% cost reduction)
+  // Years 6-10: diminishing hardware returns
   blocks.years6_10.modelEfficiency.m_inference.value = 0.15;
   blocks.years6_10.modelEfficiency.m_training.value = 0.08;
   blocks.years6_10.systemsEfficiency.s_inference.value = 0.08;
@@ -528,7 +490,7 @@ const buildEfficiencyBlocks = () => {
   blocks.years6_10.hardwareEfficiency.h_memory.value = 0.10;
   blocks.years6_10.hardwareEfficiency.kw_growth.value = 0;
 
-  // Years 11-15: Mature (~1.3x = 22% cost reduction)
+  // Years 11-15: mature
   blocks.years11_15.modelEfficiency.m_inference.value = 0.12;
   blocks.years11_15.modelEfficiency.m_training.value = 0.05;
   blocks.years11_15.systemsEfficiency.s_inference.value = 0.08;
@@ -537,7 +499,7 @@ const buildEfficiencyBlocks = () => {
   blocks.years11_15.hardwareEfficiency.h_memory.value = 0.07;
   blocks.years11_15.hardwareEfficiency.kw_growth.value = 0;
 
-  // Years 16-20: Near-mature (~1.2x = 15% cost reduction)
+  // Years 16-20: near-mature
   blocks.years16_20.modelEfficiency.m_inference.value = 0.08;
   blocks.years16_20.modelEfficiency.m_training.value = 0.03;
   blocks.years16_20.systemsEfficiency.s_inference.value = 0.05;
@@ -557,16 +519,20 @@ export const EFFICIENCY_ASSUMPTIONS_BASE = buildEfficiencyBlocks();
 
 // Baseline expansion that happens regardless of AI demand. Zero by default:
 // capacity grows only when demand signals it (shortages and demand forecasts),
-// within lead times, physical limits (node caps on truly physical inputs and
-// the shared EUV/DRAM pools), and the builders' capital (funding gate).
+// within lead times, the shared physical pools (EUV wafers, DRAM, and industry
+// output of grid connections, turbines, transformers and construction labor),
+// the two physical ramp limits (EUV tools, power generation), and the
+// builders' capital (funding gate). Any non-zero rate here adds exogenous
+// growth on top of the demand-driven expansion.
+const BASELINE_SOURCE = 'Baseline non-demand expansion; 0 = growth is demand-driven';
 const SUPPLY_TEMPLATE_YEAR1 = {
   label: SEGMENT_LABELS.year1,
   expansionRates: {
-    packaging: { value: 0, confidence: 'high', source: 'TSMC doubled CoWoS in 18mo; continued aggressive expansion' },
-    foundry: { value: 0, confidence: 'high', source: 'Advanced-node fabs + committed expansions coming online' },
-    memory: { value: 0, confidence: 'medium', source: 'HBM revenue 300%+ growth 2024; SK Hynix/Samsung expanding aggressively' },
-    datacenter: { value: 0, confidence: 'medium', source: '$6.7T capex through 2030 (McKinsey); hyperscaler $300B+/yr' },
-    power: { value: 0, confidence: 'medium', source: 'Key bottleneck; grid interconnection 2-5yr queues; 76GW potential with flexibility' }
+    packaging: { value: 0, confidence: 'high', source: BASELINE_SOURCE },
+    foundry: { value: 0, confidence: 'high', source: BASELINE_SOURCE },
+    memory: { value: 0, confidence: 'high', source: BASELINE_SOURCE },
+    datacenter: { value: 0, confidence: 'high', source: BASELINE_SOURCE },
+    power: { value: 0, confidence: 'high', source: BASELINE_SOURCE }
   }
 };
 
@@ -576,10 +542,7 @@ const buildSupplyBlocks = () => {
     blocks[seg.key] = applyBlockLabel(cloneBlock(SUPPLY_TEMPLATE_YEAR1), seg.key, false);
   });
 
-  // All periods inherit the Year 1 physical-maximum rates.
-  // Actual expansion is demand-driven: the simulation engine scales growth
-  // by supply-demand tightness × node elasticity, so these rates act as
-  // base inputs to the demand-pull formula rather than a fixed schedule.
+  // Zero in every period by default (see SUPPLY_TEMPLATE_YEAR1).
 
   return blocks;
 };
@@ -618,11 +581,6 @@ export const DEMAND_ASSUMPTIONS = deepMerge(DEMAND_ASSUMPTIONS_BASE, DEMAND_OVER
 export const EFFICIENCY_ASSUMPTIONS = deepMerge(EFFICIENCY_ASSUMPTIONS_BASE, EFF_OVERRIDES_NORM);
 export const SUPPLY_ASSUMPTIONS = deepMerge(SUPPLY_ASSUMPTIONS_BASE, SUPPLY_OVERRIDES_NORM);
 
-export const ASSUMPTION_METADATA = {
-  asOfDate: DEFAULT_AS_OF_DATE,
-  ...(assumptionOverrides?.metadata || {})
-};
-
 // ============================================
 // TRANSLATION INTENSITIES (Physical conversion factors)
 // ============================================
@@ -640,33 +598,18 @@ export const TRANSLATION_INTENSITIES = {
      *   Smaller models, high-batch throughput:     ~50-300 tok/s/GPU
      *
      * tokens_per_gpu_month = tok/s/GPU × 2.6e6 s/month
-     *   consumer @40 → ~104M tok/GPU-month
-     *   enterprise @25 → ~65M tok/GPU-month
-     *   agentic @15 → ~39M tok/GPU-month
+     *   All segments at 30 tok/s ≈ 78M tokens per month-0 frontier accelerator.
+     *   The month-0 calibration rescales the token LEVEL, so tok/s mainly sets
+     *   the training/inference split.
      */
     effectiveTokensPerSecPerGpu: {
       consumer: { value: 30, confidence: 'medium', source: 'Unified throughput — all inference compute costs the same per token', historicalRange: [20, 80] },
       enterprise: { value: 30, confidence: 'medium', source: 'Unified throughput — segment differences captured in growth rates', historicalRange: [10, 50] },
       agentic: { value: 30, confidence: 'medium', source: 'Unified throughput — extra agentic compute rolled into demand growth', historicalRange: [5, 40] }
     },
-    /**
-     * flopsPerToken: DEPRECATED for inference GPU demand calculation.
-     * Kept for reference and potential use in cost/energy modeling.
-     * Inference demand now uses effectiveTokensPerSecPerGpu (above).
-     */
-    flopsPerToken: {
-      value: 140e9,
-      confidence: 'medium',
-      source: 'Reasoning-heavy inference mix (reference only, not used for GPU demand)',
-      historicalRange: [2e9, 2e12]
-    },
     gpuUtilization: {
-      // inference utilization is now baked into effectiveTokensPerSecPerGpu
+      // inference utilization is baked into effectiveTokensPerSecPerGpu
       training: 0.85
-    },
-    acceleratorHoursPerGpu: {
-      value: 720,
-      unit: 'hours/month'
     }
   },
 
@@ -686,7 +629,6 @@ export const TRANSLATION_INTENSITIES = {
   // Servers → Infrastructure
   serverToInfra: {
     gpusPerServer: { value: 8, confidence: 'high' },
-    serversPerRack: { value: 4, confidence: 'high' },
     // Opening-fleet IT kW per accelerator. New vintages grow via hardwareEfficiency.kw_growth.
     kwPerGpu: { value: FLEET_ANCHOR.kwPerAccelerator, confidence: 'medium', source: 'Fleet blend: HGX H100 ~1.3 kW, GB200 NVL72 ~1.7 kW per GPU incl. CPU/network; TPU/Trainium lower' },
     pue: { value: 1.3, confidence: 'high', source: 'Hyperscaler PUE' },
@@ -699,15 +641,18 @@ export const TRANSLATION_INTENSITIES = {
     redundancyFactor: { value: 1.5, confidence: 'high' }
   },
 
-  // Edge inference (phones, PCs, Macs, self-hosted servers). Tokens moved to the edge leave the datacenter
-  // (no GPUs, CoWoS, HBM, DC power, cooling, networking) but still need
-  // silicon from the SAME wafer, EUV and DRAM supply, and still use energy.
+  // Edge inference (phones, PCs, Macs, self-hosted servers). Tokens moved to the
+  // edge leave the datacenter (no GPUs, CoWoS, HBM, DC power, cooling,
+  // networking) but still need silicon from the SAME wafer and DRAM supply, and
+  // still use energy.
   // Edge work is sized in datacenter-equivalent compute units, then:
   //  - wafers/DRAM per unit relative to a datacenter accelerator doing the same
   //    work. ~1x: phone NPUs sit idle ~95% of the time (≈10x more silicon per
   //    token than a DC GPU at ~50% utilization) but run models ~10x smaller.
-  //  - phone makers hold long-term wafer/DRAM contracts, so edge demand is
-  //    served before GPUs when these nodes are short.
+  //  - phone and PC makers hold long-term wafer/DRAM contracts, so edge demand
+  //    is served first, up to maxShareOfSharedSupply (35%) of a shared node's
+  //    monthly supply. EUV is not claimed separately: edge wafers already sit
+  //    under the EUV-based wafer ceiling.
   //  - energy per token vs the average datacenter token (all-in, incl. cooling):
   //    the SAME model is ~3x less efficient at the edge than batched server
   //    inference (arXiv 2603.23640), ≈2.3x after datacenter PUE. Edge models are
@@ -720,7 +665,6 @@ export const TRANSLATION_INTENSITIES = {
     energyPerTokenVsDatacenter: { value: 0.6, confidence: 'low', source: 'Same model ~2.3x less efficient at the edge after PUE; edge models smaller (phones ~10x, Macs/self-hosted ~2-3x) → blended ≈0.6x' },
     maxShareOfSharedSupply: { value: 0.35, confidence: 'low', source: 'Edge buyers compete for wafers/DRAM; they can take at most ~35% of the AI-available supply in a month' },
     maxShareOfInference: { value: 0.20, confidence: 'low', source: 'Cap on edge share of all inference tokens: frontier, reasoning and agentic work stays in datacenters' },
-    activeDevices: { value: 8.5e9, growth: 0.02, confidence: 'medium', source: '~7B smartphones + ~1.5B PCs in use (context only)' },
     deviceLifeMonths: { value: 36, confidence: 'medium', source: 'Smartphone/PC replacement cycle ~3 years' }
   }
 };
@@ -815,7 +759,9 @@ export const SHARED_SUPPLY_POOLS = {
  * Linked from the physical engine (not inputs here): installed / required /
  * deployed GW, fleet tokens/kWh by vintage, training share, scarcity ratio.
  *
- * Annual paths: 2026-2032 match the Excel; 2033+ extend with stated rules.
+ * Annual paths: the Excel's explicit years (2026-2032) are kept as given;
+ * later years extend with the stated rules. When FLEET_ANCHOR rolls forward,
+ * update the explicit years to match.
  */
 const FIN_YEARS = Array.from({ length: GLOBAL_PARAMS.horizonYears }, (_, i) => MODEL_START_YEAR + i);
 const buildPath = (explicit, extend) => {
@@ -832,10 +778,9 @@ const buildPath = (explicit, extend) => {
 export const FINANCING_ASSUMPTIONS_BASE = {
   applyFundingConstraint: true,
 
-  // Base year (end-2025) anchors
+  // Base year (end of FLEET_ANCHOR year) anchors
   baseYear: {
-    blendedPricePerMTokens: 0.55,  // $/M tokens, back-solved from ~$65B 2025 AI compute revenue
-    capexPerGw: 45                 // $B per GW energized (IT)
+    blendedPricePerMTokens: 0.55   // $/M tokens, back-solved from ~$65B 2025 AI compute revenue
   },
 
   scalars: {
@@ -874,7 +819,7 @@ export const FINANCING_ASSUMPTIONS_BASE = {
     )
   },
 
-  // Builder tiers. share = base allocation of each year's build (must sum to 1)
+  // Builder tiers. share = base allocation of each year's build (normalized to sum to 1)
   tiers: [
     {
       id: 'A', name: 'Big-4 hyperscalers', note: 'MSFT, GOOGL, AMZN, META',
@@ -940,46 +885,48 @@ export const SCENARIOS = {
   base: {
     id: 'base',
     name: 'Base Case',
-    description: 'Balanced growth with moderate efficiency gains',
+    description: 'Research-based token growth (~3.6x in Year 1, decelerating) with software efficiency ~1.7x in Year 1, sourced physical pools, and the Excel funding model.',
+    summary: { demand: 'Base', efficiency: 'Base', supply: 'Base' },
     overrides: {}
   },
 
+  // Demand and efficiency scenarios scale the current base (see
+  // applyScenarioScaling in calculations.js), so they stay relative to it.
   highDemandSlowEfficiency: {
     id: 'highDemandSlowEfficiency',
     name: 'High Demand / Slow Efficiency',
-    description: 'Strong adoption but efficiency gains disappoint',
+    description: 'Token growth multiples 25% above base for five years; software efficiency gains 40% and hardware gains 20% below base.',
+    summary: { demand: 'Base × 1.25 per year (Years 1-5)', efficiency: 'Software × 0.6, hardware × 0.8', supply: 'Base' },
     overrides: {
-      demand: applyOverridesToYears({
-        inferenceGrowth: { consumer: 0.55, enterprise: 0.70, agentic: 1.50 },
-        trainingGrowth: { frontier: 0.40, midtier: 0.70 }
-      }),
-      efficiency: applyOverridesToYears({
-        modelEfficiency: { m_inference: 0.25, m_training: 0.12 },
-        hardwareEfficiency: { h: 0.20 }
-      })
+      scaling: {
+        tokenGrowth: { factor: 1.25, blocks: FIRST_FIVE_YEAR_KEYS },
+        trainingGrowth: { factor: 1.15, blocks: FIRST_FIVE_YEAR_KEYS },
+        softwareEfficiency: { factor: 0.6 },
+        hardwareEfficiency: { factor: 0.8 }
+      }
     }
   },
 
   highDemandFastEfficiency: {
     id: 'highDemandFastEfficiency',
     name: 'High Demand / Fast Efficiency',
-    description: 'Strong adoption with rapid efficiency improvements',
+    description: 'Token growth multiples 25% above base for five years, with software efficiency gains 50% and hardware gains 15% above base.',
+    summary: { demand: 'Base × 1.25 per year (Years 1-5)', efficiency: 'Software × 1.5, hardware × 1.15', supply: 'Base' },
     overrides: {
-      demand: applyOverridesToYears({
-        inferenceGrowth: { consumer: 0.55, enterprise: 0.70, agentic: 1.50 }
-      }),
-      efficiency: applyOverridesToYears({
-        modelEfficiency: { m_inference: 0.55, m_training: 0.30 },
-        systemsEfficiency: { s_inference: 0.35 },
-        hardwareEfficiency: { h: 0.40 }
-      })
+      scaling: {
+        tokenGrowth: { factor: 1.25, blocks: FIRST_FIVE_YEAR_KEYS },
+        trainingGrowth: { factor: 1.15, blocks: FIRST_FIVE_YEAR_KEYS },
+        softwareEfficiency: { factor: 1.5 },
+        hardwareEfficiency: { factor: 1.15 }
+      }
     }
   },
 
   demandSlowdown: {
     id: 'demandSlowdown',
     name: 'Demand Slowdown (Capex Hangover)',
-    description: 'Adoption disappoints, overcapacity develops',
+    description: 'Adoption disappoints: token growth drops to 20-50%/yr for five years, then 10-25%/yr. The opening shortage is built out and overcapacity develops.',
+    summary: { demand: '20-50%/yr (Years 1-5), 10-25%/yr (6-10)', efficiency: 'Base', supply: 'Base' },
     overrides: {
       demand: {
         ...applyOverridesToYears({
@@ -996,7 +943,8 @@ export const SCENARIOS = {
   geopoliticalShock: {
     id: 'geopoliticalShock',
     name: 'Geopolitical Shock',
-    description: 'Regional supply disruption',
+    description: 'Regional disruption in Year 3 halves CoWoS, advanced-wafer and HBM capacity, recovering over three years.',
+    summary: { demand: 'Base', efficiency: 'Base', supply: 'CoWoS, wafers, HBM −50% in 2028, 3-yr recovery' },
     overrides: {
       supply: {
         shockMonth: 24,
@@ -1011,6 +959,7 @@ export const SCENARIOS = {
     id: 'creditCrunch',
     name: 'Credit Crunch',
     description: 'AI-available debt absorption falls 60% and new equity dries up; hyperscalers become market-limited instead of self-limited.',
+    summary: { demand: 'Base', efficiency: 'Base', supply: 'Debt capacity −60%, equity −80%' },
     overrides: {
       financing: {
         marketCapacityMultiplier: { debt: 0.4, equity: 0.2 }
@@ -1020,19 +969,11 @@ export const SCENARIOS = {
 
   tight2026: {
     id: 'tight2026',
-    name: '2026 Tight Market (Backlog + Allocation)',
-    description: 'Sold-out components + large order backlogs; shortages visible immediately.',
+    name: '2026 Tight Market',
+    description: 'Deeper opening shortage: month-0 demand is 1.8x the installed fleet instead of 1.5x.',
+    summary: { demand: 'Opening gap 1.8x installed (base 1.5x)', efficiency: 'Base', supply: 'Base' },
     overrides: {
-      startingState: {
-        backlogByNode: {
-          gpu_datacenter: 900000,
-          hbm_stacks: 7200000,
-          cowos_capacity: 270000,
-          advanced_wafers: 270000,
-          server_assembly: 112500,
-          datacenter_mw: 1170
-        }
-      }
+      calibration: { targetRatio: 1.8 }
     }
   }
 };
@@ -1058,25 +999,6 @@ export function getBlockKeyForMonth(month) {
   const segment = ASSUMPTION_SEGMENTS[getBlockForMonth(month)];
   return segment?.key || ASSUMPTION_SEGMENTS[ASSUMPTION_SEGMENTS.length - 1].key;
 }
-
-/**
- * Interpolate assumption value for a specific month using simple block lookup.
- * If the resolved node is an object with {value}, returns .value.
- */
-export function interpolateAssumption(assumptions, month, path) {
-  const blockKey = getBlockKeyForMonth(month);
-  const block = assumptions[blockKey];
-
-  let value = block;
-  for (const key of path) value = value?.[key];
-
-  return (isPlainObject(value) && Object.prototype.hasOwnProperty.call(value, 'value')) ? value.value : value;
-}
-
-// Efficiency multipliers
-export function calculateMt(m, monthsFromStart) { return Math.pow(1 - m, monthsFromStart / 12); }
-export function calculateSt(s, monthsFromStart) { return Math.pow(1 + s, monthsFromStart / 12); }
-export function calculateHt(h, monthsFromStart) { return Math.pow(1 + h, monthsFromStart / 12); }
 
 // Yield models
 export function calculateStackedYield(yieldInitial, yieldTarget, halflifeMonths, monthsFromStart) {

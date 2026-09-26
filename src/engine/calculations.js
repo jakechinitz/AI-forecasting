@@ -1,16 +1,22 @@
 /**
  * AI Infrastructure Supply Chain - Calculation Engine
  *
- * Rewritten (vNext) to address:
- *  - Demand wildly inconsistent with installed base (deterministic Month-0 demand scaling)
- *  - Inference demand collapsing to ~0 when blocks/paths are missing (hard fallbacks)
- *  - No “immediate shortage” when component pressure is inferred only from actual deployments
- *
- * Design:
- *  - We treat component “demand” as the PLAN (desired GPU deployments), while “supply” is what
- *    physics allows (capacity + yield + inventory).
- *  - Component backlog is tracked as a *planning backlog* (unmet plan vs true potential),
- *    which avoids circularity and makes constraints visible immediately.
+ * Monthly simulation (Jan of the year after FLEET_ANCHOR, 20 years):
+ *  1. DEMAND: token and training trajectories → required compute in effective
+ *     units (month-0 frontier accelerators). Software efficiency (1/M × S)
+ *     applies to the whole fleet; hardware (H × H_memory) only to new vintages.
+ *     Month 0 is calibrated so required = targetRatio × installed.
+ *  2. PLAN: replace this month's retirements and close the remaining gap over
+ *     CATCHUP_MONTHS, in physical accelerators at this month's hardware index.
+ *  3. SUPPLY: each component's capacity grows with its own demand signal
+ *     (shortage × elasticity, lead-time forecasts), bounded by shared physical
+ *     pools (EUV wafers, DRAM, industry output of power/transformers/labor) and
+ *     the few genuine physical growth limits (EUV tools, power generation).
+ *  4. GATE: deployments = min(plan, accelerator supply, every gating component,
+ *     funding). Infrastructure gates only net fleet growth. The binding one is
+ *     recorded per month.
+ *  5. FINANCE: financing.js turns the year's unit economics and capital markets
+ *     into fundable capex (the funding gate) and runs the tier waterfalls.
  */
 
 import { NODES } from '../data/nodes.js';
@@ -19,6 +25,7 @@ import {
   GLOBAL_PARAMS,
   FLEET_ANCHOR,
   FINANCING_ASSUMPTIONS,
+  FINANCING_ASSUMPTIONS_BASE,
   SHARED_SUPPLY_POOLS,
   DEMAND_ASSUMPTIONS,
   EFFICIENCY_ASSUMPTIONS,
@@ -47,7 +54,7 @@ const PHYSICS_DEFAULTS = {
     agentic: 30       // unified throughput (extra compute rolled into growth assumptions)
   },
   // Training: accelerator-hours model (training IS compute-limited, FLOPs matter)
-  utilizationTraining: 0.50,
+  utilizationTraining: 0.85,
   secondsPerMonth: 2.6e6,
   hoursPerMonth: 720
 };
@@ -81,9 +88,10 @@ const QUEUE_NODES = new Set([
 ]);
 
 /**
- * Maps supply chain nodes to supply assumption categories.
- * Nodes in this map get organic capacity growth from SUPPLY_ASSUMPTIONS.
- * Nodes NOT in this map rely on committed + dynamic expansions only.
+ * Maps supply chain nodes to supply assumption categories. Nodes in this map
+ * get demand-driven organic growth (plus any baseline rate in
+ * SUPPLY_ASSUMPTIONS.expansionRates, which is 0 by default). Nodes NOT in this
+ * map rely on committed + dynamic expansions only.
  */
 const SUPPLY_CATEGORY_MAP = {
   gpu_datacenter: 'foundry',
@@ -148,9 +156,23 @@ const INFRASTRUCTURE_NODES = new Set([
   'dc_ops_staff'
 ]);
 
+/**
+ * Nodes that report demand and tightness but never gate deployments:
+ *  - hybrid_bonding: when bonding is short, designs fall back to CoWoS-only
+ *    packaging, which every accelerator already needs.
+ *  - euv_tools: scanners are long-lived capital tools, not a per-accelerator
+ *    consumable. The installed base sets the leading-edge wafer ceiling (see
+ *    SHARED_SUPPLY_POOLS.leadingEdge), so EUV limits wafer supply, not each
+ *    month's accelerator output directly.
+ * They are also left out of the bottleneck ranking.
+ */
+const NON_GATING_NODES = new Set(['hybrid_bonding', 'euv_tools']);
+
+const POWER_HOOKUP_LABEL = 'Power hookups (grid + on-site)';
+
 const EXPECTED_UNITS = {
   'hbm_stacks': 'stacks/month',
-  'datacenter_mw': 'MW',
+  'datacenter_mw': 'MW/month',
   'advanced_wafers': 'wafers/month',
   'cowos_capacity': 'wafer-equiv/month',
   'server_assembly': 'servers/month',
@@ -174,12 +196,12 @@ const EPSILON = 1e-10;
 
 // Efficiency ceiling (soft knee): gains below the knee are linear; above, logarithmic
 // diminishing returns. The knee is set by the ratio of current GPU power to a practical
-// floor (~3W = 10× more efficient than the human brain at 30W). Beyond the knee,
-// improvements continue but at a dramatically slower pace — reflecting engineering
-// diminishing returns rather than a hard thermodynamic wall.
+// floor of 0.5 W (= 60× more efficient than the 30 W human brain, see
+// GLOBAL_PARAMS.brainEquivalency). Beyond the knee, improvements continue but at a
+// dramatically slower pace — engineering diminishing returns, not a hard wall.
 export const CURRENT_GPU_WATTS = 700;
 export const THERMODYNAMIC_FLOOR_WATTS = 0.5;
-export const MAX_EFFICIENCY_GAIN = CURRENT_GPU_WATTS / THERMODYNAMIC_FLOOR_WATTS;  // ~233×
+export const MAX_EFFICIENCY_GAIN = CURRENT_GPU_WATTS / THERMODYNAMIC_FLOOR_WATTS;  // 1400×
 
 /**
  * Soft asymptotic efficiency cap with diminishing returns above the knee.
@@ -204,8 +226,7 @@ const DEFAULT_BUFFER_MONTHS = 2;
 const INVENTORY_CEILING_MONTHS = 4;
 const CONSUMPTION_HEADROOM = 1.5;
 
-// Aggressive urgency
-const BACKLOG_PAYDOWN_MONTHS_GPU = 6;
+// Component order backlogs are paid down over this many months
 const BACKLOG_PAYDOWN_MONTHS_COMPONENTS = 6;
 
 function clamp(x, lo, hi) {
@@ -230,10 +251,18 @@ function resolveAssumptionValue(value, fallback) {
   return value ?? fallback ?? 0;
 }
 
-function sma(values, window) {
-  if (!values || values.length === 0) return 0;
-  if (values.length < window) return values.reduce((a, b) => a + b, 0) / values.length;
-  return values.slice(-window).reduce((a, b) => a + b, 0) / window;
+// Calendar year of a model month, and a lookup into a year-keyed schedule
+// ([{ until: <year>, <key>: value }, ...]; the first entry whose `until` is
+// ≥ the year applies, and the last entry holds after that).
+function calendarYearOf(month) {
+  return GLOBAL_PARAMS.startYear + Math.floor(((GLOBAL_PARAMS.startMonth || 1) - 1 + month) / 12);
+}
+
+function scheduleValue(schedule, month, key, fallback) {
+  if (!Array.isArray(schedule) || !schedule.length) return fallback;
+  const year = calendarYearOf(month);
+  for (const step of schedule) if (year <= step.until) return step[key];
+  return schedule[schedule.length - 1][key];
 }
 
 function calculatePriceIndex(tightness) {
@@ -246,10 +275,6 @@ function calculatePriceIndex(tightness) {
 // ============================================
 // 3) DEMAND + EFFICIENCY HELPERS
 // ============================================
-
-export function clearGrowthCache() {
-  // No-op (run-scoped cache used)
-}
 
 function getDemandBlockForMonth(month, assumptions) {
   const blockKey = getBlockKeyForMonth(month);
@@ -272,6 +297,46 @@ function resolveGrowthRate(raw, fallback) {
   if (typeof raw === 'number') return raw;
   if (raw && typeof raw === 'object' && raw.value !== undefined) return raw.value;
   return fallback ?? 0;
+}
+
+/**
+ * Scenario scaling: scale the CURRENT assumptions instead of hard-coding
+ * values, so scenarios stay relative to base when base changes.
+ *   tokenGrowth / trainingGrowth: multiply each segment's annual growth
+ *     MULTIPLE (1 + g) by factor, in the listed blocks (default: all).
+ *   softwareEfficiency: multiply m_* and s_* rates by factor (all blocks).
+ *   hardwareEfficiency: multiply h and h_memory rates by factor (all blocks).
+ */
+function scaleBlockValues(blocks, spec, fields, transform) {
+  if (!spec || !Number.isFinite(spec.factor)) return blocks;
+  const out = { ...blocks };
+  for (const key of spec.blocks || Object.keys(blocks)) {
+    const block = blocks[key];
+    if (!block) continue;
+    const next = { ...block };
+    for (const [group, names] of fields) {
+      if (!block[group]) continue;
+      next[group] = { ...block[group] };
+      for (const name of names) {
+        if (block[group][name] === undefined) continue;
+        next[group][name] = transform(resolveGrowthRate(block[group][name], 0), spec.factor, name);
+      }
+    }
+    out[key] = next;
+  }
+  return out;
+}
+
+function applyScenarioScaling(demand, efficiency, scaling) {
+  if (!scaling) return { demand, efficiency };
+  const multiple = (g, f) => Math.max(-0.95, (1 + g) * f - 1);
+  let d = scaleBlockValues(demand, scaling.tokenGrowth, [['inferenceGrowth', ['consumer', 'enterprise', 'agentic']]], multiple);
+  d = scaleBlockValues(d, scaling.trainingGrowth, [['trainingGrowth', ['frontier', 'midtier']]], multiple);
+  const rate = (r, f, name) => (name.startsWith('m_') ? clamp(r * f, 0, 0.9) : Math.max(0, r * f));
+  let e = scaleBlockValues(efficiency, scaling.softwareEfficiency,
+    [['modelEfficiency', ['m_inference', 'm_training']], ['systemsEfficiency', ['s_inference', 's_training']]], rate);
+  e = scaleBlockValues(e, scaling.hardwareEfficiency, [['hardwareEfficiency', ['h', 'h_memory']]], rate);
+  return { demand: d, efficiency: e };
 }
 
 function precomputeDemandTrajectories(totalMonths, demandAssumptions) {
@@ -312,31 +377,6 @@ function precomputeDemandTrajectories(totalMonths, demandAssumptions) {
   }
 
   return { inference, training };
-}
-
-/**
- * Precompute supply growth multipliers per supply category.
- * These represent organic capacity expansion from SUPPLY_ASSUMPTIONS,
- * chained across time blocks for smooth transitions.
- */
-function precomputeSupplyMultipliers(totalMonths, supplyAssumptions) {
-  const categories = ['packaging', 'foundry', 'memory', 'datacenter', 'power'];
-  const multipliers = {};
-
-  for (const cat of categories) {
-    const arr = new Array(totalMonths);
-    arr[0] = 1.0;
-    for (let m = 1; m < totalMonths; m++) {
-      const blockKey = getBlockKeyForMonth(m);
-      const block = supplyAssumptions?.[blockKey];
-      const annualRate = resolveGrowthRate(block?.expansionRates?.[cat], 0);
-      const monthlyFactor = Math.pow(1 + annualRate, 1 / 12);
-      arr[m] = arr[m - 1] * monthlyFactor;
-    }
-    multipliers[cat] = arr;
-  }
-
-  return multipliers;
 }
 
 function calculateInferenceDemand(month, trajectories) {
@@ -421,13 +461,7 @@ export function calculateCapacity(node, month, scenarioOverrides = {}, dynamicEx
  * after that), or a flat maxAnnualExpansion. Returns null when uncapped.
  */
 export function getMaxExpansion(node, month) {
-  const sched = node?.maxAnnualExpansionSchedule;
-  if (Array.isArray(sched) && sched.length) {
-    const year = GLOBAL_PARAMS.startYear + Math.floor(((GLOBAL_PARAMS.startMonth || 1) - 1 + month) / 12);
-    for (const step of sched) if (year <= step.until) return step.cap;
-    return sched[sched.length - 1].cap;
-  }
-  return node?.maxAnnualExpansion ?? null;
+  return scheduleValue(node?.maxAnnualExpansionSchedule, month, 'cap', node?.maxAnnualExpansion ?? null);
 }
 
 function applyRampProfile(capacityAdd, monthsSinceExpansion, profile, rampDuration) {
@@ -453,7 +487,13 @@ function calculateNodeYield(node, month) {
       month
     );
   }
-  return calculateSimpleYield(node.yieldSimpleLoss || 0.03);
+  // ?? not ||: a loss of 0 (intensities already net of yield) must stay 0
+  return calculateSimpleYield(node.yieldSimpleLoss ?? 0.03);
+}
+
+// Effective monthly output of a node: capacity × max utilization × yield
+function effectiveCapacity(node, month, capacity) {
+  return capacity * (node?.maxCapacityUtilization ?? 0.95) * calculateNodeYield(node, month);
 }
 
 // --- Efficiency multipliers ---
@@ -563,9 +603,8 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   // Efficiency gain: M decays (models get cheaper → more tok/s), S and H grow throughput.
   // H_memory: inference is memory-bandwidth-bound (not compute-bound), so HBM generational
   // improvements (H_memory) directly increase inference tok/s alongside general H gains.
-  // Soft efficiency ceiling: below ~233× (700W / 3W), gains are linear. Above the knee,
-  // diminishing returns kick in — improvements continue but at logarithmic pace,
-  // reflecting practical engineering limits rather than a hard thermodynamic wall.
+  // Soft efficiency ceiling: below 1400× (700 W / 0.5 W), gains are linear. Above the
+  // knee, diminishing returns kick in — improvements continue at a logarithmic pace.
   //
   // VINTAGE TRACKING: results are in "effective units" = month-0 frontier
   // accelerators. Software gains (1/M × S) apply to the whole fleet, so they
@@ -582,9 +621,12 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   const enterpriseTokensTotal = (inferenceDemand.enterprise || 0) * demandScale;
   const agenticTokensTotal = (inferenceDemand.agentic || 0) * demandScale;
 
-  // Edge offload: fraction of inference tokens served on-device (phones, laptops, NPUs).
-  // These tokens never hit the datacenter supply chain — no GPUs, no transformers, no cooling.
-  // The share is user-configurable per segment and ramps over time (S-curve adoption).
+  // Edge offload: fraction of inference tokens served outside hyperscale
+  // datacenters (phones, PCs, Macs, self-hosted small servers). These tokens need
+  // no datacenter GPUs, CoWoS, HBM, DC power or cooling, but still draw shared
+  // wafer and DRAM supply and use energy (see requiredEdge below and the edge
+  // block in runSimulation). Shares are set per segment and per time block; the
+  // total is capped at TRANSLATION_INTENSITIES.edge.maxShareOfInference.
   const edgeOffload = block?.edgeOffload || {};
   const edgeConsumerRaw = clamp(resolveGrowthRate(edgeOffload.consumer, 0), 0, 1);
   const edgeEnterpriseRaw = clamp(resolveGrowthRate(edgeOffload.enterprise, 0), 0, 1);
@@ -615,9 +657,9 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
 
   const requiredInference = consumerGpus + enterpriseGpus + agenticGpus;
 
-  // On-device work in the same datacenter-equivalent effective units. It does
-  // not need datacenter capacity, but it draws on shared silicon supply
-  // (wafers, EUV, DRAM) and uses energy.
+  // Edge work in the same datacenter-equivalent effective units. It does not
+  // need datacenter capacity, but it draws on shared silicon supply (wafers,
+  // DRAM) and uses energy.
   const requiredEdge =
     (consumerTokensTotal * edgeConsumer) / Math.max(consumerTokPerSec * secondsPerMonth * efficiencyGain, EPSILON)
     + (enterpriseTokensTotal * edgeEnterprise) / Math.max(enterpriseTokPerSec * secondsPerMonth * efficiencyGain, EPSILON)
@@ -637,8 +679,10 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
 
   const totalTrainingHours = (frontierRuns * hoursFrontier) + (midtierRuns * hoursMidtier);
   // Soft cap training efficiency: compute raw gain = (S*H) / M, apply soft knee.
-  // Hardware is credited through the vintage-tracked fleet (same index as
-  // inference), so only the software part reduces required effective units.
+  // Hardware is credited through the vintage-tracked fleet. There is one fleet
+  // index (H × H_memory) for all work, so training also gets memory-bandwidth
+  // gains (large-scale training is partly bandwidth-bound too). Only the
+  // software part reduces required effective units.
   const rawTrainingGain = eff.S_training * hwIndex / Math.max(eff.M_training, EPSILON);
   const cappedTrainingGain = softEfficiencyCap(rawTrainingGain, MAX_EFFICIENCY_GAIN) / Math.max(hwIndex, EPSILON);
   const requiredTraining = totalTrainingHours / (hoursPerMonth * utilTrn * cappedTrainingGain);
@@ -666,26 +710,29 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
 // 4) INTENSITY MAP + PREFLIGHT
 // ============================================
 
-function buildIntensityMap() {
+/**
+ * Per-accelerator intensity of every gating node, at the opening fleet's kW
+ * per accelerator (infrastructure intensities are scaled monthly by kwIndex).
+ * Chip and infrastructure intensities come from TRANSLATION_INTENSITIES; the
+ * remaining downstream nodes use their own node.inputIntensity.
+ */
+export function buildIntensityMap() {
   const map = {};
   const gpuToComp = TRANSLATION_INTENSITIES?.gpuToComponents || {};
   const serverToInfra = TRANSLATION_INTENSITIES?.serverToInfra || {};
 
-  const kwPerGpu = resolveAssumptionValue(serverToInfra.kwPerGpu?.value, 1.0);
+  const kwPerGpu = resolveAssumptionValue(serverToInfra.kwPerGpu?.value, FLEET_ANCHOR.kwPerAccelerator || 1.4);
   const pue = resolveAssumptionValue(serverToInfra.pue?.value, 1.3);
   const mwPerGpu = (kwPerGpu * pue) / 1000;
 
-  map['hbm_stacks'] = resolveAssumptionValue(gpuToComp.hbmStacksPerGpu?.value, 8);
+  map['hbm_stacks'] = resolveAssumptionValue(gpuToComp.hbmStacksPerGpu?.value, 7);
   map['datacenter_mw'] = mwPerGpu;
 
-  map['advanced_wafers'] = resolveAssumptionValue(gpuToComp.advancedWafersPerGpu?.value, 0.3);
-  map['abf_substrate'] = resolveAssumptionValue(
-    NODE_MAP.get('abf_substrate')?.inputIntensity,
-    resolveAssumptionValue(gpuToComp.abfUnitsPerGpu?.value, 0.02)
-  );
+  map['advanced_wafers'] = resolveAssumptionValue(gpuToComp.advancedWafersPerGpu?.value, 0.06);
+  map['abf_substrate'] = resolveAssumptionValue(NODE_MAP.get('abf_substrate')?.inputIntensity, 0.02);
 
-  map['cowos_capacity'] = resolveAssumptionValue(gpuToComp.cowosWaferEquivPerGpu?.value, 0.3);
-  map['dram_server'] = resolveAssumptionValue(gpuToComp.serverDramGbPerGpu?.value, 128);
+  map['cowos_capacity'] = resolveAssumptionValue(gpuToComp.cowosWaferEquivPerGpu?.value, 0.075);
+  map['dram_server'] = resolveAssumptionValue(gpuToComp.serverDramGbPerGpu?.value, 256);
   map['ssd_datacenter'] = resolveAssumptionValue(gpuToComp.ssdTbPerGpu?.value, 2);
 
   // Hybrid bonding: initial static value (overridden monthly with adoption curve in sim loop)
@@ -701,14 +748,14 @@ function buildIntensityMap() {
 
   // Infrastructure nodes: propagate demand through datacenter MW chain
   const powerChain = TRANSLATION_INTENSITIES?.powerChain || {};
-  const transformersPerMw = resolveAssumptionValue(powerChain.transformersPerMw?.value, 0.02);
+  const transformersPerMw = resolveAssumptionValue(powerChain.transformersPerMw?.value, 0.025);
   const redundancyFactor = resolveAssumptionValue(powerChain.redundancyFactor?.value, 1.5);
 
   map['transformers_lpt'] = mwPerGpu * transformersPerMw;
   map['power_generation'] = mwPerGpu;
   map['backup_power'] = mwPerGpu * redundancyFactor;
-  const workerMonthsPerMw = resolveAssumptionValue(serverToInfra.workerMonthsPerMw?.value, 400);
-  const ftesPerMw = resolveAssumptionValue(serverToInfra.ftesPerMw?.value, 8);
+  const workerMonthsPerMw = resolveAssumptionValue(serverToInfra.workerMonthsPerMw?.value, 100);
+  const ftesPerMw = resolveAssumptionValue(serverToInfra.ftesPerMw?.value, 1.0);
   map['dc_construction'] = mwPerGpu * workerMonthsPerMw;
   map['dc_ops_staff'] = mwPerGpu * ftesPerMw;
 
@@ -725,13 +772,9 @@ function buildIntensityMap() {
   map['optical_transceivers'] = resolveAssumptionValue(NODE_MAP.get('optical_transceivers')?.inputIntensity, 1);
   map['infiniband_cables'] = resolveAssumptionValue(NODE_MAP.get('infiniband_cables')?.inputIntensity, 4);
 
-  // EUV tools: compound intensity through the wafer chain.
-  // inputIntensity (0.00002) is tools-per-wafer, so per-GPU = wafers/GPU × tools/wafer.
-  // At compound 0.000006, 4 tools support ~600K GPUs (not the false 180K ceiling from before).
-  const advWafersPerGpu = map['advanced_wafers'] || 0.3;
-  map['euv_tools'] = advWafersPerGpu * resolveAssumptionValue(
-    NODE_MAP.get('euv_tools')?.inputIntensity, 0.00002
-  );
+  // EUV tools are capital equipment, not a per-accelerator input: their demand
+  // (tools needed to keep the leading-edge wafer ceiling ahead of AI wafer
+  // demand) is computed in the simulation loop. See NON_GATING_NODES.
 
   return map;
 }
@@ -743,7 +786,7 @@ function runPreflightDiagnostics(map, warnings) {
   const gpuStartCap = gpuNode?.startingCapacity || 1;
 
   for (const node of NODES) {
-    const isEligible = node.group !== 'A' && !['gpu_datacenter', 'gpu_inference'].includes(node.id);
+    const isEligible = node.group !== 'A' && !['gpu_datacenter', 'gpu_inference'].includes(node.id) && !NON_GATING_NODES.has(node.id);
     const isMapped = !!map[node.id];
 
     if (isMapped && (node.startingCapacity || 0) === 0 && (node.startingInventory || 0) === 0 && (!node.committedExpansions || node.committedExpansions.length === 0)) {
@@ -797,14 +840,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const results = {
     months: [],
     nodes: {},
-    summary: { shortages: [], gluts: [], bottlenecks: [] },
-    warnings: [],
-    edgeOffload: {
-      tokensOffloaded: [],      // total tokens/month served on-device
-      shareConsumer: [],         // edge share for consumer segment
-      shareEnterprise: [],       // edge share for enterprise segment
-      shareAgentic: []           // edge share for agentic segment
-    }
+    summary: { shortages: [], gluts: [], bottlenecks: [], binding: [] },
+    warnings: []
   };
 
   const nodeIntensityMap = buildIntensityMap();
@@ -813,18 +850,20 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const warnedSet = new Set();
   const effCache = [];
 
-  const demandAssumptions = deepMerge(assumptions?.demand || DEMAND_ASSUMPTIONS, scenarioOverrides?.demand);
-  const efficiencyAssumptions = deepMerge(assumptions?.efficiency || EFFICIENCY_ASSUMPTIONS, scenarioOverrides?.efficiency);
+  const { demand: demandAssumptions, efficiency: efficiencyAssumptions } = applyScenarioScaling(
+    deepMerge(assumptions?.demand || DEMAND_ASSUMPTIONS, scenarioOverrides?.demand),
+    deepMerge(assumptions?.efficiency || EFFICIENCY_ASSUMPTIONS, scenarioOverrides?.efficiency),
+    scenarioOverrides?.scaling
+  );
   const supplyAssumptions = deepMerge(assumptions?.supply || SUPPLY_ASSUMPTIONS, scenarioOverrides?.supplyAssumptions);
   const financingAssumptions = deepMerge(assumptions?.financing || FINANCING_ASSUMPTIONS, scenarioOverrides?.financing);
 
   // Precompute demand trajectories (block-chained, no discontinuities)
   const demandTrajectories = precomputeDemandTrajectories(months, demandAssumptions);
 
-  // Organic supply growth: running multiplier per node.
-  // Base expansion (from SUPPLY_ASSUMPTIONS) always applies — this is exogenous
-  // datacenter/foundry/memory growth. When tightness > 1, shortage-driven growth
-  // accelerates on top of the base rate via demand elasticity.
+  // Organic supply growth: running multiplier per node. Growth is demand-driven
+  // (shortage × elasticity); SUPPLY_ASSUMPTIONS.expansionRates adds baseline
+  // growth on top (0 by default) and pauses in a glut. See compoundOrganicGrowth.
   const runningSupplyMult = {};
   for (const node of NODES) {
     if (node.group !== 'A') runningSupplyMult[node.id] = 1.0;
@@ -832,7 +871,6 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
   // Glut thresholds
   const glutThresholds = GLOBAL_PARAMS.glutThresholds || { soft: 0.95, hard: 0.80 };
-  const predictiveParams = GLOBAL_PARAMS.predictiveSupply || {};
 
   // Hybrid bonding adoption curve params (for month-dependent intensity in sim loop)
   const hbAdoption = TRANSLATION_INTENSITIES?.gpuToComponents?.hybridBondingAdoption || {};
@@ -867,23 +905,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const defaultDcInstalled = anchorPhys * dcShare0;
   const defaultInfInstalled = anchorPhys * (1 - dcShare0);
 
-  // Default starting backlogs for base case: reflects current massive shortage
-  // (NVIDIA 6-12 month wait lists; every hyperscaler capacity-constrained).
-  // Component backlogs are derived from the GPU backlog × per-GPU intensity so
-  // they stay consistent with the centralized intensities — change an intensity
-  // assumption and the implied component backlog follows automatically.
-  const GPU_STARTING_BACKLOG = 4000000;
-  const BACKLOG_COMPONENT_IDS = [
-    'hbm_stacks', 'cowos_capacity', 'advanced_wafers',
-    'dram_server', 'ssd_datacenter', 'server_assembly', 'datacenter_mw'
-  ];
-  const DEFAULT_STARTING_BACKLOGS = { gpu_datacenter: GPU_STARTING_BACKLOG };
-  for (const id of BACKLOG_COMPONENT_IDS) {
-    const intensity = nodeIntensityMap[id];
-    if (intensity && intensity > 0) {
-      DEFAULT_STARTING_BACKLOGS[id] = GPU_STARTING_BACKLOG * intensity;
-    }
-  }
+  // The opening shortage is the calibrated gap (required = targetRatio ×
+  // installed at month 0), which the plan works off. There is no separate
+  // accelerator order backlog on top: that counted the same unmet demand twice.
+  // Component order backlogs start at node.startingBacklog (0 by default) and
+  // can be set per node via startingState.backlogByNode.
 
   const dcInstalledOverride = startOverrides.datacenterInstalledBase ?? startOverrides.installedBaseDatacenter ?? startOverrides.installedBase;
   const infInstalledOverride = startOverrides.inferenceInstalledBase ?? startOverrides.installedBaseInference;
@@ -915,8 +941,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const installedEff = cohorts.reduce((sum, c) => sum + c.eff, 0) || installedBase * fleetEffRatio0;
     const installedKW = cohorts.reduce((sum, c) => sum + c.kw, 0) || installedBase * kw0;
 
+    const isAccelerator = node.id === 'gpu_datacenter' || node.id === 'gpu_inference';
     const overrideBacklog = startOverrides.backlogByNode?.[node.id];
-    const initialBacklog = (overrideBacklog !== undefined) ? overrideBacklog : (DEFAULT_STARTING_BACKLOGS[node.id] ?? node.startingBacklog ?? 0);
+    const initialBacklog = isAccelerator ? 0 : (overrideBacklog ?? node.startingBacklog ?? 0);
 
     nodeState[node.id] = {
       type,
@@ -949,6 +976,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // prices, the 2026 memory crunch), and ~20 GW IT is being energized in
     // 2026. A ratio near 1.15 (the Excel's implied 2026 level) would make
     // 2026 demand-bound at ~12 GW, contradicting that evidence.
+    // Scenarios can deepen or ease the opening shortage with this ratio.
     targetRatio: scenarioOverrides?.calibration?.targetRatio ?? DEFAULT_CALIBRATION_RATIO,
     minScale: scenarioOverrides?.calibration?.minScale ?? 0.02,
     maxScale: scenarioOverrides?.calibration?.maxScale ?? 50
@@ -958,9 +986,13 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
   // Helper: compound organic growth for a node, scaled by demand pressure (tightness).
   // Growth is demand-driven (shortage × elasticity) and uncapped by default.
-  // Nodes with real parallelism bottlenecks (labor, permitting, materials) define
-  // maxAnnualExpansion to encode the actual constraint. Lead time only governs
-  // *when* new capacity arrives, not *how much* can be started in parallel.
+  // Limits come from physics, not growth caps:
+  //  - shared pools (EUV wafers, DRAM, industry output of power, transformers
+  //    and construction labor) cap what the node can deliver; while a pool is
+  //    the binding ceiling the node stops adding capacity it could not use;
+  //  - only genuine physical ramp limits define maxAnnualExpansion(Schedule)
+  //    (EUV tool output, power generation).
+  // Lead time only governs *when* new capacity arrives.
   // Utilization threshold: capacity expansion (both organic and discrete)
   // throttles when utilization is below this level. No board greenlights a
   // new fab when existing lines are running at 40% — you fill what you have
@@ -974,15 +1006,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const CONTRACTION_RATE_ANNUAL = 0.10;
   const CONTRACTION_MULT_FLOOR = 0.5;
 
-  const compoundOrganicGrowth = (nodeId, month, tightness, utilization) => {
+  const compoundOrganicGrowth = (nodeId, month, tightness, utilization, poolBound = false) => {
     const cat = SUPPLY_CATEGORY_MAP[nodeId];
     if (!cat) return;
+    const node = NODE_MAP.get(nodeId);
     // Sold-out upstream capital goods (e.g., EUV scanners) expand at their
     // physical maximum: every tool made is bought, so output follows the
     // producer's capacity build, not AI demand in a given month.
-    const physNode = NODE_MAP.get(nodeId);
-    if (physNode?.growsAtPhysicalMax) {
-      const maxRate = getMaxExpansion(physNode, month) ?? 0;
+    if (node?.growsAtPhysicalMax) {
+      const maxRate = getMaxExpansion(node, month) ?? 0;
       runningSupplyMult[nodeId] *= Math.pow(1 + maxRate, 1 / 12);
       return;
     }
@@ -1000,6 +1032,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       return;
     }
 
+    // The node's pool ceiling binds: more of its own capacity would sit idle.
+    if (poolBound) return;
+
     const blockKey = getBlockKeyForMonth(month);
     const block = supplyAssumptions?.[blockKey];
     // In a glut, organic base expansion pauses — otherwise capacity keeps
@@ -1007,16 +1042,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // making glut a guaranteed end state for every node.
     const baseRate = tightness < glutThresholds.soft
       ? 0
-      : resolveGrowthRate(block?.expansionRates?.[cat], 0.15);
+      : resolveGrowthRate(block?.expansionRates?.[cat], 0);
 
     // Scale growth by how severe the shortage is, using the node's long-run elasticity
-    const node = NODE_MAP.get(nodeId);
-    const elasticity = node?.elasticityLong || 0.5;
+    const elasticity = node?.elasticityLong ?? 0.5;
     const shortageMagnitude = Math.max(0, tightness - 1.0);
     const dynamicRate = baseRate + (shortageMagnitude * elasticity * 2.0);
 
-    // Cap only if node defines an explicit parallelism constraint
-    // (e.g., maxAnnualExpansion: 0.15 for transformers due to skilled labor limits)
+    // Physical ramp limit, only where the node defines one (e.g. power generation)
     const maxExp = getMaxExpansion(node, month);
     const cappedRate = maxExp != null
       ? Math.min(dynamicRate, maxExp)
@@ -1034,57 +1067,58 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
   // --- financing layer (port of the Excel funding model) ---
   const pue = resolveAssumptionValue(TRANSLATION_INTENSITIES?.serverToInfra?.pue?.value, 1.3);
-  const financing = createFinancingModel(financingAssumptions, { startYear: GLOBAL_PARAMS.startYear, pue });
-  const computeLifeMonths = Math.max(12, Math.round((financingAssumptions?.scalars?.computeLifeYears || 6) * 12));
+  const financing = createFinancingModel(financingAssumptions, {
+    startYear: GLOBAL_PARAMS.startYear,
+    pue,
+    defaults: FINANCING_ASSUMPTIONS_BASE
+  });
+  // Same (sanitized) compute life drives retirements and depreciation
+  const computeLifeMonths = Math.round(financing.scalars.computeLifeYears * 12);
   const startMonthIndex = (GLOBAL_PARAMS.startMonth || 1) - 1;
+  const idleShare = financing.scalars.idlePowerShare;
   results.fleet = {
     installedGW: [], requiredGW: [], deployedGW: [], retiredGW: [],
     fundingCapGW: [], binding: [], installedAccelerators: [],
     fleetTokPerKwhM: [], frontierTokPerKwhM: [], kwPerNewAccelerator: [],
-    trainingShare: []
+    trainingShare: [],
+    // Edge (installed, not required): datacenter-equivalent GW, power, token share
+    edgeEquivGW: [], edgePowerGW: [], dcPowerGW: [], edgeTokenShare: [], edgeUnitsDeployed: []
   };
-  // On-device (edge) inference: shares wafer/EUV/DRAM supply, adds energy
+
+  // Edge inference (phones, PCs, Macs, self-hosted servers): draws on the
+  // shared wafer and DRAM supply and adds energy. EUV is not listed: edge
+  // wafers are already bounded by the EUV-based wafer ceiling.
   const edgeCfg = TRANSLATION_INTENSITIES?.edge || {};
   const edgeWaferX = resolveAssumptionValue(edgeCfg.waferIntensityVsDatacenter?.value, 1.0);
   const edgeDramX = resolveAssumptionValue(edgeCfg.dramIntensityVsDatacenter?.value, 1.0);
-  const edgeEnergyX = resolveAssumptionValue(edgeCfg.energyPerTokenVsDatacenter?.value, 0.23);
-  const edgeDevices0 = resolveAssumptionValue(edgeCfg.activeDevices?.value, 8.5e9);
-  const edgeDeviceGrowth = resolveAssumptionValue(edgeCfg.activeDevices?.growth, 0.02);
+  const edgeEnergyX = resolveAssumptionValue(edgeCfg.energyPerTokenVsDatacenter?.value, 0.6);
   const edgeLifeMonths = Math.max(1, resolveAssumptionValue(edgeCfg.deviceLifeMonths?.value, 36));
-  const EDGE_SHARED_NODES = { advanced_wafers: edgeWaferX, euv_tools: edgeWaferX, dram_server: edgeDramX };
+  const EDGE_SHARED_NODES = { advanced_wafers: edgeWaferX, dram_server: edgeDramX };
   // Edge competes for shared supply rather than taking unlimited priority:
   // it can claim at most this share of a shared node's monthly potential.
   const EDGE_MAX_SUPPLY_SHARE = resolveAssumptionValue(edgeCfg.maxShareOfSharedSupply?.value, 0.35);
+  // Opening edge fleet = month-0 edge requirement (set on the first month)
   let edgeInstalledEff = null;
-  Object.assign(results.fleet, { edgeEquivGW: [], edgePowerGW: [], dcPowerGW: [], edgeTokenShare: [], edgeUnitsDeployed: [], edgeWattsPerDevice: [] });
-  const utilPath = financingAssumptions?.paths?.utilization || {};
-  const idleShare = financingAssumptions?.scalars?.idlePowerShare ?? 0.5;
 
   // Shared physical supply pools (see SHARED_SUPPLY_POOLS in assumptions):
   //  - Leading-edge logic wafers are bounded by the EUV installed base
   //    (ASML deliveries accumulate); AI can take up to a maximum share.
   //  - DRAM wafers are bounded by memory-fab capacity on its construction
   //    schedule; HBM (≈3x wafer area per bit), AI host DRAM and edge share it.
+  //  - Industry pools: AI's slice of grid, turbine, transformer and
+  //    construction-labor output.
   // Nodes inside a pool grow with demand; the pool is the physical ceiling.
   const poolsCfg = SHARED_SUPPLY_POOLS || {};
   const lePool = poolsCfg.leadingEdge || {};
   const memPool = poolsCfg.memory || {};
-  let euvLogicInstalled = (lePool.euvInstalledStart ?? 320) * (lePool.logicShareOfEuv ?? 0.65);
+  const logicShareOfEuv = lePool.logicShareOfEuv ?? 0.65;
+  const waferStartsPerToolMonth = lePool.waferStartsPerToolMonth ?? 2000;
+  const leAiMaxShare = lePool.aiMaxShare ?? 0.8;
+  let euvLogicInstalled = (lePool.euvInstalledStart ?? 320) * logicShareOfEuv;
   let dramGbPerMonth = memPool.dramGbPerMonthStart ?? 3.0e9;
-  const memGrowthAt = (m) => {
-    const year = GLOBAL_PARAMS.startYear + Math.floor(((GLOBAL_PARAMS.startMonth || 1) - 1 + m) / 12);
-    const sched = memPool.growthSchedule || [];
-    for (const step of sched) if (year <= step.until) return step.growth;
-    return sched.length ? sched[sched.length - 1].growth : 0.15;
-  };
   results.pools = { aiWaferCeiling: [], aiMemoryCeilingGb: [], leadingEdgeScale: [], memoryScale: [], euvLogicInstalled: [], industry: {} };
   const industryPools = poolsCfg.industry || {};
   const industryCap = {};
-  const scheduleGrowth = (sched, m, fallback) => {
-    const year = GLOBAL_PARAMS.startYear + Math.floor(((GLOBAL_PARAMS.startMonth || 1) - 1 + m) / 12);
-    for (const step of sched || []) if (year <= step.until) return step.growth;
-    return sched && sched.length ? sched[sched.length - 1].growth : fallback;
-  };
   for (const [id, cfg] of Object.entries(industryPools)) {
     industryCap[id] = cfg.industryStart || 0;
     results.pools.industry[id] = { ceiling: [], aiShare: [], binding: [] };
@@ -1101,7 +1135,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   for (let month = 0; month < months; month++) {
     results.months.push(month);
     const monthOfYear = (startMonthIndex + month) % 12;
-    const calendarYear = GLOBAL_PARAMS.startYear + Math.floor((startMonthIndex + month) / 12);
+    const calendarYear = calendarYearOf(month);
 
     // Update hybrid bonding intensity with month-dependent adoption curve
     // S-curve: starts at initial share (~2%), ramps toward target (~25%) with halflife of 36 months
@@ -1114,7 +1148,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const currentInstalledEff = (nodeState['gpu_datacenter']?.installedEff || 0) + (nodeState['gpu_inference']?.installedEff || 0);
 
     if (month === 0 && (demandScale === null || demandScale === undefined)) {
-      const raw = computeRequiredGpus(0, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, 1);
+      const raw = raw0;
       const rawReq = Math.max(raw.requiredTotal, 1);
       const desired = currentInstalledEff * calibrationCfg.targetRatio;
 
@@ -1133,28 +1167,28 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     const req = computeRequiredGpus(month, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed);
 
-    // Track edge offload series
-    results.edgeOffload.tokensOffloaded.push(req.edgeTokensTotal || 0);
-    results.edgeOffload.shareConsumer.push(req.edgeOffloadShare?.consumer || 0);
-    results.edgeOffload.shareEnterprise.push(req.edgeOffloadShare?.enterprise || 0);
-    results.edgeOffload.shareAgentic.push(req.edgeOffloadShare?.agentic || 0);
-
-    // Forward-looking demand ratio cache for capacity planning.
-    // Uses precomputed trajectories to forecast how much total GPU demand grows
-    // over a given look-ahead horizon. Each node uses its own lead time as horizon.
+    // Forward-looking demand ratio for capacity planning, over each node's lead
+    // time. Required compute is in effective units, but components are sized
+    // per PHYSICAL accelerator: divide by the hardware index at each end so
+    // hardware gains don't read as demand growth. Infrastructure is sized per
+    // kW, so it also grows with kW per new accelerator.
     const demandForecastCache = {};
-    const getDemandGrowthRatio = (lookAheadMonths) => {
-      if (demandForecastCache[lookAheadMonths] !== undefined) return demandForecastCache[lookAheadMonths];
+    const getDemandGrowthRatio = (lookAheadMonths, perKw = false) => {
+      const key = `${lookAheadMonths}:${perKw ? 1 : 0}`;
+      if (demandForecastCache[key] !== undefined) return demandForecastCache[key];
       const futureMonth = Math.min(month + lookAheadMonths, months - 1);
       if (futureMonth <= month || req.requiredTotal <= EPSILON) {
-        demandForecastCache[lookAheadMonths] = 1;
+        demandForecastCache[key] = 1;
         return 1;
       }
       const futureReq = computeRequiredGpus(futureMonth, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed);
+      const physNow = req.requiredTotal / Math.max(req.hwIndex, EPSILON);
+      const physFuture = futureReq.requiredTotal / Math.max(futureReq.hwIndex, EPSILON);
+      const kwRatio = perKw ? (futureReq.kwIndex || 1) / (req.kwIndex || 1) : 1;
       // Allow ratios below 1 so capacity planning can see demand decline —
       // flooring at 1 made contraction invisible to every expansion decision.
-      const ratio = Math.max(futureReq.requiredTotal / req.requiredTotal, 0.1);
-      demandForecastCache[lookAheadMonths] = ratio;
+      const ratio = Math.max((physFuture / physNow) * kwRatio, 0.1);
+      demandForecastCache[key] = ratio;
       return ratio;
     };
 
@@ -1220,76 +1254,80 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const infKwRetire = infRet.kw;
     const retiredKW = dcKwRetire + infKwRetire;
 
-    // 2. "Do Nothing" outcome in effective units (projected remaining fleet)
-    const dcProjectedRemaining = Math.max(0, gpuState.installedEff - dcEffRetire);
-    const infProjectedRemaining = Math.max(0, infState.installedEff - infEffRetire);
-
-    // 3. Smart ordering: close the effective-capacity gap over CATCHUP_MONTHS,
-    //    converted to physical accelerators at this month's hardware index.
-    const planDeployDc = Math.max(0, (requiredDcBase - dcProjectedRemaining) / CATCHUP_MONTHS) / hwIdx;
-    const planDeployInf = Math.max(0, (requiredInfBase - infProjectedRemaining) / CATCHUP_MONTHS) / hwIdx;
+    // 2. Plan: replace this month's retirements (known in advance) and close
+    //    the remaining effective-capacity gap over CATCHUP_MONTHS, converted to
+    //    physical accelerators at this month's hardware index. If the fleet is
+    //    above requirement, replacements are skipped until it comes back down.
+    const planFor = (required, installedEff, retiringEff) => Math.max(0,
+      retiringEff + (required - installedEff) / CATCHUP_MONTHS) / hwIdx;
+    const planDeployDc = planFor(requiredDcBase, gpuState.installedEff, dcEffRetire);
+    const planDeployInf = planFor(requiredInfBase, infState.installedEff, infEffRetire);
+    const planDeployTotal = planDeployDc + planDeployInf;
 
     // Financing: open the calendar year (fundable capex computed on opening balances)
     if (monthOfYear === 0 || month === 0) {
       const totalEff = gpuState.installedEff + infState.installedEff;
       const totalKW = gpuState.installedKW + infState.installedKW;
-      let trainSum = 0, reqSum = 0, reqNextSum = 0;
-      for (let m = month; m < Math.min(month + 12, months); m++) {
+      // Required compute in new-vintage GW (what capex actually buys)
+      const newVintageGW = (r) => r.requiredTotal * (r.kwIndex || 1) / Math.max(r.hwIndex, EPSILON);
+      let trainSum = 0, reqSum = 0, gwSum = 0, gwNextSum = 0;
+      const yearLen = Math.min(12, months - month);
+      for (let m = month; m < month + yearLen; m++) {
         const r = computeRequiredGpus(m, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed);
         trainSum += r.requiredTotal > EPSILON ? r.requiredTraining / r.requiredTotal : 0;
         reqSum += r.requiredTotal;
-      }
-      const yearLen = Math.min(12, months - month);
-      for (let m = month + 12; m < Math.min(month + 24, months); m++) {
-        reqNextSum += computeRequiredGpus(m, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed).requiredTotal;
+        gwSum += newVintageGW(r);
       }
       const nextLen = Math.max(0, Math.min(12, months - month - 12));
+      for (let m = month + 12; m < month + 12 + nextLen; m++) {
+        gwNextSum += newVintageGW(computeRequiredGpus(m, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed));
+      }
       const midEff = getEfficiencyMultipliers(Math.min(month + 6, months - 1), efficiencyAssumptions, effCache, results.warnings, warnedSet);
       const reqAvg = reqSum / Math.max(yearLen, 1);
+      const gwAvg = gwSum / Math.max(yearLen, 1);
       financing.startYear(calendarYear, {
         openingGW: totalKW / 1e6,
         openingFleetTokPerKwhM: totalKW > EPSILON ? frontierTok0 * kw0 * totalEff / totalKW : frontierTok0,
         frontierTokPerKwhM: frontierTok0 * (midEff.H * midEff.H_memory) / Math.max(midEff.KW, EPSILON),
         trainingShare: trainSum / Math.max(yearLen, 1),
         servedFraction: totalEff > EPSILON ? reqAvg / totalEff : 1,
+        // Used for the first year only; later years carry the prior year-end ratio
         priorScarcityRatio: totalEff > EPSILON ? Math.max(0, req.requiredTotal - totalEff) / totalEff : 0,
-        preSpendRatio: nextLen > 0 && reqAvg > EPSILON ? (reqNextSum / nextLen) / reqAvg : 1
+        preSpendRatio: nextLen > 0 && gwAvg > EPSILON ? (gwNextSum / nextLen) / gwAvg : 1
       });
-      yearAccum = { requiredGWSum: 0, months: 0, tokens: 0, edgeEquivGW: 0, edgePowerGW: 0, dcPowerGW: 0, edgeShare: 0, edgeWatts: 0 };
+      yearAccum = { requiredGWSum: 0, months: 0, tokens: 0, edgeEquivGW: 0, edgePowerGW: 0, dcPowerGW: 0, edgeShare: 0 };
     }
 
-    const backlogPaydown = gpuState.backlog / BACKLOG_PAYDOWN_MONTHS_GPU;
-
-    const planDeployTotal = planDeployDc + planDeployInf + backlogPaydown;
-    const baselinePlan = planDeployDc + planDeployInf;
-
     // =======================================================
-    // STEP 1: POTENTIALS (with organic supply growth)
+    // STEP 1: POTENTIALS (capacity × utilization × yield, then pool ceilings)
     // =======================================================
     const potentials = {};
     const monthEffCap = {};
+    const poolBound = {};
     for (const node of NODES) {
       if (node.id === 'gpu_datacenter' || node.id === 'gpu_inference') continue;
       if (node.group === 'A') continue;
       const state = nodeState[node.id];
       const sMult = runningSupplyMult[node.id] || 1;
       const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);
-      const y = calculateNodeYield(node, month);
-      monthEffCap[node.id] = cap * (node.maxCapacityUtilization || 0.95) * y;
+      monthEffCap[node.id] = effectiveCapacity(node, month, cap);
     }
 
     // Leading-edge pool: AI wafer starts ≤ EUV-supported logic wafers × max AI share
     const toolProductivity = Math.pow(1 + (lePool.toolProductivityGrowth ?? 0), month / 12);
-    const aiWaferCeiling = euvLogicInstalled * (lePool.waferStartsPerToolMonth ?? 2000) * toolProductivity * (lePool.aiMaxShare ?? 0.8);
+    const wafersPerLogicTool = waferStartsPerToolMonth * toolProductivity * leAiMaxShare;
+    const aiWaferCeiling = euvLogicInstalled * wafersPerLogicTool;
     const leScale = monthEffCap.advanced_wafers > aiWaferCeiling ? aiWaferCeiling / monthEffCap.advanced_wafers : 1;
     if (monthEffCap.advanced_wafers !== undefined) monthEffCap.advanced_wafers *= leScale;
+    poolBound.advanced_wafers = leScale < 1;
     // Memory pool: HBM (wafer-area-weighted) + AI host DRAM ≤ max AI share of DRAM capacity
-    const aiMemCeiling = dramGbPerMonth * (memPool.aiMaxShare ?? 0.7);
+    const aiMemCeiling = dramGbPerMonth * (memPool.aiMaxShare ?? 0.6);
     const hbmGbEq = (monthEffCap.hbm_stacks || 0) * (memPool.gbPerHbmStack ?? 36) * (memPool.hbmWaferAreaMultiplier ?? 3);
     const memUse = hbmGbEq + (monthEffCap.dram_server || 0);
     const memScale = memUse > aiMemCeiling ? aiMemCeiling / memUse : 1;
     if (monthEffCap.hbm_stacks !== undefined) monthEffCap.hbm_stacks *= memScale;
     if (monthEffCap.dram_server !== undefined) monthEffCap.dram_server *= memScale;
+    poolBound.hbm_stacks = poolBound.dram_server = memScale < 1;
     results.pools.aiWaferCeiling.push(aiWaferCeiling);
     results.pools.aiMemoryCeilingGb.push(aiMemCeiling);
     results.pools.leadingEdgeScale.push(leScale);
@@ -1302,11 +1340,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const ceiling = industryCap[id] * (cfg.conversion ?? 1) * (cfg.aiMaxShare ?? 1);
       const bound = monthEffCap[id] > ceiling;
       if (bound) monthEffCap[id] = ceiling;
+      poolBound[id] = bound;
       const rec = results.pools.industry[id];
       rec.ceiling.push(ceiling);
       rec.aiShare.push(industryCap[id] > 0 ? monthEffCap[id] / (industryCap[id] * (cfg.conversion ?? 1)) : 0);
       rec.binding.push(bound);
-      industryCap[id] *= Math.pow(1 + scheduleGrowth(cfg.growthSchedule, month, 0.05), 1 / 12);
+      industryCap[id] *= Math.pow(1 + scheduleValue(cfg.growthSchedule, month, 'growth', 0.05), 1 / 12);
     }
 
     for (const node of NODES) {
@@ -1317,14 +1356,17 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     // Pools evolve: EUV deliveries this month join the installed base (logic share);
     // DRAM fab capacity follows its construction schedule.
-    euvLogicInstalled += (monthEffCap.euv_tools || 0) * (lePool.logicShareOfEuv ?? 0.65);
-    dramGbPerMonth *= Math.pow(1 + memGrowthAt(month), 1 / 12);
+    euvLogicInstalled += (monthEffCap.euv_tools || 0) * logicShareOfEuv;
+    dramGbPerMonth *= Math.pow(1 + scheduleValue(memPool.growthSchedule, month, 'growth', 0.15), 1 / 12);
 
-    // On-device silicon claims shared wafer/EUV/DRAM supply first (phone and
-    // PC makers hold long-term contracts). Devices refresh every edgeLifeMonths.
+    // Edge devices claim shared wafer/DRAM supply before datacenters, up to
+    // EDGE_MAX_SUPPLY_SHARE of each node's potential (phone and PC makers hold
+    // long-term contracts). Like the datacenter plan, edge replaces retiring
+    // devices (edgeLifeMonths refresh cycle) and closes its gap over
+    // CATCHUP_MONTHS, so block-boundary jumps in edge share ramp in smoothly.
     if (edgeInstalledEff === null) edgeInstalledEff = req.requiredEdge || 0;
     const edgeRetireEff = edgeInstalledEff / edgeLifeMonths;
-    const edgeNeedEff = Math.max(0, (req.requiredEdge || 0) - (edgeInstalledEff - edgeRetireEff));
+    const edgeNeedEff = Math.max(0, edgeRetireEff + ((req.requiredEdge || 0) - edgeInstalledEff) / CATCHUP_MONTHS);
     const edgeUnits = edgeNeedEff / hwIdx; // physical datacenter-equivalent units at this month's hardware
     const edgeDemand = {};
     let edgeServedFrac = 1;
@@ -1332,12 +1374,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const need = edgeUnits * (monthIntensity[id] || 0) * x;
       edgeDemand[id] = need;
       if (need > EPSILON && potentials[id] !== undefined) {
-        const take = Math.min(need, potentials[id] * EDGE_MAX_SUPPLY_SHARE);
-        edgeServedFrac = Math.min(edgeServedFrac, take / need);
-        potentials[id] = Math.max(0, potentials[id] - take);
+        edgeServedFrac = Math.min(edgeServedFrac, (potentials[id] * EDGE_MAX_SUPPLY_SHARE) / need);
       }
     }
     edgeServedFrac = clamp(edgeServedFrac, 0, 1);
+    // Every shared input is consumed in proportion to the edge units actually built
+    for (const id of Object.keys(EDGE_SHARED_NODES)) {
+      if (potentials[id] !== undefined) potentials[id] = Math.max(0, potentials[id] - edgeDemand[id] * edgeServedFrac);
+    }
     edgeInstalledEff = Math.max(0, edgeInstalledEff - edgeRetireEff + edgeNeedEff * edgeServedFrac);
 
     // =======================================================
@@ -1347,7 +1391,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuSMult = runningSupplyMult['gpu_datacenter'] || 1;
     const gpuCap = calculateCapacity(gpuNode, month, scenarioOverrides, gpuState.dynamicExpansions, gpuSMult);
     const gpuYield = calculateNodeYield(gpuNode, month);
-    const gpuEffCap = gpuCap * 0.95 * gpuYield;
+    const gpuEffCap = effectiveCapacity(gpuNode, month, gpuCap);
 
     // gpu_inference fab capacity supplies the same accelerator pool. Both fab
     // lines feed one inventory (tracked on gpuState) from which DC and
@@ -1356,7 +1400,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const infSMult = runningSupplyMult['gpu_inference'] || 1;
     const infCap = calculateCapacity(infNode, month, scenarioOverrides, infState.dynamicExpansions, infSMult);
     const infYield = calculateNodeYield(infNode, month);
-    const infEffCap = infCap * 0.95 * infYield;
+    const infEffCap = effectiveCapacity(infNode, month, infCap);
 
     const gpuEffCapTotal = gpuEffCap + infEffCap;
     const gpuAvailable = gpuState.inventory + gpuEffCapTotal;
@@ -1393,16 +1437,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     for (const [nodeId, intensity] of Object.entries(monthIntensity)) {
       const potential = potentials[nodeId];
       if (potential === undefined || intensity <= 0) continue;
-      // Hybrid bonding is not a hard gate: when bonding capacity is short,
-      // designs fall back to CoWoS-only packaging (already required for every
-      // accelerator). It still reports demand, tightness and expansion signals.
-      if (nodeId === 'hybrid_bonding') continue;
-      // EUV scanners are long-lived capital tools, not a per-accelerator
-      // consumable: the installed base sets how many leading-edge wafers can be
-      // made, and deliveries set how fast that grows. EUV therefore limits the
-      // growth of advanced-wafer capacity (its expansion schedule), not each
-      // month's accelerator output.
-      if (nodeId === 'euv_tools') continue;
+      if (NON_GATING_NODES.has(nodeId)) continue;
       const pool = SUBSTITUTION_POOLS[nodeId];
       if (pool) {
         if (!pooledPotentials[pool]) pooledPotentials[pool] = { potential: 0, intensity };
@@ -1423,14 +1458,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     for (const [poolName, { potential, intensity }] of Object.entries(pooledPotentials)) {
       // The power_hookup pool is infrastructure: retirements free hookups too.
       const supported = potential / intensity + totalRetirements;
-      recordGate(poolName === 'power_hookup' ? 'Power hookups (grid + on-site)' : poolName, supported, month, kwNew);
-      if (supported < maxSupported) { maxSupported = supported; maxSupportedNode = poolName === 'power_hookup' ? 'Power hookups (grid + on-site)' : poolName; }
+      const label = poolName === 'power_hookup' ? POWER_HOOKUP_LABEL : poolName;
+      recordGate(label, supported, month, kwNew);
+      if (supported < maxSupported) { maxSupported = supported; maxSupportedNode = label; }
       constraintCount++;
     }
 
     if (constraintCount === 0 && (month === 0 || month % 12 === 0)) {
       results.warnings.push(`Warning (Month ${month}): No active component constraints found.`);
-      maxSupported = Infinity;
     }
 
     // Funding gate: the year's fundable capex, paced monthly (Excel funding model)
@@ -1447,7 +1482,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const physicalMax = Math.min(demandCeiling, gpuAvailable, maxSupported);
     const actualDeployTotal = Math.min(physicalMax, fundingCap);
     const blockedByComponents = Math.max(0, Math.min(demandCeiling, gpuAvailable) - Math.min(demandCeiling, gpuAvailable, maxSupported));
-    const lostToFundingGW = Math.max(0, physicalMax - actualDeployTotal) * kwNew / 1e6;
+    // Deployments this month that were demanded and physically possible but
+    // not fundable. Unbuilt demand stays in the gap and is planned again next
+    // month, so annual sums of this measure deferral, not a permanent loss.
+    const deferredByFundingGW = Math.max(0, physicalMax - actualDeployTotal) * kwNew / 1e6;
 
     // Binding constraint this month (what set actual deployments)
     let binding = 'Demand';
@@ -1465,31 +1503,20 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gpuProdTarget = actualDeployTotal + Math.max(0, gpuBufferTarget - gpuState.inventory);
     const gpuProduced = Math.min(gpuEffCapTotal, gpuProdTarget);
 
-    const oldGpuBacklog = gpuState.backlog;
-
     gpuState.inventory = (gpuState.inventory + gpuProduced) - actualDeployTotal;
     if (gpuState.inventory < -1e-6) gpuState.inventory = 0;
 
-    // GPU backlog grows from all deployment shortfalls (including component
-    // gating). This inflates planDeployTotal via backlog paydown, which
-    // increases planDemand for components, driving expansion of the bottleneck.
-    // The effectiveDemand cap on production prevents this from causing runaway
-    // inventory in non-binding components — only the investment signal grows.
-    gpuState.backlog = Math.max(0, oldGpuBacklog + baselinePlan - actualDeployTotal);
-    // Orders only stay on the books while the capacity is still needed: cap the
-    // backlog at the remaining effective gap (in physical accelerators at this
-    // month's hardware index). Without this, years of funding- or supply-limited
-    // builds pile up a backlog that keeps driving deployments after the fleet
-    // has already caught up with demand (the gap was counted twice: once in
-    // the plan, once in backlog paydown).
+    // Accelerator "backlog" = unserved demand: the effective-capacity gap left
+    // after this month's deployments, in accelerators at this month's hardware
+    // index. It is reported, not added to the plan (the plan already works the
+    // gap off), so the same shortage is never counted twice.
     {
       const installedEffAfter = gpuState.installedEff + infState.installedEff
         + actualDeployTotal * hwIdx - dcEffRetire - infEffRetire;
-      const remainingGapPhys = Math.max(0, req.requiredTotal - installedEffAfter) / hwIdx;
-      gpuState.backlog = Math.min(gpuState.backlog, remainingGapPhys);
+      gpuState.backlog = Math.max(0, req.requiredTotal - installedEffAfter) / hwIdx;
     }
 
-    const shareDc = baselinePlan > EPSILON ? (planDeployDc / baselinePlan) : 0.7;
+    const shareDc = planDeployTotal > EPSILON ? (planDeployDc / planDeployTotal) : 0.7;
     const actualDc = actualDeployTotal * shareDc;
     const actualInf = actualDeployTotal * (1 - shareDc);
 
@@ -1508,20 +1535,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Tightness compares demand flow against production capacity (flow vs
     // flow). Inventory buffers delivery but is not monthly supply — dividing
     // by (inventory + capacity) made every balanced market read as glut.
-    const gpuTotalLoad = baselinePlan + (oldGpuBacklog / BACKLOG_PAYDOWN_MONTHS_GPU);
-    const gpuTightness = gpuTotalLoad / Math.max(gpuEffCapTotal, EPSILON);
+    const gpuTightness = planDeployTotal / Math.max(gpuEffCapTotal, EPSILON);
     const gpuPriceIndex = calculatePriceIndex(gpuTightness);
-
-    // Forward-looking capacity expansion for GPUs
-    // Look ahead by GPU lead time, forecast demand using trajectories, trigger build if shortage projected
     gpuState.tightnessHistory.push(gpuTightness);
 
     // GPU utilization: actual deployment vs combined effective capacity
     const gpuUtilization = gpuEffCapTotal > EPSILON ? actualDeployTotal / gpuEffCapTotal : 1.0;
 
-    // Organic growth: base expansion always applies (exogenous datacenter growth);
-    // when tightness > 1 (demand exceeds supply), shortage-driven growth adds on top.
-    // Throttled by utilization — don't invest in new lines when existing ones are idle.
+    // Organic growth: shortage-driven (tightness > 1) plus any baseline rate,
+    // throttled by utilization — no new lines while existing ones are idle.
     compoundOrganicGrowth('gpu_datacenter', month, gpuTightness, gpuUtilization);
     compoundOrganicGrowth('gpu_inference', month, gpuTightness, gpuUtilization);
 
@@ -1535,8 +1557,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const forecastGpuCap = calculateCapacity(gpuNode, gpuFutureMonth, scenarioOverrides, gpuState.dynamicExpansions, forecastGpuSMult);
       const forecastInfSMult = runningSupplyMult['gpu_inference'] || 1;
       const forecastInfCap = calculateCapacity(infNode, gpuFutureMonth, scenarioOverrides, infState.dynamicExpansions, forecastInfSMult);
-      const forecastGpuEffCap = (forecastGpuCap * calculateNodeYield(gpuNode, gpuFutureMonth)
-        + forecastInfCap * calculateNodeYield(infNode, gpuFutureMonth)) * 0.95;
+      const forecastGpuEffCap = effectiveCapacity(gpuNode, gpuFutureMonth, forecastGpuCap)
+        + effectiveCapacity(infNode, gpuFutureMonth, forecastInfCap);
 
       if (forecastGpuDemand > forecastGpuEffCap) {
         const gap = forecastGpuDemand - forecastGpuEffCap;
@@ -1549,10 +1571,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       }
     }
 
-    // Glut detection for GPUs
-    const gpuIsShort = gpuState.backlog > 0 || gpuTightness > 1.05;
-    const gpuIsGlut = gpuTightness < glutThresholds.soft && gpuState.backlog <= 0;
-    const gpuIsHardGlut = gpuTightness < glutThresholds.hard && gpuState.backlog <= 0;
+    // Shortage / glut flags for accelerators (this month's plan vs fab output)
+    const gpuUnmet = actualDeployTotal < planDeployTotal - 1e-6;
+    const gpuIsShort = gpuTightness > 1.05;
+    const gpuIsGlut = gpuTightness < glutThresholds.soft && !gpuUnmet;
+    const gpuIsHardGlut = gpuTightness < glutThresholds.hard && !gpuUnmet;
 
     const storeGpu = (isDc) => {
       const nodeId = isDc ? 'gpu_datacenter' : 'gpu_inference';
@@ -1617,8 +1640,21 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const actualUnits = isInfra ? Math.max(0, actualDeployTotal - totalRetirements) : actualDeployTotal;
 
       const edgeNeed = edgeDemand[node.id] || 0;
-      const planDemand = planUnits * intensity + edgeNeed;
-      const actualConsumption = actualUnits * intensity + edgeNeed * edgeServedFrac;
+      let planDemand = planUnits * intensity + edgeNeed;
+      let actualConsumption = actualUnits * intensity + edgeNeed * edgeServedFrac;
+      if (node.id === 'euv_tools') {
+        // Tools that must be delivered each month so the EUV-supported wafer
+        // ceiling stays ahead of AI wafer demand one lead time out (logic tools
+        // grossed up to all EUV tools). Zero when the ceiling has headroom.
+        const leadTime = node.leadTimeDebottleneck || 18;
+        const waferIntensity = monthIntensity.advanced_wafers || 0;
+        const toolsFor = (units, edge) => {
+          const wafers = units * waferIntensity * getDemandGrowthRatio(leadTime) + edge;
+          return Math.max(0, wafers / Math.max(wafersPerLogicTool, EPSILON) - euvLogicInstalled) / leadTime / logicShareOfEuv;
+        };
+        planDemand = toolsFor(planDeployTotal, edgeDemand.advanced_wafers || 0);
+        actualConsumption = toolsFor(actualDeployTotal, (edgeDemand.advanced_wafers || 0) * edgeServedFrac);
+      }
 
       // Effective demand: producers respond to what customers actually consume,
       // not the unconstrained order book. When a different component is the fleet
@@ -1634,7 +1670,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);
       const y = calculateNodeYield(node, month);
       // Same pool-limited effective capacity used in gating
-      const effCap = monthEffCap[node.id] ?? cap * (node.maxCapacityUtilization || 0.95) * y;
+      const effCap = monthEffCap[node.id];
 
       const inventoryIn = state.inventory;
       const backlogIn = state.backlog;
@@ -1698,16 +1734,19 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         ? (state.type === 'STOCK' ? production : delivered) / effCap
         : 1.0;
 
-      // Organic growth: base expansion always applies; shortage adds extra growth on top.
-      // Uses operationalTightness (effective demand) so non-binding components don't
-      // expand chasing unconstrained plan demand they'll never ship against.
-      // Throttled by utilization — don't build capacity you can't fill.
-      compoundOrganicGrowth(node.id, month, operationalTightness, compUtilization);
+      // Organic growth: shortage-driven plus any baseline rate. Uses
+      // operationalTightness (effective demand) so non-binding components don't
+      // expand chasing plan demand they'll never ship against. Throttled by
+      // utilization, and paused while the node's shared pool is the ceiling.
+      compoundOrganicGrowth(node.id, month, operationalTightness, compUtilization, poolBound[node.id]);
 
+      // Discrete (lead-time) expansions: not for nodes that grow on a fixed
+      // physical schedule, nor while a pool ceiling makes more capacity useless.
       const compLeadTime = node.leadTimeDebottleneck || 12;
       const compCooldown = Math.max(Math.floor(compLeadTime / 2), 6);
-      if ((month - state.lastExpansionMonth) > compCooldown && compUtilization >= UTILIZATION_GATE_FLOOR) {
-        const growthRatio = getDemandGrowthRatio(compLeadTime);
+      const canExpand = !node.growsAtPhysicalMax && !poolBound[node.id];
+      if (canExpand && (month - state.lastExpansionMonth) > compCooldown && compUtilization >= UTILIZATION_GATE_FLOOR) {
+        const growthRatio = getDemandGrowthRatio(compLeadTime, isInfra);
         // Forecast from effective demand, not plan. When GPU gating limits
         // actual deployment, the unconstrained plan inflates forecasts for
         // non-binding components, triggering discrete expansions that produce
@@ -1717,22 +1756,18 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         const compFutureMonth = Math.min(month + compLeadTime, months - 1);
         const futureSMult = runningSupplyMult[node.id] || 1;
         const futureCap = calculateCapacity(node, compFutureMonth, scenarioOverrides, state.dynamicExpansions, futureSMult);
-        const futureEffCap = futureCap * (node.maxCapacityUtilization || 0.95) * calculateNodeYield(node, compFutureMonth);
+        const futureEffCap = effectiveCapacity(node, compFutureMonth, futureCap);
 
         if (forecastDemand > futureEffCap) {
           const gap = forecastDemand - futureEffCap;
-          // Dynamic expansion: uncapped unless node defines a parallelism limit
-          const maxDynamic = getMaxExpansion(node, month) != null
-            ? cap * (getMaxExpansion(node, month) / 12)
-            : cap * 1.0;
+          // Dynamic expansion: up to 100% of capacity per trigger, or the node's
+          // physical ramp limit where it has one (e.g. power generation).
+          const maxExp = getMaxExpansion(node, month);
+          const maxDynamic = maxExp != null ? cap * (maxExp / 12) : cap;
           const expansionAmount = Math.min(gap * 0.5, maxDynamic);
-          // Floor at 5% of capacity for uncapped nodes (keeps progress on shortages);
-          // for capped nodes, never exceed the monthly parallelism cap — otherwise
-          // the floor would silently bypass maxAnnualExpansion (e.g., grid_interconnect
-          // at 10%/yr would still gain 5% per trigger, ~33%/yr effective).
-          const expansionFloor = getMaxExpansion(node, month) != null
-            ? Math.min(cap * 0.05, maxDynamic)
-            : cap * 0.05;
+          // Floor at 5% of capacity (keeps progress on shortages), but never
+          // above a physical ramp limit, or the floor would bypass it.
+          const expansionFloor = Math.min(cap * 0.05, maxDynamic);
           state.dynamicExpansions.push({
             month: month + compLeadTime,
             capacityAdd: Math.max(expansionAmount, expansionFloor)
@@ -1793,34 +1828,35 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     results.fleet.trainingShare.push(req.requiredTotal > EPSILON ? req.requiredTraining / req.requiredTotal : 0);
 
     // Energy: average draw = idle share + (1 − idle) × utilization (Excel convention)
-    const utilNow = utilPath[calendarYear] ?? utilPath[String(calendarYear)] ?? 0.6;
-    const drawFactor = idleShare + (1 - idleShare) * utilNow;
-    const edgeEquivGW = (req.requiredEdge || 0) * kwPerEff / 1e6;
+    const drawFactor = idleShare + (1 - idleShare) * financing.pathValue('utilization', calendarYear);
+    // Edge reporting uses the INSTALLED edge fleet (it ramps toward the
+    // requirement), so energy and token share reflect what is actually served.
+    const edgeServedRatio = (req.requiredEdge || 0) > EPSILON ? Math.min(1, edgeInstalledEff / req.requiredEdge) : 0;
+    const edgeEquivGW = edgeInstalledEff * kwPerEff / 1e6;
     const dcPowerGW = (fleetKW / 1e6) * drawFactor * pue;
     const edgePowerGW = edgeEquivGW * drawFactor * pue * edgeEnergyX;
-    const dcTokens = (req.inferenceDemand.consumer || 0) + (req.inferenceDemand.enterprise || 0) + (req.inferenceDemand.agentic || 0);
+    // inferenceDemand is pre-calibration; edgeTokensTotal is post-calibration
+    const inferenceTokens = ((req.inferenceDemand.consumer || 0) + (req.inferenceDemand.enterprise || 0) + (req.inferenceDemand.agentic || 0)) * scaleUsed;
+    const edgeTokenShare = inferenceTokens > EPSILON ? (req.edgeTokensTotal || 0) * edgeServedRatio / inferenceTokens : 0;
     results.fleet.edgeEquivGW.push(edgeEquivGW);
     results.fleet.dcPowerGW.push(dcPowerGW);
     results.fleet.edgePowerGW.push(edgePowerGW);
-    results.fleet.edgeTokenShare.push(dcTokens > EPSILON ? (req.edgeTokensTotal || 0) / (dcTokens * scaleUsed) : 0);
+    results.fleet.edgeTokenShare.push(edgeTokenShare);
     results.fleet.edgeUnitsDeployed.push(edgeUnits * edgeServedFrac);
-    const devicesNow = edgeDevices0 * Math.pow(1 + edgeDeviceGrowth, month / 12);
-    results.fleet.edgeWattsPerDevice.push(devicesNow > 0 ? edgePowerGW * 1e9 / devicesNow : 0);
 
-    financing.recordMonth({ deployedGW, retiredGW, binding, lostToFundingGW });
+    financing.recordMonth({ deployedGW, retiredGW, binding, deferredByFundingGW });
     if (yearAccum) {
       yearAccum.requiredGWSum += requiredGW;
       yearAccum.months += 1;
-      yearAccum.tokens += (req.inferenceDemand.consumer || 0) + (req.inferenceDemand.enterprise || 0) + (req.inferenceDemand.agentic || 0);
+      yearAccum.tokens += inferenceTokens;
       yearAccum.edgeEquivGW += edgeEquivGW;
       yearAccum.edgePowerGW += edgePowerGW;
       yearAccum.dcPowerGW += dcPowerGW;
-      yearAccum.edgeShare += results.fleet.edgeTokenShare[month];
-      yearAccum.edgeWatts += results.fleet.edgeWattsPerDevice[month];
+      yearAccum.edgeShare += edgeTokenShare;
     }
     if (monthOfYear === 11 || month === months - 1) {
       financing.closeYear({
-        tokenDemandIndex: yearAccum ? yearAccum.tokens * scaleUsed : 0,
+        tokenDemandIndex: yearAccum ? yearAccum.tokens : 0,
         requiredGW: yearAccum && yearAccum.months ? yearAccum.requiredGWSum / yearAccum.months : requiredGW,
         requiredGWYearEnd: requiredGW,
         installedGW: fleetKW / 1e6,
@@ -1830,8 +1866,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
           edgeEquivGW: yearAccum.edgeEquivGW / yearAccum.months,
           edgePowerGW: yearAccum.edgePowerGW / yearAccum.months,
           dcPowerGW: yearAccum.dcPowerGW / yearAccum.months,
-          totalAiPowerGW: (yearAccum.edgePowerGW + yearAccum.dcPowerGW) / yearAccum.months,
-          edgeWattsPerDevice: yearAccum.edgeWatts / yearAccum.months
+          totalAiPowerGW: (yearAccum.edgePowerGW + yearAccum.dcPowerGW) / yearAccum.months
         } : {}
       });
     }
@@ -1856,7 +1891,7 @@ function analyzeResults(results) {
 
   for (const [nodeId, data] of Object.entries(results.nodes)) {
     const node = NODE_MAP.get(nodeId);
-    if (!node || node.group === 'A') continue;
+    if (!node || node.group === 'A' || NON_GATING_NODES.has(nodeId)) continue;
 
     // Shortage detection
     let shortageStart = null;
@@ -1989,16 +2024,29 @@ function analyzeResults(results) {
   gluts.sort((a, b) => b.severity - a.severity);
   bottlenecks.sort((a, b) => b.avgTightness - a.avgTightness);
 
+  // What actually set deployments: months each constraint was binding, with
+  // the first and last calendar year it bound.
+  const bindingMap = {};
+  (results.fleet?.binding || []).forEach((name, month) => {
+    const year = calendarYearOf(month);
+    const b = bindingMap[name] || (bindingMap[name] = { constraint: name, months: 0, firstYear: year, lastYear: year });
+    b.months += 1;
+    b.lastYear = year;
+  });
+  const binding = Object.values(bindingMap).sort((a, b) => b.months - a.months);
+
   return {
     shortages: shortages.slice(0, 20),
     gluts: gluts.slice(0, 20),
-    bottlenecks: bottlenecks.slice(0, 10)
+    bottlenecks: bottlenecks.slice(0, 10),
+    binding,
+    primaryConstraint: binding[0]?.constraint || null
   };
 }
 
 export function formatMonth(monthIndex) {
-  const year = GLOBAL_PARAMS.startYear + Math.floor(monthIndex / 12);
-  const month = (monthIndex % 12) + 1;
+  const year = calendarYearOf(monthIndex);
+  const month = (((GLOBAL_PARAMS.startMonth || 1) - 1 + monthIndex) % 12) + 1;
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return `${monthNames[month - 1]} ${year}`;
 }

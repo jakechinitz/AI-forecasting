@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, ComposedChart,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine
@@ -46,21 +46,38 @@ const PATH_FIELDS = [
   { key: 'capexPerGw', label: 'All-in capex per GW ($B)', kind: 'num' }
 ];
 
+// Numeric cell that keeps its own text while typing and commits on blur or
+// Enter, so partial entries ("-", "0.") never reach the model. Escape reverts.
 function NumInput({ value, kind, step, onChange, width = 64 }) {
-  const shown = value == null || Number.isNaN(value)
+  const format = (v) => (v == null || Number.isNaN(+v)
     ? ''
-    : kind === 'pct' ? +(value * 100).toFixed(2) : +(+value).toFixed(4);
+    : String(kind === 'pct' ? +(v * 100).toFixed(2) : +(+v).toFixed(4)));
+  const [text, setText] = useState(format(value));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { if (!editing) setText(format(value)); }, [value, kind, editing]);
+  const commit = () => {
+    setEditing(false);
+    const n = parseFloat(text);
+    if (Number.isFinite(n)) {
+      const next = kind === 'pct' ? n / 100 : n;
+      if (next !== value) onChange(next);
+    } else {
+      setText(format(value));
+    }
+  };
   return (
     <input
       type="number"
       className="fin-input"
       style={{ width }}
-      step={step ?? (kind === 'pct' ? 1 : 1)}
-      value={shown}
-      onChange={(e) => {
-        if (e.target.value === '' || e.target.value === '-') return;
-        const n = parseFloat(e.target.value);
-        if (!Number.isNaN(n)) onChange(kind === 'pct' ? n / 100 : n);
+      step={step ?? 1}
+      value={text}
+      onFocus={() => setEditing(true)}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') { setText(format(value)); setEditing(false); e.currentTarget.blur(); }
       }}
     />
   );
@@ -86,14 +103,14 @@ function FundingTab({ results, financing, onFinancingChange, onResetFinancing })
   const view = annual.slice(0, chartYears);
 
   const fundingMix = useMemo(() => view.map((r) => {
-    const external = r.cashDrawdown + r.debtRaised + r.equityRaised + r.shortfall;
+    const external = r.cashDrawdown + r.debtRaised + r.equityRaised + r.unfundedCapex;
     return {
       year: r.year,
       internal: Math.max(0, r.totalCapex - external),
       cash: r.cashDrawdown,
       debt: r.debtRaised,
       equity: r.equityRaised,
-      shortfall: r.shortfall,
+      unfunded: r.unfundedCapex,
       capex: r.totalCapex,
       fundable: r.fundableCapex
     };
@@ -102,7 +119,7 @@ function FundingTab({ results, financing, onFinancingChange, onResetFinancing })
   const buildData = useMemo(() => view.map((r) => ({
     year: r.year,
     built: r.deployedGW,
-    lost: r.lostToFundingGW,
+    deferred: r.deferredByFundingGW,
     unmet: r.unmetGW
   })), [view]);
 
@@ -123,10 +140,12 @@ function FundingTab({ results, financing, onFinancingChange, onResetFinancing })
 
   if (!fin) return <div className="loading-state"><p>No financing results.</p></div>;
 
-  const lostTotal = view.reduce((s, r) => s + r.lostToFundingGW, 0);
+  const deferredTotal = view.reduce((s, r) => s + r.deferredByFundingGW, 0);
   const peak = view.reduce((best, r) => (r.totalCapex > (best?.totalCapex ?? -1) ? r : best), null);
   const debtTotal = view.reduce((s, r) => s + r.debtRaised, 0);
-  const shortfallTotal = view.reduce((s, r) => s + r.shortfall, 0);
+  const unfundedTotal = view.reduce((s, r) => s + r.unfundedCapex, 0);
+  const opDeficitTotal = view.reduce((s, r) => s + r.operatingDeficit, 0);
+  const firstYear = annual[0]?.year;
   const bindingYears = view.filter((r) => r.bindingConstraint === 'Funding').map((r) => r.year);
 
   const tierShareSum = financing.tiers.reduce((s, t) => s + (t.share || 0), 0);
@@ -162,16 +181,16 @@ function FundingTab({ results, financing, onFinancingChange, onResetFinancing })
 
       <div className="fin-kpis">
         <Kpi label="System self-funding year" value={fin.selfFundingYear.system || 'Beyond horizon'} sub="OCF − returns ≥ capex" />
-        <Kpi label={`GW lost to funding (${view[0]?.year}–${view[view.length - 1]?.year})`} value={`${lostTotal.toFixed(1)} GW`} sub={bindingYears.length ? `Funding binds: ${bindingYears[0]}–${bindingYears[bindingYears.length - 1]}` : 'Funding never binds'} />
+        <Kpi label={`Build deferred by funding (${view[0]?.year}–${view[view.length - 1]?.year})`} value={`${deferredTotal.toFixed(1)} GW`} sub={bindingYears.length ? `Funding binds: ${bindingYears[0]}–${bindingYears[bindingYears.length - 1]}` : 'Funding never binds'} />
         <Kpi label="Peak annual AI capex" value={money(peak?.totalCapex)} sub={peak ? `in ${peak.year}` : ''} />
         <Kpi label="Debt raised (cumulative)" value={money(debtTotal)} sub={`${view[0]?.year}–${view[view.length - 1]?.year}`} />
-        <Kpi label="Unfunded shortfall" value={money(shortfallTotal)} sub={financing.applyFundingConstraint ? 'Gate on: should be ~0' : 'Charged to cash'} />
+        <Kpi label="Unfunded capex" value={money(unfundedTotal)} sub={`${financing.applyFundingConstraint ? 'Gate on: stays 0' : 'Gate off: charged to cash'}${opDeficitTotal > 0.5 ? ` · operating deficit ${money(opDeficitTotal)}` : ''}`} />
       </div>
 
       <div className="sheet-toggle" style={{ margin: 'var(--space-md) 0' }}>
         {[7, 10, 20].map((n) => (
           <button key={n} className={`btn btn-sm ${chartYears === n ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setChartYears(n)}>
-            {n === 7 ? '2026–32' : `${n} yrs`}
+            {n === 7 && firstYear ? `${firstYear}–${firstYear + 6}` : `${n} yrs`}
           </button>
         ))}
       </div>
@@ -190,14 +209,14 @@ function FundingTab({ results, financing, onFinancingChange, onResetFinancing })
               <Bar dataKey="cash" stackId="f" fill="#14b8a6" name="Cash drawdown" />
               <Bar dataKey="debt" stackId="f" fill="#1d9bf0" name="Debt" />
               <Bar dataKey="equity" stackId="f" fill="#7856ff" name="Equity" />
-              <Bar dataKey="shortfall" stackId="f" fill="#f4212e" name="Shortfall" />
+              <Bar dataKey="unfunded" stackId="f" fill="#f4212e" name="Unfunded capex" />
               <Line type="monotone" dataKey="fundable" stroke="#65676b" strokeDasharray="4 4" dot={false} name="Max fundable" />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
 
         <div className="chart-container">
-          <div className="chart-header"><h3 className="chart-title">GW built vs lost to funding</h3></div>
+          <div className="chart-header"><h3 className="chart-title">GW built vs deferred by funding</h3></div>
           <ResponsiveContainer width="100%" height={280}>
             <ComposedChart data={buildData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--bg-tertiary)" />
@@ -206,7 +225,7 @@ function FundingTab({ results, financing, onFinancingChange, onResetFinancing })
               <Tooltip contentStyle={tooltipStyle} formatter={(v) => `${(+v).toFixed(1)} GW`} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Bar dataKey="built" stackId="g" fill="#1d9bf0" name="GW built" />
-              <Bar dataKey="lost" stackId="g" fill="#f4212e" name="Buildable but unfunded" />
+              <Bar dataKey="deferred" stackId="g" fill="#f4212e" name="Deferred by funding (sum of monthly)" />
               <Line type="monotone" dataKey="unmet" stroke="#ff7a00" dot={false} strokeWidth={2} name="Unmet demand, year-end" />
             </ComposedChart>
           </ResponsiveContainer>

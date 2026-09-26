@@ -3,7 +3,7 @@ import { NODE_GROUPS } from '../data/nodes.js';
 import { formatMonth } from '../engine/calculations.js';
 
 function AnalysisTab({ results, onSelectNode }) {
-  const { shortages, gluts, bottlenecks } = results?.summary || { shortages: [], gluts: [], bottlenecks: [] };
+  const { shortages, gluts, bottlenecks, binding = [] } = results?.summary || { shortages: [], gluts: [], bottlenecks: [], binding: [] };
 
   // Build group color lookup (NODE_GROUPS is an array, item.group is a letter like 'A')
   const groupColor = useMemo(() => {
@@ -263,10 +263,15 @@ function AnalysisTab({ results, onSelectNode }) {
           <div>
             <h4 style={{ fontSize: '0.875rem', marginBottom: 'var(--space-sm)' }}>Key Findings</h4>
             <ul style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', paddingLeft: 'var(--space-md)' }}>
+              {binding.map((b) => (
+                <li key={b.constraint} style={{ marginBottom: '4px' }}>
+                  {`${b.constraint} binds ${b.months} of ${results.months.length} months (${b.firstYear === b.lastYear ? b.firstYear : `${b.firstYear}–${b.lastYear}`})`}
+                </li>
+              ))}
               <li style={{ marginBottom: '4px' }}>
                 {bottlenecks.length > 0
-                  ? `Primary bottleneck: ${bottlenecks[0].nodeName}`
-                  : 'No critical bottlenecks identified'}
+                  ? `Tightest gating component (first 2 years): ${bottlenecks[0].nodeName}`
+                  : 'No gating component averages above 1.1 tightness in the first 2 years'}
               </li>
               <li style={{ marginBottom: '4px' }}>
                 {shortages.length} shortage events detected across simulation
@@ -279,17 +284,20 @@ function AnalysisTab({ results, onSelectNode }) {
             </ul>
           </div>
           <div>
-            <h4 style={{ fontSize: '0.875rem', marginBottom: 'var(--space-sm)' }}>Critical Nodes</h4>
+            <h4 style={{ fontSize: '0.875rem', marginBottom: 'var(--space-sm)' }}>What Binds</h4>
             <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-              Monitor HBM, CoWoS, and transformer capacity most closely.
-              These have the lowest elasticity and longest lead times.
+              Each month, deployments = min(demand plan, accelerator supply, every gating component,
+              funding). The list on the left counts which one set deployments. Component tightness
+              below shows pressure on nodes that were not the binding limit.
             </p>
           </div>
           <div>
             <h4 style={{ fontSize: '0.875rem', marginBottom: 'var(--space-sm)' }}>Methodology</h4>
             <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-              Bottleneck score = avg_tightness × shortage_months × (1 + downstream_impact/10).
-              Severity = peak/min × duration.
+              Bottlenecks rank gating components by average tightness (plan ÷ effective capacity)
+              over the first 24 months, above 1.1. Shortage severity = peak tightness × duration;
+              glut severity = (1 − min tightness) × duration. Hybrid bonding and EUV tools are
+              non-gating and excluded.
             </p>
           </div>
         </div>

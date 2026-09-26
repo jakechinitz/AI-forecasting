@@ -1,5 +1,21 @@
 import React, { useState, useMemo } from 'react';
 import { NODE_GROUPS } from '../data/nodes.js';
+import { SHARED_SUPPLY_POOLS } from '../data/assumptions.js';
+
+// Plain-language description of what bounds a node's capacity growth,
+// mirroring the engine (calculations.js): shared pools, physical ramp limits,
+// or demand-driven growth with lead times only.
+function growthLimitText(node) {
+  if (node.group === 'A') return 'Workload (demand driver), not a supply node.';
+  if (node.growsAtPhysicalMax) return 'Grows on its physical expansion schedule (every unit made is bought). Non-gating: sets the leading-edge wafer ceiling.';
+  if (node.id === 'advanced_wafers') return 'Demand-driven; capped by the EUV-supported leading-edge wafer ceiling (AI share of logic wafer starts).';
+  if (node.id === 'hbm_stacks' || node.id === 'dram_server') return 'Demand-driven; capped by the AI share of DRAM wafer capacity (HBM weighted at ~3x wafer area per bit).';
+  const industry = SHARED_SUPPLY_POOLS.industry?.[node.id];
+  if (industry) return `Demand-driven; capped at ${Math.round((industry.aiMaxShare ?? 1) * 100)}% of industry output (${industry.label}).`;
+  if (node.maxAnnualExpansion != null) return `Demand-driven; physical ramp limit of ${Math.round(node.maxAnnualExpansion * 100)}%/yr.`;
+  if (node.id === 'hybrid_bonding') return 'Demand-driven. Non-gating: short bonding capacity falls back to CoWoS-only packaging.';
+  return 'Demand-driven (shortage × elasticity and lead-time forecasts); no growth cap.';
+}
 
 function NodeLibraryTab({ nodes, groups: groupsProp, selectedNode, onSelectNode }) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -97,8 +113,8 @@ function NodeLibraryTab({ nodes, groups: groupsProp, selectedNode, onSelectNode 
                 <th style={{ width: '120px' }}>Group</th>
                 <th>Node</th>
                 <th>Unit</th>
-                <th style={{ width: '100px' }}>Base Capacity</th>
-                <th style={{ width: '80px' }}>Lead Time</th>
+                <th style={{ width: '100px' }}>Starting capacity</th>
+                <th style={{ width: '80px' }} title="Lead time the model uses for demand-driven expansions">Expansion lead</th>
                 <th style={{ width: '100px' }}>Elasticity (S/M/L)</th>
                 <th style={{ width: '80px' }}>Substitution</th>
                 <th style={{ width: '60px' }}>Confidence</th>
@@ -143,8 +159,8 @@ function NodeLibraryTab({ nodes, groups: groupsProp, selectedNode, onSelectNode 
                         : '-'}
                     </td>
                     <td>
-                      {node.leadTimeNewBuild
-                        ? `${node.leadTimeNewBuild}mo`
+                      {node.leadTimeDebottleneck
+                        ? `${node.leadTimeDebottleneck}mo`
                         : '-'}
                     </td>
                     <td style={{ fontSize: '0.75rem' }}>
@@ -269,7 +285,7 @@ function NodeLibraryTab({ nodes, groups: groupsProp, selectedNode, onSelectNode 
                                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                     <span>Loss:</span>
                                     <span style={{ fontFamily: 'var(--font-mono)' }}>
-                                      {((node.yieldSimpleLoss || 0.03) * 100).toFixed(1)}%
+                                      {((node.yieldSimpleLoss ?? 0.03) * 100).toFixed(1)}%
                                     </span>
                                   </div>
                                 )}
@@ -312,6 +328,14 @@ function NodeLibraryTab({ nodes, groups: groupsProp, selectedNode, onSelectNode 
                             </div>
                           </div>
 
+                          {/* What limits this node's growth in the model */}
+                          <div style={{ marginTop: 'var(--space-md)', fontSize: '0.8125rem' }}>
+                            <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 'var(--space-sm)' }}>
+                              GROWTH LIMIT IN THE MODEL
+                            </h4>
+                            <span>{growthLimitText(node)}</span>
+                          </div>
+
                           {/* Committed Expansions */}
                           {node.committedExpansions && node.committedExpansions.length > 0 && (
                             <div style={{ marginTop: 'var(--space-md)' }}>
@@ -332,7 +356,6 @@ function NodeLibraryTab({ nodes, groups: groupsProp, selectedNode, onSelectNode 
                                     }}
                                   >
                                     {exp.date}: +{formatNumber(exp.capacityAdd)}
-                                    {exp.type !== 'committed' && ' (optional)'}
                                   </span>
                                 ))}
                               </div>

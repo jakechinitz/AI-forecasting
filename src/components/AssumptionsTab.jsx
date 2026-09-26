@@ -366,7 +366,8 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
 
       // Inference is memory-bandwidth-bound: H_memory contributes alongside H
       const inferenceFactor = (1 - mInference) / ((1 + sInference) * (1 + h) * (1 + hMem));
-      const trainingFactor = (1 - mTraining) / ((1 + sTraining) * (1 + h));
+      // One fleet hardware index (H × H_memory) serves all work, training included
+      const trainingFactor = (1 - mTraining) / ((1 + sTraining) * (1 + h) * (1 + hMem));
 
       const inferenceGain = 1 / inferenceFactor;
       const trainingGain = 1 / trainingFactor;
@@ -398,7 +399,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     const brainWatts = BRAIN.humanBrainWatts;
 
     // Knee: gains above this level see logarithmic diminishing returns.
-    // maxCumulativeGain = 10000 / 3 ≈ 3333×. Beyond the knee, improvements
+    // maxCumulativeGain = 10000 W / 0.5 W = 20,000×. Beyond the knee, improvements
     // continue but much slower — reflecting practical engineering limits.
     const minWatts = BRAIN.minWattsPerBrainEquiv;
     const maxCumulativeGain = startingWatts / minWatts;
@@ -463,7 +464,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
       const itGW = results.fleet?.installedGW?.[monthIdx];
       const totalPowerWatts = itGW != null ? itGW * 1e9 * PUE : totalInstalled * WATTS_PER_GPU;
 
-      // Use capped wattsPerBrainEquiv from brain equivalency, hard-floored at 6W
+      // Use capped wattsPerBrainEquiv from brain equivalency, floored at minWattsPerBrainEquiv (0.5 W)
       const rawWpbe = brainEquivalency.perBlock[block.key]?.wattsPerBrainEquiv ?? BRAIN.startingWattsPerBrainEquiv;
       const wattsPerBrainEquiv = Math.max(rawWpbe, BRAIN.minWattsPerBrainEquiv);
       const atEfficiencyLimit = brainEquivalency.perBlock[block.key]?.atAsymptote || false;
@@ -955,8 +956,9 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
             <h4 className="section-title">Implied Token Efficiency</h4>
             <p className="section-description">
               Derived from the combined model + systems + hardware improvements. OOM/year is the
-              log10 efficiency gain (e.g., 0.3 = 2x/year). Total OOM/year mirrors the
-              combined efficiency improvement rate used in industry reporting.
+              log10 efficiency gain (e.g., 0.3 = 2x/year). Software gains apply to the whole fleet;
+              hardware gains apply only to newly installed accelerators, so the fleet-average gain
+              lags these frontier figures.
             </p>
             {renderMetricsTable()}
           </div>
@@ -1022,13 +1024,13 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
         </div>
         <div className="formula-grid">
           <div>
-            <h4>Inference Accelerator-Hours</h4>
+            <h4>Inference Accelerators (effective units)</h4>
             <code>
-              InferAH = (Tokens x ComputePerToken x M<sub>t</sub>) / (Throughput x S<sub>t</sub> x H<sub>t</sub>)
+              EffAccel = DC tokens / (tok/s x 2.6M s x S<sub>t</sub> / M<sub>t</sub>); H<sub>t</sub> x H<sub>mem,t</sub> credited per new vintage
             </code>
           </div>
           <div>
-            <h4>Stacked Yield (HBM)</h4>
+            <h4>Stacked Yield (learning-curve nodes)</h4>
             <code>
               Y(t) = Y<sub>target</sub> - (Y<sub>target</sub> - Y<sub>initial</sub>) x 2<sup>-t/HL</sup>
             </code>

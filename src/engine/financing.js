@@ -21,21 +21,115 @@
  *  1. Revenue is capped at demand: tokens sold = fleet capacity × min(1, required ÷ installed).
  *     The Excel billed full fleet output even when supply exceeded demand.
  *  2. A funding shortfall is booked against cash (cash can fall below its floor
- *     or go negative) instead of vanishing. With the funding gate on, the gate
- *     prevents shortfalls in the first place.
+ *     or go negative) instead of vanishing, and negative cash accrues interest
+ *     at the tier's cost of debt. The shortfall is split into unfunded capex
+ *     (kept at zero by the funding gate) and an operating deficit (cash
+ *     obligations above operating cash flow, which capex cannot fix).
  */
 
 const KWH_PER_GW_YEAR = 8.76e9;
 
 const safeDiv = (a, b, fallback = 0) => (Math.abs(b) > 1e-12 ? a / b : fallback);
+const isPlainObject = (v) => v && typeof v === 'object' && !Array.isArray(v);
 
-export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
+// Number from a raw input ({ value } objects and numeric strings accepted),
+// else the fallback. Optional bounds clamp the result.
+function num(raw, fallback, lo = -Infinity, hi = Infinity) {
+  const v = isPlainObject(raw) && 'value' in raw ? raw.value : raw;
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  const out = typeof n === 'number' && Number.isFinite(n) ? n : fallback;
+  return Math.min(hi, Math.max(lo, out));
+}
+
+// Share-like scalars must stay in [0, 1]; lives must be at least a year.
+const SCALAR_BOUNDS = {
+  preSpendFraction: [0, 1], computeShareOfCapex: [0, 1], cashTaxRate: [0, 1],
+  variableCostPctOfRevenue: [0, 1], idlePowerShare: [0, 1],
+  computeLifeYears: [1, 50], facilityLifeYears: [1, 100],
+  scarcityElasticity: [0, Infinity], maxScarcityPremium: [1, Infinity],
+  electricityPricePerKwh: [0, Infinity], otherOpexPerGwYr: [0, Infinity]
+};
+
+/**
+ * Coerce user/LLM-edited financing inputs into a well-formed structure, filling
+ * anything missing or non-numeric from the defaults. Tier shares are
+ * normalized to sum to 1 and channel allocations are padded to the tier count.
+ */
+export function sanitizeFinancing(fin = {}, defaults = {}) {
+  const d = defaults || {};
+  const scalars = {};
+  Object.entries(d.scalars || {}).forEach(([k, def]) => {
+    const [lo, hi] = SCALAR_BOUNDS[k] || [-Infinity, Infinity];
+    scalars[k] = num(fin.scalars?.[k], def, lo, hi);
+  });
+
+  const paths = {};
+  const pathNames = new Set([...Object.keys(d.paths || {}), ...Object.keys(fin.paths || {})]);
+  pathNames.forEach((name) => {
+    const clean = {};
+    Object.entries(isPlainObject(fin.paths?.[name]) ? fin.paths[name] : {}).forEach(([year, v]) => {
+      const n = num(v, NaN);
+      if (Number.isFinite(n) && Number.isFinite(Number(year))) clean[year] = n;
+    });
+    paths[name] = Object.keys(clean).length ? { ...(d.paths?.[name] || {}), ...clean } : { ...(d.paths?.[name] || {}) };
+  });
+
+  const defTiers = d.tiers || [];
+  const rawTiers = Array.isArray(fin.tiers) && fin.tiers.length ? fin.tiers : defTiers;
+  const tiers = rawTiers.map((t, i) => {
+    const def = defTiers.find((x) => x.id === t?.id) || defTiers[i] || {};
+    const out = { ...def, ...t };
+    ['share', 'legacyOcf', 'legacyOcfGrowth', 'shareholderReturns', 'cash', 'minCash', 'debt',
+      'legacyEbitda', 'legacyEbitdaGrowth', 'maxExternalShareOfCapex', 'costOfDebt', 'maxDebtToEbitda']
+      .forEach((k) => { out[k] = num(t?.[k], def[k] ?? 0); });
+    out.share = Math.max(0, out.share);
+    out.maxExternalShareOfCapex = Math.min(1, Math.max(0, out.maxExternalShareOfCapex));
+    out.id = out.id ?? String.fromCharCode(65 + i);
+    out.name = out.name ?? `Tier ${out.id}`;
+    return out;
+  });
+  const shareSum = tiers.reduce((s, t) => s + t.share, 0);
+  tiers.forEach((t) => { t.share = shareSum > 0 ? t.share / shareSum : 1 / tiers.length; });
+
+  const defChannels = d.channels || [];
+  const rawChannels = Array.isArray(fin.channels) && fin.channels.length ? fin.channels : defChannels;
+  const channels = rawChannels.map((c, i) => {
+    const def = defChannels.find((x) => x.id === c?.id) || defChannels[i] || {};
+    const alloc = tiers.map((_, j) => Math.max(0, num(c?.alloc?.[j], def.alloc?.[j] ?? 0)));
+    return {
+      ...def, ...c,
+      type: c?.type === 'equity' ? 'equity' : 'debt',
+      capacity: Math.max(0, num(c?.capacity, def.capacity ?? 0)),
+      growth: num(c?.growth, def.growth ?? 0, -1),
+      alloc
+    };
+  });
+
+  const mult = fin.marketCapacityMultiplier || {};
+  return {
+    ...fin,
+    applyFundingConstraint: fin.applyFundingConstraint !== false,
+    baseYear: {
+      blendedPricePerMTokens: num(fin.baseYear?.blendedPricePerMTokens, d.baseYear?.blendedPricePerMTokens ?? 0.55, 0)
+    },
+    scalars, paths, tiers, channels,
+    marketCapacityMultiplier: {
+      debt: num(mult.debt, 1, 0),
+      equity: num(mult.equity, 1, 0)
+    }
+  };
+}
+
+export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, defaults }) {
+  const fin = sanitizeFinancing(rawFin, defaults || rawFin);
   const scalars = fin.scalars;
-  const tiers = fin.tiers.map((t) => ({ ...t }));
+  const tiers = fin.tiers;
   const channels = fin.channels;
-  const mult = fin.marketCapacityMultiplier || { debt: 1, equity: 1 };
-  const applyConstraint = fin.applyFundingConstraint !== false;
+  const mult = fin.marketCapacityMultiplier;
+  const applyConstraint = fin.applyFundingConstraint;
 
+  // Value of a year-keyed path; before the first year use the first value,
+  // after the last year hold the last value.
   const pathValue = (pathName, year) => {
     const path = fin.paths?.[pathName] || {};
     if (path[year] !== undefined) return path[year];
@@ -61,7 +155,10 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
     gw: 0
   }));
 
-  let basePrice = fin.baseYear?.blendedPricePerMTokens ?? 0.55;
+  let basePrice = fin.baseYear.blendedPricePerMTokens;
+  // Scarcity premium uses the PRIOR year-end unmet ratio (Excel convention);
+  // the first year takes the engine's opening ratio.
+  let lastScarcityRatio = null;
 
   const annual = [];
   const tierRows = Object.fromEntries(tiers.map((t) => [t.id, []]));
@@ -71,7 +168,8 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
     const util = pathValue('utilization', year);
     const capexPerGw = pathValue('capexPerGw', year);
     basePrice = basePrice * (1 + pathValue('priceChange', year));
-    const premium = Math.min(scalars.maxScarcityPremium, 1 + scalars.scarcityElasticity * Math.max(0, ctx.priorScarcityRatio));
+    const priorScarcity = lastScarcityRatio ?? ctx.priorScarcityRatio ?? 0;
+    const premium = Math.min(scalars.maxScarcityPremium, 1 + scalars.scarcityElasticity * Math.max(0, priorScarcity));
     const effPrice = basePrice * premium;
 
     const inferenceShare = Math.max(0, 1 - ctx.trainingShare);
@@ -129,7 +227,8 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
       const legacyEbitda = ts.legacyEbitda * (1 + t.legacyEbitdaGrowth);
       const aiOcf = aiOcfTotal * fleetShare;
       const aiEbitda = aiEbitdaTotal * fleetShare;
-      const interest = t.costOfDebt * ts.debt;
+      // Negative cash is an overdraft and pays the tier's cost of debt
+      const interest = t.costOfDebt * (ts.debt + Math.max(0, -ts.cash));
       const ocf = legacyOcf + aiOcf - interest;
       const ebitda = legacyEbitda + aiEbitda;
       const cashAvail = Math.max(0, ts.cash - t.minCash);
@@ -159,7 +258,7 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
       year, ctx, econ, openingGW, aiRevenue, aiEbitdaTotal, aiOcfTotal,
       debtCapacityTotal, equityCapacityTotal, tierPlans, fundableCapex, timingFactor,
       capexYTD: 0, newBuildCapex: 0, replacementCapex: 0,
-      deployedGW: 0, replacementGW: 0, retiredGW: 0, lostToFundingGW: 0,
+      deployedGW: 0, replacementGW: 0, retiredGW: 0, deferredByFundingGW: 0,
       bindingCounts: {}, monthsSeen: 0
     };
     return current;
@@ -172,15 +271,18 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
   function capForMonth({ monthOfYear, kwPerNewAccel, retiredGW }) {
     if (!current || !applyConstraint) return Infinity;
     const allowance = current.fundableCapex * ((monthOfYear + 1) / 12) - current.capexYTD;
-    if (allowance <= 0) return 0;
+    if (!(allowance > 0)) return 0;
     const perGw = current.econ.capexPerGw * current.timingFactor;
-    const R = allowance / Math.max(perGw, 1e-9); // GW-equivalents at full cost
-    const cs = scalars.computeShareOfCapex;
+    if (!(perGw > 0)) return Infinity; // free capex: funding cannot bind
+    const R = allowance / perGw; // GW-equivalents at full cost
+    // Replacements (up to retired GW) cost only the compute share
+    const cs = Math.max(scalars.computeShareOfCapex, 1e-9);
     const gw = R <= retiredGW * cs ? R / cs : retiredGW + (R - retiredGW * cs);
-    return (gw * 1e6) / Math.max(kwPerNewAccel, 1e-9);
+    const units = (gw * 1e6) / Math.max(kwPerNewAccel, 1e-9);
+    return Number.isFinite(units) ? Math.max(0, units) : 0;
   }
 
-  function recordMonth({ deployedGW, retiredGW, binding, lostToFundingGW }) {
+  function recordMonth({ deployedGW, retiredGW, binding, deferredByFundingGW }) {
     if (!current) return;
     const replacementGW = Math.min(deployedGW, retiredGW);
     const netNewGW = deployedGW - replacementGW;
@@ -193,7 +295,7 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
     current.deployedGW += deployedGW;
     current.replacementGW += replacementGW;
     current.retiredGW += retiredGW;
-    current.lostToFundingGW += lostToFundingGW || 0;
+    current.deferredByFundingGW += deferredByFundingGW || 0;
     current.bindingCounts[binding] = (current.bindingCounts[binding] || 0) + 1;
     current.monthsSeen += 1;
   }
@@ -207,9 +309,12 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
     const c = current;
     const C = c.capexYTD;
 
-    // Allocation (Demand_Build rows 34-44, in dollars)
+    // Allocation (Demand_Build rows 34-44, in dollars): base shares capped at
+    // each tier's fundable amount, the rest spilled to tiers with slack. When
+    // capex exceeds what all tiers can fund (possible only with the gate off),
+    // fall back to fixed shares so the excess shows up as unfunded capex.
     const base = tiers.map((t, i) => Math.min(c.tierPlans[i].maxFundable, t.share * C));
-    const useFundableCaps = applyConstraint && C <= c.fundableCapex + 1e-6;
+    const useFundableCaps = C <= c.fundableCapex + 1e-6;
     let alloc;
     if (useFundableCaps) {
       const unallocated = Math.max(0, C - base.reduce((s, v) => s + v, 0));
@@ -217,7 +322,7 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
       const totalSlack = slack.reduce((s, v) => s + v, 0);
       alloc = base.map((b, i) => b + (totalSlack > 0 ? Math.min(slack[i], unallocated * slack[i] / totalSlack) : 0));
     } else {
-      alloc = tiers.map((t) => t.share * C); // check-only mode: fixed shares
+      alloc = tiers.map((t) => t.share * C);
     }
 
     const openingTierGw = tierState.map((ts) => ts.gw);
@@ -237,6 +342,10 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
       const afterDebt = afterCash - debtRaised;
       const equityRaised = Math.min(afterDebt, p.marketEquity);
       const shortfall = afterDebt - equityRaised;
+      // Operating obligations are met first, so any shortfall is unfunded
+      // capex up to the capex amount; the rest is an operating deficit.
+      const unfundedCapex = Math.min(shortfall, capex);
+      const operatingDeficit = shortfall - unfundedCapex;
       const surplus = Math.max(0, -gap);
 
       ts.debt = openingDebt + debtRaised;
@@ -245,7 +354,8 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
       ts.legacyEbitda = p.legacyEbitda;
       ts.gw = openingTierGw[i] * (1 - retireFrac) + (C > 0 ? c.deployedGW * capex / C : c.deployedGW * t.share);
 
-      const marginal = shortfall > 0.01 ? 'UNFUNDED'
+      const marginal = unfundedCapex > 0.01 ? 'UNFUNDED'
+        : operatingDeficit > 0.01 ? 'Operating deficit'
         : equityRaised > 0.01 ? 'Equity'
           : debtRaised > 0.01 ? 'Debt'
             : cashDrawdown > 0.01 ? 'Cash' : 'Self-funded';
@@ -255,7 +365,8 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
         fleetShare: p.fleetShare, installedGW: ts.gw,
         legacyOcf: p.legacyOcf, aiOcf: p.aiOcf, interest: p.interest, ocf: p.ocf,
         shareholderReturns: t.shareholderReturns, capex,
-        fundingGap: gap, cashDrawdown, debtRaised, equityRaised, shortfall,
+        fundingGap: gap, cashDrawdown, debtRaised, equityRaised,
+        shortfall, unfundedCapex, operatingDeficit,
         grossDebt: ts.debt, cash: ts.cash, ebitda: p.ebitda,
         debtToEbitda: safeDiv(ts.debt, p.ebitda),
         debtShareOfCapex: safeDiv(debtRaised, capex),
@@ -287,7 +398,7 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
       retiredGW: c.retiredGW,
       unmetGW: Math.max(0, fleet.requiredGWYearEnd - fleet.installedGW),
       scarcityRatio: fleet.scarcityRatio,
-      lostToFundingGW: c.lostToFundingGW,
+      deferredByFundingGW: c.deferredByFundingGW,
       bindingConstraint: binding,
       trainingShare: c.ctx.trainingShare,
       // Unit economics
@@ -303,15 +414,18 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
       newBuildCapex: c.newBuildCapex,
       replacementCapex: c.replacementCapex,
       totalCapex: C,
-      capexPerGwEnergized: safeDiv(C, c.deployedGW),
+      capexPerGwDeployed: safeDiv(C, c.deployedGW),
       // Funding (system)
       fundableCapex: c.fundableCapex,
+      capexAboveFundable: Math.max(0, C - c.fundableCapex),
       totalOcf, shareholderReturns: returns,
       interest: sum('interest'),
       cashDrawdown: sum('cashDrawdown'),
       debtRaised: sum('debtRaised'),
       equityRaised: sum('equityRaised'),
       shortfall: sum('shortfall'),
+      unfundedCapex: sum('unfundedCapex'),
+      operatingDeficit: sum('operatingDeficit'),
       grossDebt: sum('grossDebt'),
       cash: sum('cash'),
       debtShareOfCapex: safeDiv(sum('debtRaised'), C),
@@ -322,6 +436,7 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
       selfFunding: totalOcf - returns >= C,
       ...(fleet.extras || {})
     });
+    lastScarcityRatio = fleet.scarcityRatio;
     current = null;
   }
 
@@ -343,5 +458,5 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
     };
   }
 
-  return { startYear, capForMonth, recordMonth, closeYear, finalize, isActive: () => !!current };
+  return { scalars, pathValue, startYear, capForMonth, recordMonth, closeYear, finalize };
 }

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { NODES, NODE_GROUP_MAP, getNode } from '../data/nodes.js';
 import { formatMonth, formatNumber } from '../engine/calculations.js';
+import { GLOBAL_PARAMS } from '../data/assumptions.js';
 
 function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
   const [timeRange, setTimeRange] = useState('all');  // '5y', '10y', 'all'
@@ -83,8 +84,10 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
         <div>
           <h1 className="tab-title">Supply Buildout</h1>
           <p className="tab-description">
-            Models capacity evolution with committed expansions, lead times, and ramp profiles.
-            Supply = Capacity × Utilization × Yield. Endogenous expansions trigger on forecasted shortages.
+            Effective capacity = capacity × max utilization × yield, after shared-pool ceilings.
+            Capacity grows with demand (shortage × elasticity, lead-time forecasts), bounded by the
+            EUV-wafer, DRAM and industry pools, the physical ramp limits on EUV tools and power
+            generation, and funding.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
@@ -131,11 +134,11 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
               <div className="node-card-stats">
                 <div className="node-card-stat">
                   <div className="node-card-stat-value">{formatNumber(n.currentCapacity)}</div>
-                  <div className="node-card-stat-label">Y1 Capacity</div>
+                  <div className="node-card-stat-label">Jan {GLOBAL_PARAMS.startYear + 1} cap.</div>
                 </div>
                 <div className="node-card-stat">
                   <div className="node-card-stat-value">{formatNumber(n.futureCapacity)}</div>
-                  <div className="node-card-stat-label">Y5 Capacity</div>
+                  <div className="node-card-stat-label">Jan {GLOBAL_PARAMS.startYear + 5} cap.</div>
                 </div>
                 <div className="node-card-stat">
                   <div
@@ -144,7 +147,7 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
                   >
                     +{n.growthRate.toFixed(0)}%
                   </div>
-                  <div className="node-card-stat-label">5Y Growth</div>
+                  <div className="node-card-stat-label">4-yr growth</div>
                 </div>
               </div>
             </div>
@@ -180,11 +183,11 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
                 <div className="chart-legend">
                   <span className="legend-item">
                     <span className="legend-dot" style={{ background: '#6366f1' }} />
-                    Capacity
+                    Effective capacity
                   </span>
                   <span className="legend-item">
                     <span className="legend-dot" style={{ background: '#22c55e' }} />
-                    Effective Supply
+                    Shipments
                   </span>
                 </div>
               </div>
@@ -207,7 +210,7 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
                     stroke="#6366f1"
                     fill="#6366f1"
                     fillOpacity={0.2}
-                    name="Capacity"
+                    name="Effective capacity"
                   />
                   <Area
                     type="monotone"
@@ -215,7 +218,7 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
                     stroke="#22c55e"
                     fill="#22c55e"
                     fillOpacity={0.3}
-                    name="Supply"
+                    name="Shipments"
                   />
                 </AreaChart>
               </ResponsiveContainer>
@@ -262,12 +265,12 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
                 </h4>
                 <div style={{ fontSize: '0.8125rem' }}>
                   <div style={{ marginBottom: '6px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Lead Time (New):</span>{' '}
-                    <strong>{node.leadTimeNewBuild || '-'} months</strong>
+                    <span style={{ color: 'var(--text-secondary)' }}>Expansion lead time (model):</span>{' '}
+                    <strong>{node.leadTimeDebottleneck || '-'} months</strong>
                   </div>
                   <div style={{ marginBottom: '6px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Lead Time (Debottleneck):</span>{' '}
-                    <strong>{node.leadTimeDebottleneck || '-'} months</strong>
+                    <span style={{ color: 'var(--text-secondary)' }}>New-build lead time (reference):</span>{' '}
+                    <strong>{node.leadTimeNewBuild || '-'} months</strong>
                   </div>
                   <div>
                     <span style={{ color: 'var(--text-secondary)' }}>Ramp Profile:</span>{' '}
@@ -290,7 +293,7 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
                     <strong style={{ color: 'var(--status-stressed)' }}>{node.elasticityMid?.toFixed(2) || '-'}</strong>
                   </div>
                   <div>
-                    <span style={{ color: 'var(--text-secondary)' }}>Long-term (48mo+):</span>{' '}
+                    <span style={{ color: 'var(--text-secondary)' }}>Long-term (48mo+, used by the model):</span>{' '}
                     <strong style={{ color: 'var(--status-balanced)' }}>{node.elasticityLong?.toFixed(2) || '-'}</strong>
                   </div>
                 </div>
@@ -305,7 +308,7 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
                     <>
                       <div style={{ marginBottom: '6px' }}>
                         <span style={{ color: 'var(--text-secondary)' }}>Type:</span>{' '}
-                        <strong>Stacked (HBM)</strong>
+                        <strong>Stacked (learning curve)</strong>
                       </div>
                       <div style={{ marginBottom: '6px' }}>
                         <span style={{ color: 'var(--text-secondary)' }}>Initial → Target:</span>{' '}
@@ -324,7 +327,7 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
                       </div>
                       <div>
                         <span style={{ color: 'var(--text-secondary)' }}>Loss Rate:</span>{' '}
-                        <strong>{((node.yieldSimpleLoss || 0.03) * 100).toFixed(1)}%</strong>
+                        <strong>{((node.yieldSimpleLoss ?? 0.03) * 100).toFixed(1)}%</strong>
                       </div>
                     </>
                   )}
@@ -342,7 +345,7 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
                   </div>
                   <div style={{ marginBottom: '6px' }}>
                     <span style={{ color: 'var(--text-secondary)' }}>Max Utilization:</span>{' '}
-                    <strong>{((node.maxCapacityUtilization || 0.95) * 100).toFixed(0)}%</strong>
+                    <strong>{((node.maxCapacityUtilization ?? 0.95) * 100).toFixed(0)}%</strong>
                   </div>
                   <div>
                     <span style={{ color: 'var(--text-secondary)' }}>Inventory Buffer:</span>{' '}
@@ -370,7 +373,7 @@ function SupplyEngineTab({ results, selectedNode, onSelectNode }) {
             Supply<sub>t</sub> = Capacity<sub>t</sub> × MaxUtilization × Yield<sub>t</sub>
           </div>
           <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-            <p><strong>Capacity Evolution:</strong> Base capacity + Committed expansions (with ramp) + Optional expansions (triggered by price signal)</p>
+            <p><strong>Capacity Evolution:</strong> Starting capacity + committed expansions (with ramp) + demand-driven growth (tightness × long-run elasticity, and lead-time expansions when forecast demand exceeds capacity), limited by shared pools (EUV wafers, DRAM, AI share of grid, turbine, transformer and construction-labor output), the EUV and power-generation physical schedules, and funding.</p>
             <p><strong>Stacked Yield:</strong> Y(t) = Y<sub>target</sub> - (Y<sub>target</sub> - Y<sub>initial</sub>) × 2<sup>-t/HL</sup></p>
           </div>
         </div>
