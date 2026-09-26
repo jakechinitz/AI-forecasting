@@ -1135,7 +1135,7 @@ const NODES_BASE = [
 
     // Parallelism constraint: regulatory permitting throughput, not capital.
     // Utility commissions process a finite number of interconnection studies per year.
-    maxAnnualExpansionSchedule: [{ until: 2032, cap: 0.2 }, { until: 2045, cap: 0.1 }],  // PHYSICAL/INSTITUTIONAL: utility interconnection and transmission build (2-4 yr transformer/line lead times, permitting); utility capex +17%/yr
+    // Growth: demand-driven; ceiling = AI share of industry output (SHARED_SUPPLY_POOLS.industry)
 
     baseRate: {
       value: 2500,
@@ -1181,7 +1181,7 @@ const NODES_BASE = [
 
     // Parallelism constraint: ~3,500 skilled LPT winding technicians globally;
     // training pipeline adds ~5-8% workforce/yr. Capital is not the bottleneck.
-    maxAnnualExpansionSchedule: [{ until: 2028, cap: 0.15 }, { until: 2032, cap: 0.2 }, { until: 2045, cap: 0.1 }],  // PHYSICAL: transformer factory capacity; new LPT plants take 2-3 yrs (Hitachi VA, Siemens NC land 2027-28)
+    // Growth: demand-driven; ceiling = AI share of industry output (SHARED_SUPPLY_POOLS.industry)
 
     baseRate: {
       value: 250,
@@ -1319,7 +1319,7 @@ const NODES_BASE = [
 
     // Parallelism constraint: skilled electrical/mechanical trades labor pool.
     // Apprenticeship pipeline grows ~5%/yr; poaching from other sectors adds ~3%.
-    maxAnnualExpansionSchedule: [{ until: 2032, cap: 0.15 }, { until: 2045, cap: 0.08 }],  // PHYSICAL: skilled-trades pipeline (electricians +~1%/yr; 4-5 yr apprenticeships), stretched by modular construction and non-US labor
+    // Growth: demand-driven; ceiling = AI share of industry output (SHARED_SUPPLY_POOLS.industry)
 
     baseRate: {
       value: 5000000,
@@ -1406,7 +1406,7 @@ const NODES_BASE = [
     // Parallelism constraint: turbine/panel manufacturing + EPC crew availability.
     // Gas turbines are factory-built (GE/Siemens can ramp production lines).
     // Solar panels are commodity. Main bottleneck is EPC labor for installation.
-    maxAnnualExpansionSchedule: [{ until: 2029, cap: 1.0 }, { until: 2032, cap: 0.25 }, { until: 2045, cap: 0.1 }],  // PHYSICAL: turbine/engine/fuel-cell factory output (GE Vernova 20→30 GW/yr by 2030; Siemens, MHI sold out to ~2028-30; Bloom 1→2 GW/yr)
+    // Growth: demand-driven; ceiling = AI share of industry output (SHARED_SUPPLY_POOLS.industry)
 
     yieldModel: 'simple',
     yieldSimpleLoss: 0.05,

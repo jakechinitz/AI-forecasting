@@ -209,7 +209,7 @@ function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results })
                 <td>Tokens ~3.6x in Year 1, decelerating</td>
                 <td>Software ~1.7x in Year 1, decelerating</td>
                 <td>Normal</td>
-                <td style={{ color: 'var(--status-stressed)' }}>Funding binds 2026–34, then power hookups</td>
+                <td style={{ color: 'var(--status-stressed)' }}>Funding binds to ~2040, then power hookups</td>
               </tr>
               <tr className={selectedScenario === 'highDemandSlowEfficiency' ? 'selected' : ''}>
                 <td className="text-cell"><strong>High Demand / Slow Efficiency</strong></td>
