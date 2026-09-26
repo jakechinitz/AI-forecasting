@@ -1,34 +1,67 @@
 import React, { useMemo } from 'react';
-import { NODE_GROUPS, getNode } from '../data/nodes.js';
-import { formatNumber } from '../engine/calculations.js';
+import { runSimulation } from '../engine/calculations.js';
+import { GLOBAL_PARAMS } from '../data/assumptions.js';
 
-function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results }) {
+const Y5 = GLOBAL_PARAMS.startYear + 4;
+const Y10 = GLOBAL_PARAMS.startYear + 9;
+const Y_END = GLOBAL_PARAMS.startYear + GLOBAL_PARAMS.horizonYears - 1;
+
+const gw = (v) => (Number.isFinite(v) ? `${v.toFixed(0)} GW` : '-');
+const usdT = (v) => (Number.isFinite(v) ? `$${(v / 1000).toFixed(1)}T` : '-');
+const yearSpan = (b) => (b.firstYear === b.lastYear ? `${b.firstYear}` : `${b.firstYear}–${b.lastYear}`);
+
+// Which assumption groups a scenario changes, read from its overrides
+function adjustmentList(overrides = {}) {
+  const out = [];
+  if (overrides.demand || overrides.scaling?.tokenGrowth || overrides.scaling?.trainingGrowth) out.push('Demand');
+  if (overrides.efficiency || overrides.scaling?.softwareEfficiency || overrides.scaling?.hardwareEfficiency) out.push('Efficiency');
+  if (overrides.supply || overrides.supplyAssumptions) out.push('Supply shock');
+  if (overrides.financing) out.push('Financing');
+  if (overrides.calibration || overrides.startingState) out.push('Opening shortage');
+  return out;
+}
+
+// Headline metrics for one simulation result
+function summarize(results) {
+  const annual = results?.annual || [];
+  const at = (year) => annual.find((r) => r.year === year) || {};
+  const capexTo = (year) => annual.filter((r) => r.year <= year).reduce((s, r) => s + (r.totalCapex || 0), 0);
+  const binding = results?.summary?.binding || [];
+  return {
+    installedY5: at(Y5).installedGW,
+    requiredY5: at(Y5).requiredGW,
+    installedY10: at(Y10).installedGW,
+    installedEnd: at(Y_END).installedGW,
+    powerY5: at(Y5).totalAiPowerGW,
+    capexY5: capexTo(Y5),
+    binding,
+    selfFundingYear: results?.financing?.selfFundingYear?.system ?? null,
+    gpuTightnessAvg: (results?.nodes?.gpu_datacenter?.tightness || []).slice(0, 60).reduce((a, b) => a + (b || 0), 0) / 60
+  };
+}
+
+function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results, assumptions }) {
   const scenarioList = Object.values(scenarios);
 
-  // Get key metrics for current scenario
-  const metrics = useMemo(() => {
-    if (!results) return null;
+  const current = useMemo(() => (results ? summarize(results) : null), [results]);
 
-    const gpuData = results.nodes.gpu_datacenter;
-    const hbmData = results.nodes.hbm_stacks;
-    const cowosData = results.nodes.cowos_capacity;
-    const dcData = results.nodes.datacenter_mw;
-
-    const y1 = 12;  // Year 1
-    const y5 = 60;  // Year 5
-
-    return {
-      gpuDemandY1: gpuData?.requiredBase?.[y1] || 0,
-      gpuDemandY5: gpuData?.requiredBase?.[y5] || 0,
-      gpuTightnessAvg: gpuData?.tightness.slice(0, 60).reduce((a, b) => a + b, 0) / 60 || 0,
-      hbmTightnessMax: Math.max(...(hbmData?.tightness.slice(0, 60) || [1])),
-      cowosTightnessMax: Math.max(...(cowosData?.tightness.slice(0, 60) || [1])),
-      dcMwY5: dcData?.demand[y5] || 0,
-      shortageCount: results.summary.shortages.length,
-      glutCount: results.summary.gluts.length,
-      topBottleneck: results.summary.bottlenecks[0]?.nodeName || 'None'
-    };
-  }, [results]);
+  // Run every scenario on the current assumptions (~50 ms each) so the
+  // comparison table always reflects the model, not hand-written text.
+  const comparison = useMemo(() => {
+    if (!assumptions) return {};
+    const out = {};
+    for (const s of scenarioList) {
+      try {
+        out[s.id] = s.id === selectedScenario && results
+          ? summarize(results)
+          : summarize(runSimulation(assumptions, s.overrides || {}));
+      } catch (e) {
+        out[s.id] = null;
+      }
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assumptions, results]);
 
   return (
     <div>
@@ -36,8 +69,8 @@ function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results })
         <div>
           <h1 className="tab-title">Scenario Comparison</h1>
           <p className="tab-description">
-            Compare different demand, efficiency, and supply scenarios. Select a scenario to
-            run the simulation with adjusted assumptions.
+            Demand and efficiency scenarios scale the current assumptions; supply, financing and
+            opening-shortage scenarios change one lever. Select a scenario to run every tab on it.
           </p>
         </div>
       </div>
@@ -49,36 +82,34 @@ function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results })
         </div>
 
         <div className="grid grid-3" style={{ gap: 'var(--space-md)' }}>
-          {scenarioList.map(scenario => (
-            <div
-              key={scenario.id}
-              className={`scenario-card ${selectedScenario === scenario.id ? 'selected' : ''}`}
-              onClick={() => onSelectScenario(scenario.id)}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div className="scenario-card-name">{scenario.name}</div>
-                {selectedScenario === scenario.id && (
-                  <span className="badge badge-balanced">Active</span>
+          {scenarioList.map(scenario => {
+            const adjustments = adjustmentList(scenario.overrides);
+            return (
+              <div
+                key={scenario.id}
+                className={`scenario-card ${selectedScenario === scenario.id ? 'selected' : ''}`}
+                onClick={() => onSelectScenario(scenario.id)}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div className="scenario-card-name">{scenario.name}</div>
+                  {selectedScenario === scenario.id && (
+                    <span className="badge badge-balanced">Active</span>
+                  )}
+                </div>
+                <p className="scenario-card-description">{scenario.description}</p>
+                {adjustments.length > 0 && (
+                  <div style={{ marginTop: 'var(--space-sm)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    <strong>Adjusts:</strong> {adjustments.join(', ')}
+                  </div>
                 )}
               </div>
-              <p className="scenario-card-description">{scenario.description}</p>
-
-              {/* Show overrides summary */}
-              {scenario.overrides && Object.keys(scenario.overrides).length > 0 && (
-                <div style={{ marginTop: 'var(--space-sm)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                  <strong>Adjustments:</strong>
-                  {scenario.overrides.demand && ' Demand'}
-                  {scenario.overrides.efficiency && ' Efficiency'}
-                  {scenario.overrides.supply && ' Supply'}
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
       {/* Current Scenario Results */}
-      {metrics && (
+      {current && (
         <div className="section">
           <div className="section-header">
             <h2 className="section-title">Scenario Results: {scenarios[selectedScenario]?.name}</h2>
@@ -87,92 +118,57 @@ function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results })
           <div className="grid grid-4" style={{ gap: 'var(--space-md)', marginBottom: 'var(--space-lg)' }}>
             <div className="card">
               <div className="metric">
-                <span className="metric-value">{formatNumber(metrics.gpuDemandY1)}</span>
-                <span className="metric-label">Required GPU Base Y1</span>
+                <span className="metric-value">{gw(current.installedY5)}</span>
+                <span className="metric-label">Installed IT, end-{Y5}</span>
               </div>
             </div>
             <div className="card">
               <div className="metric">
-                <span className="metric-value">{formatNumber(metrics.gpuDemandY5)}</span>
-                <span className="metric-label">Required GPU Base Y5</span>
+                <span className="metric-value">{gw(current.requiredY5)}</span>
+                <span className="metric-label">Required IT, {Y5} avg</span>
               </div>
             </div>
             <div className="card">
               <div className="metric">
-                <span
-                  className="metric-value"
-                  style={{
-                    color: metrics.gpuTightnessAvg > 1.1 ? 'var(--status-tight)' :
-                           metrics.gpuTightnessAvg > 1 ? 'var(--status-stressed)' :
-                           'var(--status-balanced)'
-                  }}
-                >
-                  {metrics.gpuTightnessAvg.toFixed(2)}
-                </span>
-                <span className="metric-label">Avg GPU Tightness (5Y)</span>
+                <span className="metric-value">{gw(current.powerY5)}</span>
+                <span className="metric-label">AI power draw {Y5} (DC + edge)</span>
               </div>
             </div>
             <div className="card">
               <div className="metric">
-                <span className="metric-value">{formatNumber(metrics.dcMwY5)}</span>
-                <span className="metric-label">DC Power Y5 (MW)</span>
+                <span className="metric-value">{usdT(current.capexY5)}</span>
+                <span className="metric-label">Cumulative capex to {Y5}</span>
               </div>
             </div>
           </div>
 
           <div className="grid grid-3" style={{ gap: 'var(--space-md)' }}>
             <div className="card">
-              <h4 style={{ marginBottom: 'var(--space-sm)' }}>Peak Constraints</h4>
+              <h4 style={{ marginBottom: 'var(--space-sm)' }}>What Binds</h4>
               <div style={{ fontSize: '0.875rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span>Max HBM Tightness:</span>
-                  <span style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontWeight: 600,
-                    color: metrics.hbmTightnessMax > 1.1 ? 'var(--status-tight)' : 'var(--text-primary)'
-                  }}>
-                    {metrics.hbmTightnessMax.toFixed(2)}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span>Max CoWoS Tightness:</span>
-                  <span style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontWeight: 600,
-                    color: metrics.cowosTightnessMax > 1.1 ? 'var(--status-tight)' : 'var(--text-primary)'
-                  }}>
-                    {metrics.cowosTightnessMax.toFixed(2)}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Primary Bottleneck:</span>
-                  <span style={{ fontWeight: 600 }}>{metrics.topBottleneck}</span>
-                </div>
+                {current.binding.map((b) => (
+                  <div key={b.constraint} style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-sm)', marginBottom: '6px' }}>
+                    <span>{b.constraint.replace(/^Components: /, '')}</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>{b.months} mo · {yearSpan(b)}</span>
+                  </div>
+                ))}
               </div>
             </div>
 
             <div className="card">
-              <h4 style={{ marginBottom: 'var(--space-sm)' }}>Event Summary</h4>
+              <h4 style={{ marginBottom: 'var(--space-sm)' }}>Market Pressure</h4>
               <div style={{ fontSize: '0.875rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span>Shortage Events:</span>
-                  <span style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontWeight: 600,
-                    color: metrics.shortageCount > 5 ? 'var(--status-tight)' : 'var(--text-primary)'
-                  }}>
-                    {metrics.shortageCount}
-                  </span>
+                  <span>Avg accelerator tightness (5Y):</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{current.gpuTightnessAvg.toFixed(2)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span>Shortage events:</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{results.summary.shortages.length}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Glut Events:</span>
-                  <span style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontWeight: 600,
-                    color: metrics.glutCount > 3 ? 'var(--status-glut)' : 'var(--text-primary)'
-                  }}>
-                    {metrics.glutCount}
-                  </span>
+                  <span>Glut events:</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{results.summary.gluts.length}</span>
                 </div>
               </div>
             </div>
@@ -187,7 +183,7 @@ function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results })
         </div>
       )}
 
-      {/* Scenario Comparison Table */}
+      {/* Scenario Comparison Table (computed) */}
       <div className="card" style={{ marginTop: 'var(--space-lg)' }}>
         <div className="card-header">
           <h3 className="card-title">Scenario Comparison</h3>
@@ -197,55 +193,35 @@ function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results })
             <thead>
               <tr>
                 <th>Scenario</th>
-                <th>Demand Growth</th>
+                <th>Demand</th>
                 <th>Efficiency</th>
-                <th>Supply Risk</th>
-                <th>Expected Outcome</th>
+                <th>Supply / capital</th>
+                <th>Installed {Y5}</th>
+                <th>Installed {Y10}</th>
+                <th>Installed {Y_END}</th>
+                <th>Capex to {Y5}</th>
+                <th>What binds</th>
               </tr>
             </thead>
             <tbody>
-              <tr className={selectedScenario === 'base' ? 'selected' : ''}>
-                <td className="text-cell"><strong>Base Case</strong></td>
-                <td>Tokens ~3.6x in Year 1, decelerating</td>
-                <td>Software ~1.7x in Year 1, decelerating</td>
-                <td>Normal</td>
-                <td style={{ color: 'var(--status-stressed)' }}>Funding binds to ~2040, then power hookups</td>
-              </tr>
-              <tr className={selectedScenario === 'highDemandSlowEfficiency' ? 'selected' : ''}>
-                <td className="text-cell"><strong>High Demand / Slow Efficiency</strong></td>
-                <td style={{ color: 'var(--status-tight)' }}>High (55-70% CAGR)</td>
-                <td style={{ color: 'var(--status-tight)' }}>Low (15-25% annual)</td>
-                <td>Normal</td>
-                <td style={{ color: 'var(--status-tight)' }}>Persistent shortages</td>
-              </tr>
-              <tr className={selectedScenario === 'highDemandFastEfficiency' ? 'selected' : ''}>
-                <td className="text-cell"><strong>High Demand / Fast Efficiency</strong></td>
-                <td style={{ color: 'var(--status-tight)' }}>High (55-70% CAGR)</td>
-                <td style={{ color: 'var(--status-balanced)' }}>High (35-55% annual)</td>
-                <td>Normal</td>
-                <td style={{ color: 'var(--status-balanced)' }}>Balanced, efficiency absorbs demand</td>
-              </tr>
-              <tr className={selectedScenario === 'demandSlowdown' ? 'selected' : ''}>
-                <td className="text-cell"><strong>Demand Slowdown</strong></td>
-                <td style={{ color: 'var(--status-soft)' }}>Low (20-30% CAGR)</td>
-                <td>Moderate</td>
-                <td>Normal</td>
-                <td style={{ color: 'var(--status-glut)' }}>Potential gluts, price pressure</td>
-              </tr>
-              <tr className={selectedScenario === 'geopoliticalShock' ? 'selected' : ''}>
-                <td className="text-cell"><strong>Geopolitical Shock</strong></td>
-                <td>Moderate</td>
-                <td>Moderate</td>
-                <td style={{ color: 'var(--status-tight)' }}>50% capacity loss</td>
-                <td style={{ color: 'var(--status-tight)' }}>Severe short-term shortages</td>
-              </tr>
-              <tr className={selectedScenario === 'creditCrunch' ? 'selected' : ''}>
-                <td className="text-cell"><strong>Credit Crunch</strong></td>
-                <td>Base</td>
-                <td>Base</td>
-                <td style={{ color: 'var(--status-tight)' }}>AI debt capacity −60%, equity −80%</td>
-                <td style={{ color: 'var(--status-tight)' }}>Slower build; hyperscalers market-limited</td>
-              </tr>
+              {scenarioList.map((s) => {
+                const c = comparison[s.id];
+                return (
+                  <tr key={s.id} className={selectedScenario === s.id ? 'selected' : ''} onClick={() => onSelectScenario(s.id)} style={{ cursor: 'pointer' }}>
+                    <td className="text-cell"><strong>{s.name}</strong></td>
+                    <td className="text-cell">{s.summary?.demand || '-'}</td>
+                    <td className="text-cell">{s.summary?.efficiency || '-'}</td>
+                    <td className="text-cell">{s.summary?.supply || '-'}</td>
+                    <td>{gw(c?.installedY5)}</td>
+                    <td>{gw(c?.installedY10)}</td>
+                    <td>{gw(c?.installedEnd)}</td>
+                    <td>{usdT(c?.capexY5)}</td>
+                    <td className="text-cell">
+                      {c ? c.binding.slice(0, 2).map((b) => `${b.constraint.replace(/^Components: /, '')} (${yearSpan(b)})`).join('; ') : 'Run failed'}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -260,16 +236,16 @@ function ScenarioTab({ scenarios, selectedScenario, onSelectScenario, results })
           <div>
             <h4 style={{ fontSize: '0.875rem', marginBottom: 'var(--space-sm)' }}>Scenario Selection</h4>
             <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-              Click on any scenario card above to switch. The simulation will re-run automatically
-              with the adjusted assumptions. All tabs will update to reflect the new scenario.
+              Click any scenario card or table row to switch. Every tab re-runs on the selected
+              scenario. The comparison table re-runs all scenarios on your current assumptions.
             </p>
           </div>
           <div>
             <h4 style={{ fontSize: '0.875rem', marginBottom: 'var(--space-sm)' }}>Custom Scenarios</h4>
             <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-              For custom scenarios, go to the Assumptions tab and adjust individual parameters.
-              Click "Run Simulation" to see results. Scenarios override assumptions; custom changes
-              take precedence.
+              Edit individual parameters on the Assumptions and Funding tabs. Scenarios are applied
+              on top of those edits: scaling scenarios multiply your values, and the others override
+              only the lever they name.
             </p>
           </div>
         </div>

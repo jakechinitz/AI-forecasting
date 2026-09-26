@@ -9,10 +9,6 @@
  */
 import nodesOverrides from './nodesOverrides.json';
 
-const pad2 = (value) => String(value).padStart(2, '0');
-const NOW = new Date();
-const CURRENT_AS_OF_MONTH = `${NOW.getUTCFullYear()}-${pad2(NOW.getUTCMonth() + 1)}`;
-
 const isPlainObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
 
 // Deep merge with arrays overwritten
@@ -63,7 +59,6 @@ const NODES_BASE = [
     description: 'Large-scale foundation model training runs',
 
     demandDriverType: 'direct',
-    inputIntensity: 1,
     parentNodeIds: [],
 
     startingCapacity: null,
@@ -71,11 +66,11 @@ const NODES_BASE = [
     leadTimeMonths: 0,
     rampProfile: 'step',
 
-    // Base rate: 3 runs/month (Feb 2026) — more frontier labs actively training
+    // Base rate: 3 runs/month (end-2025) — more frontier labs actively training
     baseRate: {
       value: 3,
       confidence: 'medium',
-      source: 'Industry cadence: OpenAI, Anthropic, Google, Meta, xAI, Mistral. As of 2026-02.',
+      source: 'Industry cadence: OpenAI, Anthropic, Google, Meta, xAI, Mistral.',
       historicalRange: [2, 8]
     }
   },
@@ -87,7 +82,6 @@ const NODES_BASE = [
     description: 'Fine-tuning and mid-scale training workloads',
 
     demandDriverType: 'direct',
-    inputIntensity: 1,
     parentNodeIds: [],
 
     startingCapacity: null,
@@ -98,7 +92,7 @@ const NODES_BASE = [
     baseRate: {
       value: 300,
       confidence: 'medium',
-      source: 'Fine-tuning explosion; 31% orgs in production (2x 2024 rate). As of 2026-02.',
+      source: 'Fine-tuning explosion; 31% orgs in production (2x 2024 rate).',
       historicalRange: [100, 600]
     }
   },
@@ -110,7 +104,6 @@ const NODES_BASE = [
     description: 'Chatbots, search, consumer AI applications',
 
     demandDriverType: 'direct',
-    inputIntensity: 1,
     parentNodeIds: [],
 
     startingCapacity: null,
@@ -118,13 +111,13 @@ const NODES_BASE = [
     leadTimeMonths: 0,
     rampProfile: 'step',
 
-    // Base rate: 250T tokens/month consumer inference (Feb 2026)
+    // Base mix: 225T tokens/month consumer (45%); the level is rescaled by the month-0 calibration
     // ChatGPT 810M WAU, Gemini 750M MAU, Claude 18.8M users
     baseRate: {
-      value: 250e12,
+      value: 225e12,
       confidence: 'medium',
-      source: 'Consumer AI usage estimates. ChatGPT 810M WAU. As of 2026-02.',
-      historicalRange: [100e12, 500e12]
+      source: 'Consumer AI usage estimates. ChatGPT 810M WAU.',
+      historicalRange: [100000000000000, 500000000000000]
     }
   },
   {
@@ -135,7 +128,6 @@ const NODES_BASE = [
     description: 'Enterprise AI services, copilots, RAG',
 
     demandDriverType: 'direct',
-    inputIntensity: 1,
     parentNodeIds: [],
 
     startingCapacity: null,
@@ -143,13 +135,13 @@ const NODES_BASE = [
     leadTimeMonths: 0,
     rampProfile: 'step',
 
-    // Base rate: 200T tokens/month enterprise inference (Feb 2026)
+    // Base mix: 175T tokens/month enterprise (35%); the level is rescaled by the month-0 calibration
     // 71% of orgs using GenAI; $37B+ enterprise AI spend
     baseRate: {
-      value: 200e12,
+      value: 175e12,
       confidence: 'medium',
-      source: 'Enterprise AI adoption 71% of orgs; cloud earnings. As of 2026-02.',
-      historicalRange: [100e12, 400e12]
+      source: 'Enterprise AI adoption 71% of orgs; cloud earnings.',
+      historicalRange: [100000000000000, 400000000000000]
     }
   },
   {
@@ -160,7 +152,6 @@ const NODES_BASE = [
     description: 'Autonomous agents, multi-step reasoning, tool use',
 
     demandDriverType: 'direct',
-    inputIntensity: 1,
     parentNodeIds: [],
 
     startingCapacity: null,
@@ -168,13 +159,13 @@ const NODES_BASE = [
     leadTimeMonths: 0,
     rampProfile: 'step',
 
-    // Base rate: 50T tokens/month agentic inference (Feb 2026)
+    // Base mix: 100T tokens/month agentic (20%); the level is rescaled by the month-0 calibration
     // AI agent deployments doubling every 4 months; 40% enterprise apps by end 2026
     baseRate: {
-      value: 50e12,
+      value: 100e12,
       confidence: 'low',
-      source: 'Agentic AI doubling every 4mo; 1B agents projected by end 2026. As of 2026-02.',
-      historicalRange: [20e12, 100e12]
+      source: 'Agentic AI doubling every 4mo; 1B agents projected by end 2026.',
+      historicalRange: [20000000000000, 125000000000000]
     }
   },
 
@@ -189,11 +180,8 @@ const NODES_BASE = [
     description: 'H100, H200, B100, B200 class accelerators',
 
     demandDriverType: 'derived',
-    inputIntensity: 1,
     parentNodeIds: ['training_frontier', 'training_midtier', 'inference_consumer', 'inference_enterprise', 'inference_agentic'],
 
-    // Base rate: ~7.2M datacenter GPUs shipped 2025 (NVIDIA Blackwell ramp + competitors)
-    // NVIDIA datacenter revenue $115B+ FY2026; Blackwell shipping at scale
     startingCapacity: 1000000,  // Accelerator output across vendors: ~16.3M units in 2026 (JPM, +62% YoY; ~10M in 2025); pools sum to ~1.5M/month at the start
     committedExpansions: [],
     leadTimeDebottleneck: 6,
@@ -218,10 +206,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'high',
 
     baseRate: {
-      value: 600000,
+      value: 1000000,
       confidence: 'high',
-      source: 'NVIDIA Blackwell ramp + AMD MI300X; datacenter rev $115B+ FY2026. As of 2026-02.',
-      historicalRange: [450000, 900000]
+      source: 'Accelerator output across vendors: ~16.3M units in 2026 (JPM, +62% YoY; ~10M in 2025); pools sum to ~1.5M/month at the start',
+      historicalRange: [450000, 1250000]
     }
   },
 
@@ -233,7 +221,6 @@ const NODES_BASE = [
     description: 'Lower-cost inference chips (L40S, Gaudi, ASICs)',
 
     demandDriverType: 'derived',
-    inputIntensity: 1,
     parentNodeIds: ['inference_consumer', 'inference_enterprise', 'inference_agentic'],
 
     startingCapacity: 500000,  // Second accelerator pool (ASIC-heavy inference parts); see gpu_datacenter
@@ -260,10 +247,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'medium',
 
     baseRate: {
-      value: 350000,
+      value: 500000,
       confidence: 'medium',
-      source: 'AMD MI300X, Intel Gaudi, Google TPU, custom ASICs ramping. As of 2026-02.',
-      historicalRange: [200000, 600000]
+      source: 'Second accelerator pool (ASIC-heavy inference parts); see gpu_datacenter',
+      historicalRange: [200000, 625000]
     }
   },
 
@@ -344,10 +331,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'medium',
 
     baseRate: {
-      value: 400000,
+      value: 2200000,
       confidence: 'medium',
-      source: 'NVIDIA/Mellanox shipments + competitors',
-      historicalRange: [200000, 700000]
+      source: 'NICs/DPUs made on TSMC nodes; not a known bottleneck (sized to support ~40 GW/yr in 2026)',
+      historicalRange: [200000, 2750000]
     }
   },
 
@@ -362,7 +349,7 @@ const NODES_BASE = [
     description: 'HBM3, HBM3E stacked memory for GPUs',
 
     demandDriverType: 'derived',
-    inputIntensity: 8,
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (gpuToComponents.hbmStacksPerGpu)
     parentNodeIds: ['gpu_datacenter'],
 
     startingCapacity: 8100000,  // HBM ~3.5 EB/yr run-rate at end-2025 (2025 ~2.6 EB; 2026 ~4.2 EB, TrendForce) ≈ 8.1M stacks/month at ~36 GB/stack
@@ -388,16 +375,13 @@ const NODES_BASE = [
     geoRiskFlag: true,
     exportControlSensitivity: 'high',
 
-    // Parallelism constraint: HBM advanced packaging (TSV, microbump) requires
-    // specialized lines. SK Hynix grew ~80% in 2024 at peak crisis effort; 100%
-    // allows headroom for Samsung/Micron simultaneous ramps but caps unrealistic
-    // 150%+ growth that shortage elasticity could otherwise produce.
+    // Growth: demand-driven, no growth cap; ceiling = AI share of DRAM wafer capacity (SHARED_SUPPLY_POOLS.memory).
 
     baseRate: {
-      value: 7000000,
+      value: 8100000,
       confidence: 'high',
-      source: 'HBM3E ramp; revenue 300%+ growth 2024; SK Hynix/Samsung/Micron expanding. As of 2026-02.',
-      historicalRange: [5000000, 10000000]
+      source: 'HBM ~3.5 EB/yr run-rate at end-2025 (2025 ~2.6 EB; 2026 ~4.2 EB, TrendForce) ≈ 8.1M stacks/month at ~36 GB/stack',
+      historicalRange: [5000000, 10125000]
     }
   },
 
@@ -409,7 +393,7 @@ const NODES_BASE = [
     description: 'DDR5 server memory modules for AI servers',
 
     demandDriverType: 'derived',
-    inputIntensity: 128,
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (gpuToComponents.serverDramGbPerGpu)
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
     startingCapacity: 290000000,  // Host DRAM for AI servers ~3.5 EB/yr in 2026 (~10% of ~40 EB standard DRAM bits; TrendForce)
@@ -436,10 +420,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 34000000,
+      value: 290000000,
       confidence: 'medium',
-      source: 'DRAM supply allocated to AI servers',
-      historicalRange: [20000000, 50000000]
+      source: 'Host DRAM for AI servers ~3.5 EB/yr in 2026 (~10% of ~40 EB standard DRAM bits; TrendForce)',
+      historicalRange: [20000000, 362500000]
     }
   },
 
@@ -451,7 +435,7 @@ const NODES_BASE = [
     description: 'Enterprise NVMe SSDs for AI storage',
 
     demandDriverType: 'derived',
-    inputIntensity: 2,
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (gpuToComponents.ssdTbPerGpu)
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
     startingCapacity: 5000000,  // NAND for AI servers; not a known bottleneck (sized to support ~40 GW/yr in 2026)
@@ -478,10 +462,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 540000,
+      value: 5000000,
       confidence: 'medium',
-      source: 'Enterprise SSD allocation estimates',
-      historicalRange: [300000, 900000]
+      source: 'NAND for AI servers; not a known bottleneck (sized to support ~40 GW/yr in 2026)',
+      historicalRange: [300000, 6250000]
     }
   },
 
@@ -498,13 +482,13 @@ const NODES_BASE = [
     demandDriverType: 'derived',
     // Engine sources this intensity from TRANSLATION_INTENSITIES.gpuToComponents
     // .cowosWaferEquivPerGpu in assumptions.js; kept in sync for display.
-    inputIntensity: 0.3,
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (gpuToComponents.cowosWaferEquivPerGpu)
     parentNodeIds: ['gpu_datacenter'],
 
     startingCapacity: 95000,  // Industry CoWoS-class capacity ~95k wafers/month at end-2025 (TSMC ~75k + OSAT ~20k) → ~160k end-2026, ~270k end-2027 (TrendForce, UBS)
     committedExpansions: [],
     leadTimeDebottleneck: 30,
-    leadTimeNewBuild: 24,
+    leadTimeNewBuild: 30,
     rampProfile: 's-curve',
 
     elasticityShort: 0.02,
@@ -524,15 +508,13 @@ const NODES_BASE = [
     geoRiskFlag: true,
     exportControlSensitivity: 'critical',
 
-    // Parallelism constraint: TSMC CoWoS doubled in 18 months at peak (~67%/yr).
-    // 100% cap allows continued aggressive build-out (Amkor, ASE entering) but
-    // prevents unrealistic 150%+ rates the shortage elasticity could otherwise drive.
+    // Growth: demand-driven, no growth cap (lead time and utilization only); gates on its own capacity.
 
     baseRate: {
-      value: 120000,
+      value: 95000,
       confidence: 'high',
-      source: 'TSMC CoWoS doubled through 2025; continued aggressive expansion. As of 2026-02.',
-      historicalRange: [90000, 180000]
+      source: 'Industry CoWoS-class capacity ~95k wafers/month at end-2025 (TSMC ~75k + OSAT ~20k) → ~160k end-2026, ~270k end-2027 (TrendForce, UBS)',
+      historicalRange: [76000, 180000]
     }
   },
 
@@ -544,13 +526,13 @@ const NODES_BASE = [
     description: 'Advanced 3D stacking for future chips',
 
     demandDriverType: 'derived',
-    inputIntensity: 1.0,  // Adoption curve applied in demand translation
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (gpuToComponents.hybridBondingPerGpu × hybridBondingAdoption (2% → 25%))
     parentNodeIds: ['gpu_datacenter'],
 
     startingCapacity: 20000,  // wafer-equiv/month (kept non-binding in 2026; adoption is low)
     committedExpansions: [
       { date: '2026-06', capacityAdd: 5000, type: 'committed' },
-      { date: '2027-06', capacityAdd: 8000, type: 'optional' }
+      { date: '2027-06', capacityAdd: 8000, type: 'committed' }
     ],
     leadTimeDebottleneck: 24,
     leadTimeNewBuild: 30,
@@ -577,14 +559,12 @@ const NODES_BASE = [
     geoRiskFlag: true,
     exportControlSensitivity: 'critical',
 
-    // Parallelism constraint: emerging tech with limited tool supply (EVG, ASMPT)
-    // and process know-how. 80% allows fast scale from a low base but caps the
-    // shortage-driven runaway rates the elasticity formula could otherwise hit.
+    // Growth: demand-driven, no growth cap. Non-gating: short bonding falls back to CoWoS-only packaging.
 
     baseRate: {
       value: 20000,
       confidence: 'low',
-      source: 'Adjusted to avoid accidental early hard ceiling; revisit when adoption curve is wired',
+      source: 'wafer-equiv/month (kept non-binding in 2026; adoption is low)',
       historicalRange: [5000, 40000]
     }
   },
@@ -600,11 +580,8 @@ const NODES_BASE = [
     inputIntensity: 0.02,
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    startingCapacity: 100000,
-    committedExpansions: [
-      { date: '2025-06', capacityAdd: 20000, type: 'committed' },
-      { date: '2026-01', capacityAdd: 30000, type: 'optional' }
-    ],
+    startingCapacity: 150000,  // includes expansions completed by the model start
+    committedExpansions: [],
     leadTimeDebottleneck: 12,
     leadTimeNewBuild: 24,
     rampProfile: 'linear',
@@ -626,12 +603,10 @@ const NODES_BASE = [
     geoRiskFlag: true,
     exportControlSensitivity: 'medium',
 
-    // Parallelism constraint: ABF is supplied by a handful of Japanese chemical
-    // makers (Ajinomoto and a few competitors); throughput limited by reactor
-    // capacity and feedstock supply. Historical industry growth ~20-30%/yr.
+    // Growth: demand-driven, no growth cap (lead time and utilization only).
 
     baseRate: {
-      value: 100000,
+      value: 150000,
       confidence: 'medium',
       source: 'Substrate industry reports',
       historicalRange: [80000, 150000]
@@ -652,7 +627,7 @@ const NODES_BASE = [
     startingCapacity: 2200000,  // final test/assembly scales with packaging (sized to support ~40 GW/yr in 2026)
     committedExpansions: [],
     leadTimeDebottleneck: 24,
-    leadTimeNewBuild: 18,
+    leadTimeNewBuild: 24,
     rampProfile: 'linear',
 
     elasticityShort: 0.25,
@@ -672,14 +647,13 @@ const NODES_BASE = [
     geoRiskFlag: true,
     exportControlSensitivity: 'medium',
 
-    // Parallelism constraint: OSAT (ASE, Amkor, JCET) growth limited by clean-room
-    // build-out and tester capex. Industry historically grows ~20-40%/yr in boom.
+    // Growth: demand-driven, no growth cap (lead time and utilization only).
 
     baseRate: {
-      value: 800000,
+      value: 2200000,
       confidence: 'medium',
-      source: 'OSAT industry capacity estimates',
-      historicalRange: [500000, 1200000]
+      source: 'final test/assembly scales with packaging (sized to support ~40 GW/yr in 2026)',
+      historicalRange: [500000, 2750000]
     }
   },
 
@@ -696,7 +670,7 @@ const NODES_BASE = [
     demandDriverType: 'derived',
     // Engine sources this intensity from TRANSLATION_INTENSITIES.gpuToComponents
     // .advancedWafersPerGpu in assumptions.js; kept in sync for display.
-    inputIntensity: 0.3,
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (gpuToComponents.advancedWafersPerGpu)
     parentNodeIds: ['gpu_datacenter'],
 
     startingCapacity: 120000,  // Leading-edge wafers to AI ~120k/month at the start (~60% of TSMC N3 plus part of N5/N4; SemiAnalysis), ~1.5-2M/yr in 2026
@@ -722,15 +696,13 @@ const NODES_BASE = [
     geoRiskFlag: true,
     exportControlSensitivity: 'critical',
 
-    // Parallelism constraint: leading-edge fab capex is multi-year (36mo new build)
-    // and gated by EUV tool throughput from ASML. Historical TSMC advanced-node
-    // capacity grew ~25-35%/yr at peak. 50% cap allows aggressive scenarios.
+    // Growth: demand-driven, no growth cap; ceiling = EUV-supported leading-edge wafers (SHARED_SUPPLY_POOLS.leadingEdge).
 
     baseRate: {
-      value: 180000,
+      value: 120000,
       confidence: 'high',
-      source: 'TSMC quarterly / leading-edge capacity estimates',
-      historicalRange: [140000, 240000]
+      source: 'Leading-edge wafers to AI ~120k/month at the start (~60% of TSMC N3 plus part of N5/N4; SemiAnalysis), ~1.5-2M/yr in 2026',
+      historicalRange: [96000, 240000]
     }
   },
 
@@ -738,14 +710,14 @@ const NODES_BASE = [
     id: 'euv_tools',
     name: 'EUV Lithography Tools',
     group: 'E',
-    unit: 'tools',
+    unit: 'tools/month',
     description: 'ASML EUV tool deliveries',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.00002,
+    // Demand: tools needed to keep the EUV wafer ceiling ahead of AI wafer demand (computed in the engine)
     parentNodeIds: ['advanced_wafers'],
 
-    startingCapacity: 5.4,  // ASML ~65 low-NA EUV tools shipped in 2026 (48 in 2025); ~385 installed end-2026. Limits wafer-capacity growth, not a per-accelerator gate
+    startingCapacity: 4.8,  // End-2025 run-rate (48 tools shipped in 2025); growing on ASML's schedule gives ~65 low-NA EUV tools in 2026 and ~385 installed end-2026. Limits wafer-capacity growth, not a per-accelerator gate
     committedExpansions: [],
     leadTimeDebottleneck: 36,
     growsAtPhysicalMax: true,
@@ -762,7 +734,7 @@ const NODES_BASE = [
 
     contractingRegime: 'LTAs',
     inventoryBufferTarget: 0,
-    maxCapacityUtilization: 0.9,
+    maxCapacityUtilization: 1.0,  // deliveries are counted in full
 
     yieldModel: 'simple',
     yieldSimpleLoss: 0,
@@ -771,9 +743,9 @@ const NODES_BASE = [
     exportControlSensitivity: 'high',
 
     baseRate: {
-      value: 4,
+      value: 4.8,
       confidence: 'high',
-      source: 'ASML shipment cadence proxy',
+      source: 'ASML ~65 low-NA EUV tools shipped in 2026 (48 in 2025); ~385 installed end-2026. Limits wafer-capacity growth, not a per-accelerator gate',
       historicalRange: [3, 7]
     }
   },
@@ -816,10 +788,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'medium',
 
     baseRate: {
-      value: 100000,
+      value: 250000,
       confidence: 'medium',
-      source: 'Network ASIC market estimates',
-      historicalRange: [60000, 150000]
+      source: 'switch silicon; not a known bottleneck (sized to support ~40 GW/yr in 2026)',
+      historicalRange: [60000, 312500]
     }
   },
 
@@ -834,11 +806,8 @@ const NODES_BASE = [
     inputIntensity: 1,
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 5000000,
-    committedExpansions: [
-      { date: '2025-06', capacityAdd: 1000000, type: 'committed' },
-      { date: '2026-01', capacityAdd: 1500000, type: 'optional' }
-    ],
+    startingCapacity: 7500000,  // includes expansions completed by the model start
+    committedExpansions: [],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 18,
     rampProfile: 'linear',
@@ -861,7 +830,7 @@ const NODES_BASE = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 5000000,
+      value: 7500000,
       confidence: 'medium',
       source: 'Optical module industry output estimates',
       historicalRange: [3000000, 7000000]
@@ -921,14 +890,11 @@ const NODES_BASE = [
     description: 'ODM server manufacturing (Foxconn, Quanta, etc.)',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.125,
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (1 / serverToInfra.gpusPerServer)
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 500000,
-    committedExpansions: [
-      { date: '2025-06', capacityAdd: 100000, type: 'committed' },
-      { date: '2026-01', capacityAdd: 150000, type: 'optional' }
-    ],
+    startingCapacity: 750000,  // includes expansions completed by the model start
+    committedExpansions: [],
     leadTimeDebottleneck: 3,
     leadTimeNewBuild: 12,
     rampProfile: 'linear',
@@ -951,7 +917,7 @@ const NODES_BASE = [
     exportControlSensitivity: 'medium',
 
     baseRate: {
-      value: 500000,
+      value: 750000,
       confidence: 'high',
       source: 'ODM quarterly reports',
       historicalRange: [400000, 700000]
@@ -969,10 +935,8 @@ const NODES_BASE = [
     inputIntensity: 0.025,
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 50000,
-    committedExpansions: [
-      { date: '2026-01', capacityAdd: 10000, type: 'optional' }
-    ],
+    startingCapacity: 60000,  // includes expansions completed by the model start
+    committedExpansions: [],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 18,
     rampProfile: 'linear',
@@ -995,7 +959,7 @@ const NODES_BASE = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 50000,
+      value: 60000,
       confidence: 'medium',
       source: 'Rack/PDU industry estimates',
       historicalRange: [30000, 80000]
@@ -1037,10 +1001,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 15000,
+      value: 110000,
       confidence: 'medium',
-      source: 'Cooling industry analysis',
-      historicalRange: [10000, 40000]
+      source: 'CDUs/cold plates; not a known bottleneck (sized to support ~40 GW/yr in 2026)',
+      historicalRange: [10000, 137500]
     }
   },
 
@@ -1051,11 +1015,11 @@ const NODES_BASE = [
     id: 'datacenter_mw',
     name: 'Data Center Capacity',
     group: 'H',
-    unit: 'MW',
+    unit: 'MW/month',
     description: 'Operational data center power capacity',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.00182,  // kwPerGpu(1.4) * pue(1.3) / 1000 = MW per accelerator (engine scales with kW growth)
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (kW per accelerator × PUE ÷ 1000, scaled by kw_growth)
     parentNodeIds: ['gpu_datacenter', 'gpu_inference', 'grid_interconnect', 'off_grid_power'],
 
     startingCapacity: 3680,  // Facility construction ~25-35 GW IT/yr globally in 2026 (JLL, SemiAnalysis 22 GW US under vertical construction for 2027) → ~30 GW IT ≈ 37.5 GW facility/yr ÷ 0.85
@@ -1082,16 +1046,13 @@ const NODES_BASE = [
     geoRiskFlag: true,
     exportControlSensitivity: 'low',
 
-    // Parallelism constraint: construction labor + grid interconnection queue.
-    // Hyperscalers can spend unlimited capital but cannot hire unlimited electricians
-    // or accelerate utility permitting. Historical DC capacity grew ~25-30%/yr peak.
-    // Raised to 100% to allow aggressive buildout scenarios (modular DC, off-grid, etc.)
+    // Growth: demand-driven, no growth cap; construction labor and power hookups gate as their own nodes.
 
     baseRate: {
-      value: 1500,
+      value: 3680,
       confidence: 'medium',
-      source: '$6.7T capex through 2030 (McKinsey); hyperscaler $300B+/yr capex. As of 2026-02.',
-      historicalRange: [1000, 3000]
+      source: 'Facility construction ~25-35 GW IT/yr globally in 2026 (JLL, SemiAnalysis 22 GW US under vertical construction for 2027) → ~30 GW IT ≈ 37.5 GW facility/yr ÷ 0.85',
+      historicalRange: [1000, 4600]
     }
   },
 
@@ -1106,7 +1067,7 @@ const NODES_BASE = [
     description: 'Utility grid connection approvals (3-5 year hookup queues)',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.00182,  // MW per accelerator (same as datacenter_mw)
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (MW per accelerator (grid share of power hookups))
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 1950,  // Ex-China grid-connected AI-DC energization ~15 GW IT/yr in 2026 (US ~8-12 per FERC/Goldman/SemiAnalysis + Europe/Gulf/Asia ex-China ~4-6) ≈ 18.75 GW facility/yr ÷ 0.80 availability
@@ -1133,15 +1094,13 @@ const NODES_BASE = [
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
 
-    // Parallelism constraint: regulatory permitting throughput, not capital.
-    // Utility commissions process a finite number of interconnection studies per year.
     // Growth: demand-driven; ceiling = AI share of industry output (SHARED_SUPPLY_POOLS.industry)
 
     baseRate: {
-      value: 2500,
+      value: 1950,
       confidence: 'medium',
-      source: 'Utility commission data, LBNL queue reports',
-      historicalRange: [3000, 8000]
+      source: 'Ex-China grid-connected AI-DC energization ~15 GW IT/yr in 2026 (US ~8-12 per FERC/Goldman/SemiAnalysis + Europe/Gulf/Asia ex-China ~4-6) ≈ 18.75 GW facility/yr ÷ 0.80 availability',
+      historicalRange: [1560, 8000]
     }
   },
 
@@ -1153,7 +1112,7 @@ const NODES_BASE = [
     description: 'High-voltage transformers for substations',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.000364,  // mwPerGpu * transformersPerMw (0.00182 * 0.2)
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (MW per accelerator × powerChain.transformersPerMw (grid share))
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 92,  // Large power transformers available to AI DCs: supports ~30 GW IT/yr in 2026 (global ~25-35 per Wood Mackenzie deficits, 128-210 wk lead times) at 2.5 LPT per 100 MW facility ÷ 0.85
@@ -1179,15 +1138,13 @@ const NODES_BASE = [
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
 
-    // Parallelism constraint: ~3,500 skilled LPT winding technicians globally;
-    // training pipeline adds ~5-8% workforce/yr. Capital is not the bottleneck.
     // Growth: demand-driven; ceiling = AI share of industry output (SHARED_SUPPLY_POOLS.industry)
 
     baseRate: {
-      value: 250,
+      value: 92,
       confidence: 'medium',
-      source: 'Transformer industry output estimates',
-      historicalRange: [150, 400]
+      source: 'Large power transformers available to AI DCs: supports ~30 GW IT/yr in 2026 (global ~25-35 per Wood Mackenzie deficits, 128-210 wk lead times) at 2.5 LPT per 100 MW facility ÷ 0.85',
+      historicalRange: [74, 400]
     }
   },
 
@@ -1199,13 +1156,11 @@ const NODES_BASE = [
     description: 'Contracted incremental generation for new loads',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.00182,  // mwPerGpu (1:1 with datacenter MW demand)
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (MW per accelerator (grid share))
     parentNodeIds: ['datacenter_mw'],
 
-    startingCapacity: 8000,
-    committedExpansions: [
-      { date: '2026-01', capacityAdd: 2000, type: 'optional' }
-    ],
+    startingCapacity: 10000,  // includes expansions completed by the model start
+    committedExpansions: [],
     leadTimeDebottleneck: 24,
     leadTimeNewBuild: 36,
     rampProfile: 's-curve',
@@ -1227,12 +1182,12 @@ const NODES_BASE = [
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
 
-    // Parallelism constraint: permitting + environmental review for new generation
-    // sites. Labor can be hired; regulatory throughput cannot.
+    // Physical ramp limit: permitting + environmental review for new generation
+    // sites; regulatory throughput cannot be bought.
     maxAnnualExpansion: 0.25,  // PHYSICAL: grid-scale generation build (firm capacity additions)
 
     baseRate: {
-      value: 8000,
+      value: 10000,
       confidence: 'medium',
       source: 'PPA market estimates for large loads',
       historicalRange: [4000, 12000]
@@ -1247,13 +1202,11 @@ const NODES_BASE = [
     description: 'Generators, UPS, batteries for redundancy',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.00273,  // mwPerGpu * redundancyFactor (0.00182 * 1.5)
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (MW per accelerator × powerChain.redundancyFactor)
     parentNodeIds: ['datacenter_mw'],
 
-    startingCapacity: 10000,
-    committedExpansions: [
-      { date: '2026-01', capacityAdd: 2000, type: 'optional' }
-    ],
+    startingCapacity: 12000,  // includes expansions completed by the model start
+    committedExpansions: [],
     leadTimeDebottleneck: 9,
     leadTimeNewBuild: 24,
     rampProfile: 'linear',
@@ -1276,7 +1229,7 @@ const NODES_BASE = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 10000,
+      value: 12000,
       confidence: 'medium',
       source: 'UPS/generator market estimates',
       historicalRange: [6000, 15000]
@@ -1287,11 +1240,11 @@ const NODES_BASE = [
     id: 'dc_construction',
     name: 'DC Construction Labor',
     group: 'I',
-    unit: 'worker-months',
+    unit: 'worker-months/month',
     description: 'Skilled labor availability for DC buildouts',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.728,  // mwPerGpu * 400 worker-months per MW
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (MW per accelerator × serverToInfra.workerMonthsPerMw)
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 590000,  // Worker-months/month for DC construction: supports ~45 GW IT/yr in 2026 (not yet binding) at ~100 worker-months per MW facility (Abilene ~6.4k workers for 1.2 GW; ~80-150k per GW IT)
@@ -1317,15 +1270,12 @@ const NODES_BASE = [
     geoRiskFlag: false,
     exportControlSensitivity: 'low',
 
-    // Parallelism constraint: skilled electrical/mechanical trades labor pool.
-    // Apprenticeship pipeline grows ~5%/yr; poaching from other sectors adds ~3%.
-    // Growth: demand-driven; ceiling = AI share of industry output (SHARED_SUPPLY_POOLS.industry)
 
     baseRate: {
-      value: 5000000,
+      value: 590000,
       confidence: 'low',
-      source: 'Labor market proxy; do not gate GPUs directly until infra chain is wired',
-      historicalRange: [3000000, 8000000]
+      source: 'Worker-months/month for DC construction: supports ~45 GW IT/yr in 2026 (not yet binding) at ~100 worker-months per MW facility (Abilene ~6.4k workers for 1.2 GW; ~80-150k per GW IT)',
+      historicalRange: [472000, 8000000]
     }
   },
 
@@ -1333,11 +1283,11 @@ const NODES_BASE = [
     id: 'dc_ops_staff',
     name: 'Data Center Operations Staff',
     group: 'I',
-    unit: 'FTEs',
+    unit: 'FTEs/month',
     description: 'Ops staffing for running/maintaining data centers',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.01456,  // mwPerGpu * 8 FTEs per MW
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (MW per accelerator × serverToInfra.ftesPerMw)
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 50000,
@@ -1366,7 +1316,7 @@ const NODES_BASE = [
     baseRate: {
       value: 50000,
       confidence: 'low',
-      source: 'Staffing proxy; do not gate GPUs directly until infra chain is wired',
+      source: 'Staffing proxy (gates net fleet growth)',
       historicalRange: [20000, 120000]
     }
   },
@@ -1383,7 +1333,7 @@ const NODES_BASE = [
     description: 'Behind-the-meter generation: gas turbines (18mo), solar+storage (12-18mo), SMRs (36-60mo). Bypasses grid interconnect queue.',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.00182,
+    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (MW per accelerator (on-site share of power hookups))
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 175,  // BTM on-site generation ~1.5 GW IT/yr in 2026 (Cleanview: ~2 → ~3 GW operating in the US) ≈ 1.9 GW facility/yr ÷ 0.90
@@ -1403,10 +1353,8 @@ const NODES_BASE = [
     inventoryBufferTarget: 0,
     maxCapacityUtilization: 0.90,
 
-    // Parallelism constraint: turbine/panel manufacturing + EPC crew availability.
-    // Gas turbines are factory-built (GE/Siemens can ramp production lines).
-    // Solar panels are commodity. Main bottleneck is EPC labor for installation.
-    // Growth: demand-driven; ceiling = AI share of industry output (SHARED_SUPPLY_POOLS.industry)
+    // Gas turbines are factory-built (GE Vernova, Siemens, MHI slots sold out to
+    // ~2028); engines and fuel cells fill in. Growth: demand-driven; ceiling = AI share of industry output (SHARED_SUPPLY_POOLS.industry)
 
     yieldModel: 'simple',
     yieldSimpleLoss: 0.05,
@@ -1415,10 +1363,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 1000,
+      value: 175,
       confidence: 'medium',
-      source: 'Epoch AI analysis; behind-the-meter gas/solar/SMR pipeline estimates. Gas turbines deploy in <2yr.',
-      historicalRange: [200, 3000]
+      source: 'BTM on-site generation ~1.5 GW IT/yr in 2026 (Cleanview: ~2 → ~3 GW operating in the US) ≈ 1.9 GW facility/yr ÷ 0.90',
+      historicalRange: [140, 3000]
     }
   }
 ];
@@ -1430,9 +1378,6 @@ export const NODES = (nodesOverrides?.nodes)
 
 // Export update log / metadata
 export const ASSUMPTION_UPDATE_LOG = nodesOverrides?.updateLog || [];
-export const NODE_METADATA = {
-  asOfMonth: CURRENT_AS_OF_MONTH
-};
 
 // Get node by ID
 export function getNode(nodeId) {
@@ -1444,17 +1389,3 @@ export function getNodesByGroup(groupId) {
   return NODES.filter(n => n.group === groupId);
 }
 
-// Get all parent nodes for a given node
-export function getParentNodes(nodeId) {
-  const node = getNode(nodeId);
-  if (!node) return [];
-  return node.parentNodeIds.map(pid => getNode(pid)).filter(Boolean);
-}
-
-// Get all child nodes that depend on a given node
-export function getChildNodes(nodeId) {
-  return NODES.filter(n => n.parentNodeIds.includes(nodeId));
-}
-
-// Export node count for validation
-export const NODE_COUNT = NODES.length;

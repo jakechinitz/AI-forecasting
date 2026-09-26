@@ -54,6 +54,12 @@ function Header({ stats, scenario, isSimulating }) {
               </span>
               <span className="header-stat-label">CoWoS</span>
             </div>
+            <div className="header-stat" title="Constraint that set deployments in the most months">
+              <span className="header-stat-value" style={{ color: 'var(--text-primary)' }}>
+                {stats.bindingConstraint}
+              </span>
+              <span className="header-stat-label">Binds</span>
+            </div>
             <div className="header-stat">
               <span className="header-stat-value" style={{ color: 'var(--status-tight)' }}>
                 {stats.shortages}

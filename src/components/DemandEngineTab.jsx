@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { formatMonth, formatNumber } from '../engine/calculations.js';
+import { formatMonth, formatNumber, softEfficiencyCap } from '../engine/calculations.js';
 import { GLOBAL_PARAMS, ASSUMPTION_SEGMENTS, TRANSLATION_INTENSITIES, getBlockKeyForMonth } from '../data/assumptions.js';
 
 const BRAIN = GLOBAL_PARAMS.brainEquivalency;
@@ -13,22 +13,18 @@ const WORLD_POPULATION = 8.2e9; // ~8.2 billion humans (2026)
 const BLOCK_YEARS = [1, 1, 1, 1, 1, 5, 5, 5];
 
 /**
- * Compute watts-per-brain-equivalent at a given month based on efficiency assumptions.
- * Uses block-chained compounding of total efficiency gain, capped at
- * 5× brain efficiency (30W brain / 5 = 6W per brain-equiv).
+ * Watts per brain-equivalent at a given month: block-chained compounding of
+ * the combined efficiency gain, with the same soft knee as the Assumptions
+ * tab (60× brain efficiency = 0.5 W per brain-equiv; logarithmic diminishing
+ * returns above it), floored at minWattsPerBrainEquiv.
  */
 function computeBrainEquivAtMonth(month, efficiencyAssumptions) {
   if (!efficiencyAssumptions) return BRAIN.startingWattsPerBrainEquiv;
 
-  // Compute cumulative efficiency gain month-by-month
-  let cumGain = 1.0;
-  // Cap: AI can be at most maxEfficiencyVsBrain× more efficient than the human brain.
-  // At 5× efficiency, AI does brain-equivalent work at 30W / 5 = 6W.
-  const maxGain = BRAIN.startingWattsPerBrainEquiv / BRAIN.minWattsPerBrainEquiv;
+  let rawGain = 1.0;
+  const kneeGain = BRAIN.startingWattsPerBrainEquiv / BRAIN.minWattsPerBrainEquiv;
 
   for (let m = 1; m <= month; m++) {
-    if (cumGain >= maxGain) break;
-
     const blockKey = getBlockKeyForMonth(m);
     const block = efficiencyAssumptions?.[blockKey];
 
@@ -39,18 +35,16 @@ function computeBrainEquivAtMonth(month, efficiencyAssumptions) {
     const mTrn = block?.modelEfficiency?.m_training?.value ?? 0;
     const sTrn = block?.systemsEfficiency?.s_training?.value ?? 0;
 
-    // Annual gains for inference (includes h_memory) and training
+    // Annual gains; one fleet hardware index (H × H_memory) serves all work
     const infFactor = (1 - mInf) / ((1 + sInf) * (1 + h) * (1 + hMem));
-    const trnFactor = (1 - mTrn) / ((1 + sTrn) * (1 + h));
+    const trnFactor = (1 - mTrn) / ((1 + sTrn) * (1 + h) * (1 + hMem));
     const totalAnnualGain = Math.sqrt((1 / infFactor) * (1 / trnFactor));
 
-    // Monthly compound
-    const monthlyGain = Math.pow(totalAnnualGain, 1 / 12);
-    cumGain *= monthlyGain;
+    rawGain *= Math.pow(totalAnnualGain, 1 / 12);
   }
 
-  cumGain = Math.min(cumGain, maxGain);
-  return Math.max(BRAIN.startingWattsPerBrainEquiv / cumGain, BRAIN.minWattsPerBrainEquiv);
+  const gain = softEfficiencyCap(rawGain, kneeGain);
+  return Math.max(BRAIN.startingWattsPerBrainEquiv / gain, BRAIN.minWattsPerBrainEquiv);
 }
 
 function DemandEngineTab({ results, assumptions }) {
@@ -196,13 +190,13 @@ function DemandEngineTab({ results, assumptions }) {
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{formatNumber(summaryMetrics.currentInference)}</span>
-                <span className="metric-label">Current Inference (tokens/mo)</span>
+                <span className="metric-label">{formatMonth(12)} Inference (tokens/mo)</span>
               </div>
             </div>
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{formatNumber(summaryMetrics.future5yInference)}</span>
-                <span className="metric-label">5-Year Inference (tokens/mo)</span>
+                <span className="metric-label">{formatMonth(60)} Inference (tokens/mo)</span>
                 <span className="metric-change positive">
                   +{summaryMetrics.inferenceGrowth5y.toFixed(0)}%
                 </span>
@@ -211,13 +205,13 @@ function DemandEngineTab({ results, assumptions }) {
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{formatNumber(summaryMetrics.currentGpu)}</span>
-                <span className="metric-label">Current Required GPU Base</span>
+                <span className="metric-label">{formatMonth(12)} Required GPU Base</span>
               </div>
             </div>
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{formatNumber(summaryMetrics.future5yGpu)}</span>
-                <span className="metric-label">5-Year Required GPU Base</span>
+                <span className="metric-label">{formatMonth(60)} Required GPU Base</span>
               </div>
             </div>
           </div>
@@ -225,25 +219,25 @@ function DemandEngineTab({ results, assumptions }) {
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{summaryMetrics.currentPowerGW.toFixed(1)} GW</span>
-                <span className="metric-label">Current AI Power Draw</span>
+                <span className="metric-label">{formatMonth(12)} AI Power Draw</span>
               </div>
             </div>
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{summaryMetrics.future5yPowerGW.toFixed(1)} GW</span>
-                <span className="metric-label">5-Year AI Power Draw</span>
+                <span className="metric-label">{formatMonth(60)} AI Power Draw</span>
               </div>
             </div>
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{formatNumber(summaryMetrics.currentBrainEquiv)}</span>
-                <span className="metric-label">Current Human Brain Equiv.</span>
+                <span className="metric-label">{formatMonth(12)} Human Brain Equiv.</span>
               </div>
             </div>
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{formatNumber(summaryMetrics.future5yBrainEquiv)}</span>
-                <span className="metric-label">5-Year Human Brain Equiv.</span>
+                <span className="metric-label">{formatMonth(60)} Human Brain Equiv.</span>
               </div>
             </div>
           </div>
@@ -251,13 +245,13 @@ function DemandEngineTab({ results, assumptions }) {
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{summaryMetrics.currentAisPerHuman?.toFixed(4)}</span>
-                <span className="metric-label">Current AIs per Human</span>
+                <span className="metric-label">{formatMonth(12)} AIs per Human</span>
               </div>
             </div>
             <div className="card">
               <div className="metric">
                 <span className="metric-value">{summaryMetrics.future5yAisPerHuman?.toFixed(2)}</span>
-                <span className="metric-label">5-Year AIs per Human</span>
+                <span className="metric-label">{formatMonth(60)} AIs per Human</span>
               </div>
             </div>
             <div className="card" style={{ gridColumn: 'span 2' }}>
@@ -472,7 +466,7 @@ function DemandEngineTab({ results, assumptions }) {
               borderRadius: 'var(--radius-sm)',
               marginTop: 'var(--space-xs)'
             }}>
-              GPUs = Tokens / (tok/s/GPU x seconds/month x EfficiencyGain)
+              Eff. accelerators = DC tokens (after edge) / (tok/s x s/month x S<sub>t</sub> / M<sub>t</sub>); hardware gains credited per new vintage
             </div>
           </div>
           <div style={{ marginBottom: 'var(--space-md)' }}>

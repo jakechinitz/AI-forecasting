@@ -246,6 +246,7 @@ function App() {
             selectedScenario={selectedScenario}
             onSelectScenario={setSelectedScenario}
             results={simulationResults}
+            assumptions={customAssumptions}
           />
         );
       case 'funding':
@@ -285,7 +286,6 @@ function App() {
 
     const shortages = simulationResults.summary.shortages.length;
     const gluts = simulationResults.summary.gluts.length;
-    const topBottleneck = simulationResults.summary.bottlenecks[0];
 
     // Get current month data (month 12 = 1 year out)
     const currentMonth = 12;
@@ -296,7 +296,7 @@ function App() {
     return {
       shortages,
       gluts,
-      topBottleneck: topBottleneck?.nodeName || 'None',
+      bindingConstraint: (simulationResults.summary.primaryConstraint || '-').replace(/^Components: /, ''),
       gpuTightness: gpuData?.tightness[currentMonth]?.toFixed(2) || '-',
       hbmTightness: hbmData?.tightness[currentMonth]?.toFixed(2) || '-',
       cowosTightness: cowosData?.tightness[currentMonth]?.toFixed(2) || '-'

@@ -23,9 +23,23 @@ const fmt = {
 
 const growth = (rows, key) => rows.map((r, i) => (i === 0 || !rows[i - 1][key] ? null : r[key] / rows[i - 1][key] - 1));
 
-function buildSheet(annual, tiers, tierMeta) {
+// Year-average of a monthly series, aligned to the annual rows
+const yearAverages = (series, annual) => annual.map((_, i) => {
+  const vals = (series || []).slice(i * 12, i * 12 + 12).filter((v) => Number.isFinite(v));
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+});
+
+// Gates in reading order: demand, capital, chips, then components by name
+const GATE_ORDER = ['Plan (demand)', 'Funding', 'GPU supply (fab + inventory)'];
+
+function buildSheet(annual, tiers, tierMeta, gates) {
   const col = (key) => annual.map((r) => r[key]);
   const tierCol = (id, key) => (tiers[id] || []).map((r) => r[key]);
+  const gateNames = Object.keys(gates || {}).sort((a, b) => {
+    const ia = GATE_ORDER.indexOf(a); const ib = GATE_ORDER.indexOf(b);
+    if (ia !== -1 || ib !== -1) return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    return a.localeCompare(b);
+  });
 
   const sections = [
     {
@@ -43,16 +57,23 @@ function buildSheet(annual, tiers, tierMeta) {
         { label: 'Installed GW, year-end', unit: 'GW', values: col('installedGW'), f: fmt.gw, bold: true },
         { label: 'Unmet demand (required − installed)', unit: 'GW', values: col('unmetGW'), f: fmt.gw },
         { label: 'Scarcity ratio (unmet ÷ installed)', unit: 'x', values: col('scarcityRatio'), f: fmt.num2 },
-        { label: 'GW lost to funding constraint', unit: 'GW', values: col('lostToFundingGW'), f: fmt.gw, highlight: true },
+        { label: 'Build deferred by funding (sum of monthly shortfalls)', unit: 'GW', values: col('deferredByFundingGW'), f: fmt.gw, highlight: true },
         { label: 'Binding constraint (most months)', unit: '', values: col('bindingConstraint'), f: fmt.text },
         { label: 'Build growth', unit: '%', values: col('buildGrowth'), f: fmt.pct }
       ]
     },
     {
+      title: 'Build capacity by gate (GW/yr each could support, year average)',
+      rows: gateNames.map((name) => ({
+        label: name, unit: 'GW/yr', values: yearAverages(gates[name], annual), f: fmt.gw,
+        bold: name === 'Funding'
+      }))
+    },
+    {
       title: 'Energy and edge AI',
       rows: [
         { label: 'Share of inference tokens served at the edge (phones, PCs, Macs, self-hosted)', unit: '%', values: col('edgeTokenShare'), f: fmt.pct1 },
-        { label: 'Datacenter capacity avoided by edge (if run in DCs)', unit: 'GW', values: col('edgeEquivGW'), f: fmt.gw },
+        { label: 'Installed edge compute, datacenter-equivalent', unit: 'GW', values: col('edgeEquivGW'), f: fmt.gw },
         { label: 'Datacenter AI power (average draw, incl. cooling)', unit: 'GW', values: col('dcPowerGW'), f: fmt.gw },
         { label: 'Edge AI power (average draw)', unit: 'GW', values: col('edgePowerGW'), f: fmt.gw },
         { label: 'Total AI power (average draw)', unit: 'GW', values: col('totalAiPowerGW'), f: fmt.gw, bold: true },
@@ -96,20 +117,22 @@ function buildSheet(annual, tiers, tierMeta) {
         { label: 'Replacement capex (compute share)', unit: '$B', values: col('replacementCapex'), f: fmt.usd },
         { label: 'TOTAL AI capex', unit: '$B', values: col('totalCapex'), f: fmt.usd, bold: true },
         { label: 'Capex growth', unit: '%', values: growth(annual, 'totalCapex'), f: fmt.pct },
-        { label: 'Capex per GW energized in-year', unit: '$B/GW', values: col('capexPerGwEnergized'), f: fmt.usd1 }
+        { label: 'Capex per GW deployed (new + replacement)', unit: '$B/GW', values: col('capexPerGwDeployed'), f: fmt.usd1 }
       ]
     },
     {
       title: 'Funding (all tiers)',
       rows: [
         { label: 'Max fundable capex (start of year)', unit: '$B', values: col('fundableCapex'), f: fmt.usd },
+        { label: 'Capex above fundable (gate off only)', unit: '$B', values: col('capexAboveFundable'), f: fmt.usd },
         { label: 'Total OCF (legacy + AI − interest)', unit: '$B', values: col('totalOcf'), f: fmt.usd },
         { label: 'Shareholder returns', unit: '$B', values: col('shareholderReturns'), f: fmt.usd },
         { label: 'Cash interest', unit: '$B', values: col('interest'), f: fmt.usd },
         { label: 'Cash drawdown', unit: '$B', values: col('cashDrawdown'), f: fmt.usd },
         { label: 'Debt raised', unit: '$B', values: col('debtRaised'), f: fmt.usd, bold: true },
         { label: 'Equity raised', unit: '$B', values: col('equityRaised'), f: fmt.usd },
-        { label: 'SHORTFALL (unfunded capex)', unit: '$B', values: col('shortfall'), f: fmt.usd, highlight: true },
+        { label: 'UNFUNDED CAPEX (charged to cash)', unit: '$B', values: col('unfundedCapex'), f: fmt.usd, highlight: true },
+        { label: 'Operating cash deficit (OCF below returns + interest)', unit: '$B', values: col('operatingDeficit'), f: fmt.usd },
         { label: 'Gross debt, year-end', unit: '$B', values: col('grossDebt'), f: fmt.usd },
         { label: 'Cash, year-end', unit: '$B', values: col('cash'), f: fmt.usd },
         { label: 'Debt raised as % of capex', unit: '%', values: col('debtShareOfCapex'), f: fmt.pct },
@@ -129,7 +152,10 @@ function buildSheet(annual, tiers, tierMeta) {
         { label: 'OCF (legacy + AI − interest)', unit: '$B', values: tierCol(t.id, 'ocf'), f: fmt.usd },
         { label: 'Debt raised', unit: '$B', values: tierCol(t.id, 'debtRaised'), f: fmt.usd },
         { label: 'Equity raised', unit: '$B', values: tierCol(t.id, 'equityRaised'), f: fmt.usd },
-        { label: 'Shortfall', unit: '$B', values: tierCol(t.id, 'shortfall'), f: fmt.usd, highlight: true },
+        { label: 'Unfunded capex', unit: '$B', values: tierCol(t.id, 'unfundedCapex'), f: fmt.usd, highlight: true },
+        { label: 'Operating cash deficit', unit: '$B', values: tierCol(t.id, 'operatingDeficit'), f: fmt.usd },
+        { label: 'Gross debt, year-end', unit: '$B', values: tierCol(t.id, 'grossDebt'), f: fmt.usd },
+        { label: 'Cash, year-end', unit: '$B', values: tierCol(t.id, 'cash'), f: fmt.usd },
         { label: 'Gross debt / EBITDA', unit: 'x', values: tierCol(t.id, 'debtToEbitda'), f: fmt.x },
         { label: 'Funding governor', unit: '', values: tierCol(t.id, 'governor'), f: fmt.text },
         { label: 'Marginal dollar source', unit: '', values: tierCol(t.id, 'marginalSource'), f: fmt.text }
@@ -147,8 +173,9 @@ function toCsv(years, sections) {
   const lines = [['Section', 'Line item', 'Unit', ...years].map(esc).join(',')];
   sections.forEach((sec) => {
     sec.rows.forEach((row) => {
+      const pct = row.unit === '%';
       const vals = row.values.map((v) => {
-        if (typeof v === 'number') return Number.isFinite(v) ? +v.toFixed(4) : '';
+        if (typeof v === 'number') return Number.isFinite(v) ? +(pct ? v * 100 : v).toFixed(4) : '';
         if (typeof v === 'boolean') return v ? 1 : 0;
         return v ?? '';
       });
@@ -164,8 +191,8 @@ function OutputsTab({ results, scenario }) {
   const fin = results?.financing;
 
   const sections = useMemo(
-    () => (fin ? buildSheet(annual, fin.tiers, fin.tierMeta) : []),
-    [annual, fin]
+    () => (fin ? buildSheet(annual, fin.tiers, fin.tierMeta, results?.gates) : []),
+    [annual, fin, results]
   );
 
   if (!fin || !annual.length) {
@@ -203,7 +230,7 @@ function OutputsTab({ results, scenario }) {
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-sm)', alignItems: 'center', flexWrap: 'wrap' }}>
           <div className="sheet-toggle" role="group" aria-label="Year range">
-            {[['7', '2026–32'], ['10', '10 yrs'], ['all', 'All 20']].map(([v, label]) => (
+            {[['7', `${allYears[0]}–${allYears[0] + 6}`], ['10', '10 yrs'], ['all', `All ${allYears.length}`]].map(([v, label]) => (
               <button
                 key={v}
                 className={`btn btn-sm ${range === v ? 'btn-primary' : 'btn-secondary'}`}
@@ -266,7 +293,10 @@ function OutputsTab({ results, scenario }) {
       <p className="section-description" style={{ marginTop: 'var(--space-md)' }}>
         Conventions follow the Excel funding model: AI revenue is earned on the opening fleet, the scarcity premium uses the prior
         year&apos;s unmet-demand ratio, and fundable capex depends only on opening balances. Two fixes: revenue is capped at demand,
-        and any shortfall is charged to cash rather than disappearing.
+        and any shortfall is charged to cash (negative cash pays interest) rather than disappearing. Unfunded capex stays at zero
+        while the funding gate is on; an operating deficit is cash owed beyond operating cash flow even with no capex.
+        Build deferred by funding sums each month&apos;s demanded, physically possible but unfunded deployments; that demand carries
+        into later months, so it measures deferral, not permanent loss. In the CSV, % rows are in percent.
       </p>
     </div>
   );
