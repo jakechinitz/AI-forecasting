@@ -1079,3 +1079,228 @@
     white-space: nowrap;
   }
 }
+
+/* ============================================
+   Model Outputs sheet (Excel-style)
+   ============================================ */
+.sheet-toggle {
+  display: inline-flex;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+}
+
+.sheet-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md) var(--space-lg);
+  margin-bottom: var(--space-md);
+  font-size: 0.8125rem;
+}
+
+.sheet-summary > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.sheet-summary-label {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.sheet-wrap {
+  overflow: auto;
+  max-height: 75vh;
+  border: 1px solid var(--bg-elevated);
+  border-radius: var(--radius-md, 8px);
+}
+
+.sheet {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  width: max-content;
+  min-width: 100%;
+}
+
+.sheet th,
+.sheet td {
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--bg-tertiary);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.sheet thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-elevated);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.sheet .sheet-label {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-primary);
+  text-align: left;
+  min-width: 280px;
+  max-width: 340px;
+  white-space: normal;
+  border-right: 1px solid var(--bg-elevated);
+}
+
+.sheet thead .sheet-label {
+  z-index: 3;
+  background: var(--bg-elevated);
+}
+
+.sheet .sheet-unit {
+  text-align: left;
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+}
+
+.sheet-section td {
+  background: var(--bg-tertiary);
+  font-weight: 700;
+  color: var(--text-primary);
+  text-align: left;
+  padding-top: 8px;
+}
+
+.sheet-section .sheet-label {
+  background: var(--bg-tertiary);
+}
+
+.sheet-bold td {
+  font-weight: 600;
+}
+
+.sheet-highlight td:not(.sheet-label):not(.sheet-unit) {
+  color: var(--accent-danger);
+}
+
+.sheet .sheet-text {
+  text-align: right;
+  font-size: 0.6875rem;
+  white-space: normal;
+  max-width: 96px;
+  line-height: 1.25;
+}
+
+.sheet .sheet-neg {
+  color: var(--accent-danger);
+}
+
+.sheet tbody tr:hover td {
+  background: rgba(29, 155, 240, 0.06);
+}
+
+/* ============================================
+   Capital & Funding tab
+   ============================================ */
+.fin-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fin-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.fin-kpi {
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md, 8px);
+  padding: var(--space-md);
+}
+
+.fin-kpi-label {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.fin-kpi-value {
+  font-size: 1.375rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+.fin-kpi-sub {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.fin-table-scroll {
+  overflow-x: auto;
+}
+
+.fin-table {
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  width: 100%;
+}
+
+.fin-table th,
+.fin-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--bg-tertiary);
+  text-align: left;
+  vertical-align: top;
+}
+
+.fin-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.fin-table--paths td:first-child {
+  white-space: nowrap;
+}
+
+.fin-input {
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 4px;
+  border: 1px solid var(--bg-elevated);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.fin-input:focus {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -1px;
+}
+
+.fin-help {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.fin-muted {
+  color: var(--text-muted);
+}
+
+.fin-warning {
+  color: var(--accent-danger);
+  font-size: 0.75rem;
+  margin: 0 0 var(--space-sm);
+}
