@@ -687,12 +687,12 @@ export const TRANSLATION_INTENSITIES = {
     // Opening-fleet IT kW per accelerator. New vintages grow via hardwareEfficiency.kw_growth.
     kwPerGpu: { value: FLEET_ANCHOR.kwPerAccelerator, confidence: 'medium', source: 'Fleet blend: HGX H100 ~1.3 kW, GB200 NVL72 ~1.7 kW per GPU incl. CPU/network; TPU/Trainium lower' },
     pue: { value: 1.3, confidence: 'high', source: 'Hyperscaler PUE' },
-    workerMonthsPerMw: { value: 400, confidence: 'low', source: 'DC construction labor intensity per MW (electricians, mechanical trades)' },
+    workerMonthsPerMw: { value: 100, confidence: 'medium', source: '~80-150k worker-months per GW IT (Abilene ~6.4k workers, 1.2 GW facility, ~2 yrs; ~12k MEP field hours/MW)' },
     ftesPerMw: { value: 8, confidence: 'low', source: 'Ongoing ops staffing per MW (technicians, security, NOC)' }
   },
 
   powerChain: {
-    transformersPerMw: { value: 0.2, confidence: 'low', source: 'Electrical-equipment lineups per MW (LPT + MV transformers + switchgear), calibrated so 2026 supply ≈ Excel electrical-equipment cap (~11.5 GW/yr IT)' },
+    transformersPerMw: { value: 0.025, confidence: 'medium', source: '~2-3 large power transformers per 100 MW facility with N+1 (CloudHQ 225 MW used 4×100 MVA; ~1.8 MVA/MW)' },
     redundancyFactor: { value: 1.5, confidence: 'high' }
   },
 

@@ -1100,12 +1100,8 @@ const NODES_BASE = [
     inputIntensity: 0.00182,  // kwPerGpu(1.4) * pue(1.3) / 1000 = MW per accelerator (engine scales with kW growth)
     parentNodeIds: ['gpu_datacenter', 'gpu_inference', 'grid_interconnect', 'off_grid_power'],
 
-    startingCapacity: 1500,     // ~1.5 GW/month of new AI DC power coming online
-    committedExpansions: [
-      { date: '2026-06', capacityAdd: 500, type: 'committed' },
-      { date: '2027-01', capacityAdd: 500, type: 'committed' },
-      { date: '2027-06', capacityAdd: 400, type: 'optional' }
-    ],
+    startingCapacity: 3680,  // Facility construction ~25-35 GW IT/yr globally in 2026 (JLL, SemiAnalysis 22 GW US under vertical construction for 2027) → ~30 GW IT ≈ 37.5 GW facility/yr ÷ 0.85
+    committedExpansions: [],
     leadTimeDebottleneck: 24,
     leadTimeNewBuild: 48,
     rampProfile: 's-curve',
@@ -1133,6 +1129,7 @@ const NODES_BASE = [
     // or accelerate utility permitting. Historical DC capacity grew ~25-30%/yr peak.
     // Raised to 100% to allow aggressive buildout scenarios (modular DC, off-grid, etc.)
     maxAnnualExpansion: 0.35,  // Shell construction scales with contractor capacity and permitting
+    maxAnnualExpansionSchedule: [{ until: 2027, cap: 0.6 }, { until: 2032, cap: 0.28 }, { until: 2045, cap: 0.1 }],  // One-off +50-80% in 2027 (already under construction), then 20-30%/yr to 2032, ~10%/yr after
 
     baseRate: {
       value: 1500,
@@ -1156,7 +1153,7 @@ const NODES_BASE = [
     inputIntensity: 0.00182,  // MW per accelerator (same as datacenter_mw)
     parentNodeIds: ['datacenter_mw'],
 
-    startingCapacity: 920,  // Excel model 2026: US grid 4.5 + ex-US 4 GW/yr IT ≈ 11 GW/yr facility (was 2500)
+    startingCapacity: 2350,  // Grid-connected AI-DC energization ~15-22 GW IT/yr globally in 2026 (US ~8-12; FERC, Goldman, SemiAnalysis) → ~18 GW IT ≈ 22.5 GW facility/yr ÷ 0.80 availability
     committedExpansions: [],
     leadTimeDebottleneck: 36,
     leadTimeNewBuild: 60,
@@ -1183,6 +1180,7 @@ const NODES_BASE = [
     // Parallelism constraint: regulatory permitting throughput, not capital.
     // Utility commissions process a finite number of interconnection studies per year.
     maxAnnualExpansion: 0.2,  // Excel model: US grid 4.5→12 GW/yr and ex-US 4→13 GW/yr over 2026-2032 (~20%/yr)
+    maxAnnualExpansionSchedule: [{ until: 2032, cap: 0.2 }, { until: 2045, cap: 0.1 }],  // Utility capex +17%/yr, 2-4 yr transformer/transmission lead times; 15-25%/yr to 2030-32, ~10%/yr after (tied to firm generation build)
 
     baseRate: {
       value: 2500,
@@ -1203,11 +1201,8 @@ const NODES_BASE = [
     inputIntensity: 0.000364,  // mwPerGpu * transformersPerMw (0.00182 * 0.2)
     parentNodeIds: ['datacenter_mw'],
 
-    startingCapacity: 250,
-    committedExpansions: [
-      { date: '2026-06', capacityAdd: 50, type: 'committed' },
-      { date: '2027-06', capacityAdd: 50, type: 'optional' }
-    ],
+    startingCapacity: 92,  // Large power transformers available to AI DCs: supports ~30 GW IT/yr in 2026 (global ~25-35 per Wood Mackenzie deficits, 128-210 wk lead times) at 2.5 LPT per 100 MW facility ÷ 0.85
+    committedExpansions: [],
     leadTimeDebottleneck: 24,
     leadTimeNewBuild: 60,
     rampProfile: 'linear',
@@ -1232,6 +1227,7 @@ const NODES_BASE = [
     // Parallelism constraint: ~3,500 skilled LPT winding technicians globally;
     // training pipeline adds ~5-8% workforce/yr. Capital is not the bottleneck.
     maxAnnualExpansion: 0.2,  // Excel model: electrical equipment 7.5→22 GW/yr over 2026-2032 (~20%/yr)
+    maxAnnualExpansionSchedule: [{ until: 2028, cap: 0.15 }, { until: 2032, cap: 0.2 }, { until: 2045, cap: 0.1 }],  // LPT plants take 2-3 yrs (Hitachi, Siemens expansions land 2027-28): ~15%/yr, ~20% as new plants open, then ~10%
 
     baseRate: {
       value: 250,
@@ -1344,7 +1340,7 @@ const NODES_BASE = [
     inputIntensity: 0.728,  // mwPerGpu * 400 worker-months per MW
     parentNodeIds: ['datacenter_mw'],
 
-    startingCapacity: 600000,  // Excel model 2026: labor/permitting ~13 GW/yr IT (US 9 + ex-US 4) (was 5000000)
+    startingCapacity: 590000,  // Worker-months/month for DC construction: supports ~45 GW IT/yr in 2026 (not yet binding) at ~100 worker-months per MW facility (Abilene ~6.4k workers for 1.2 GW; ~80-150k per GW IT)
     committedExpansions: [],
     leadTimeDebottleneck: 12,
     leadTimeNewBuild: 36,
@@ -1370,6 +1366,7 @@ const NODES_BASE = [
     // Parallelism constraint: skilled electrical/mechanical trades labor pool.
     // Apprenticeship pipeline grows ~5%/yr; poaching from other sectors adds ~3%.
     maxAnnualExpansion: 0.17,  // Excel model: US labor/permitting 9→24 GW/yr over 2026-2032 (~17%/yr)
+    maxAnnualExpansionSchedule: [{ until: 2032, cap: 0.15 }, { until: 2045, cap: 0.08 }],  // Electricians grow ~1%/yr (BLS) but modular builds cut field hours ~2-3x and non-US labor is more elastic; binding from ~2027 in TX/OH
 
     baseRate: {
       value: 5000000,
@@ -1436,11 +1433,8 @@ const NODES_BASE = [
     inputIntensity: 0.00182,
     parentNodeIds: ['datacenter_mw'],
 
-    startingCapacity: 325,  // Excel model 2026: on-site generation 3 GW/yr IT ≈ 3.9 GW/yr facility (was 1000)
-    committedExpansions: [
-      { date: '2026-06', capacityAdd: 162.5, type: 'committed', source: 'Announced behind-the-meter gas projects (Microsoft/Constellation, Amazon/Talen)' },
-      { date: '2027-01', capacityAdd: 325, type: 'optional', source: 'Pipeline of solar+storage co-location projects' }
-    ],
+    startingCapacity: 175,  // BTM on-site generation ~1.5 GW IT/yr in 2026 (Cleanview: ~2 → ~3 GW operating in the US) ≈ 1.9 GW facility/yr ÷ 0.90
+    committedExpansions: [],
     leadTimeDebottleneck: 12,
     leadTimeNewBuild: 24,
     rampProfile: 's-curve',
@@ -1460,6 +1454,7 @@ const NODES_BASE = [
     // Gas turbines are factory-built (GE/Siemens can ramp production lines).
     // Solar panels are commodity. Main bottleneck is EPC labor for installation.
     maxAnnualExpansion: 0.3,  // Excel model: on-site generation 3→12 GW/yr over 2026-2032 (~26%/yr); large turbines booked through 2028
+    maxAnnualExpansionSchedule: [{ until: 2029, cap: 1.0 }, { until: 2032, cap: 0.25 }, { until: 2045, cap: 0.1 }],  // 75 GW of binding OEM orders; SemiAnalysis 40+ GW BTM by 2028, BTM equipment >50 GW/yr by 2029 → very fast ramp to 2029, then tied to turbine/recip output (~100 GW/yr global by 2030, DCs 30-50%)
 
     yieldModel: 'simple',
     yieldSimpleLoss: 0.05,
