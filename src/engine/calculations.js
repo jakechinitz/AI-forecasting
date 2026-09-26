@@ -996,6 +996,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     fleetTokPerKwhM: [], frontierTokPerKwhM: [], kwPerNewAccelerator: [],
     trainingShare: []
   };
+  // Diagnostic: annualized GW each gate could support, per month
+  results.gates = {};
+  const recordGate = (name, gpus, m, kw) => {
+    if (!results.gates[name]) results.gates[name] = new Array(months).fill(null);
+    results.gates[name][m] = Number.isFinite(gpus) ? gpus * kw / 1e6 * 12 : null;
+  };
   let yearAccum = null;
 
   for (let month = 0; month < months; month++) {
@@ -1249,6 +1255,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
           : intensity;
         let supported = (effectiveIntensity > EPSILON) ? potential / effectiveIntensity : Infinity;
         if (INFRASTRUCTURE_NODES.has(nodeId)) supported += totalRetirements;
+        recordGate(NODE_MAP.get(nodeId)?.name || nodeId, supported, month, kwNew);
         if (supported < maxSupported) { maxSupported = supported; maxSupportedNode = NODE_MAP.get(nodeId)?.name || nodeId; }
         constraintCount++;
       }
@@ -1256,6 +1263,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     for (const [poolName, { potential, intensity }] of Object.entries(pooledPotentials)) {
       // The power_hookup pool is infrastructure: retirements free hookups too.
       const supported = potential / intensity + totalRetirements;
+      recordGate(poolName === 'power_hookup' ? 'Power hookups (grid + on-site)' : poolName, supported, month, kwNew);
       if (supported < maxSupported) { maxSupported = supported; maxSupportedNode = poolName === 'power_hookup' ? 'Power hookups (grid + on-site)' : poolName; }
       constraintCount++;
     }
@@ -1272,6 +1280,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       retiredGW: retiredKW / 1e6
     });
 
+    recordGate('GPU supply (fab + inventory)', gpuAvailable, month, kwNew);
+    recordGate('Plan (demand)', planDeployTotal, month, kwNew);
+    recordGate('Funding', fundingCap, month, kwNew);
     const demandCeiling = planDeployTotal;
     const physicalMax = Math.min(demandCeiling, gpuAvailable, maxSupported);
     const actualDeployTotal = Math.min(physicalMax, fundingCap);
