@@ -413,6 +413,22 @@ export function calculateCapacity(node, month, scenarioOverrides = {}, dynamicEx
   return capacity;
 }
 
+/**
+ * Maximum annual capacity expansion for a node in a given month.
+ * Nodes may define maxAnnualExpansionSchedule: [{ until: <calendar year>, cap }, ...]
+ * (first entry whose `until` ≥ the month's year applies; the last entry holds
+ * after that), or a flat maxAnnualExpansion. Returns null when uncapped.
+ */
+export function getMaxExpansion(node, month) {
+  const sched = node?.maxAnnualExpansionSchedule;
+  if (Array.isArray(sched) && sched.length) {
+    const year = GLOBAL_PARAMS.startYear + Math.floor(((GLOBAL_PARAMS.startMonth || 1) - 1 + month) / 12);
+    for (const step of sched) if (year <= step.until) return step.cap;
+    return sched[sched.length - 1].cap;
+  }
+  return node?.maxAnnualExpansion ?? null;
+}
+
 function applyRampProfile(capacityAdd, monthsSinceExpansion, profile, rampDuration) {
   const t = Math.min(monthsSinceExpansion / rampDuration, 1);
   if (profile === 'step') return capacityAdd;
@@ -989,8 +1005,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     // Cap only if node defines an explicit parallelism constraint
     // (e.g., maxAnnualExpansion: 0.15 for transformers due to skilled labor limits)
-    const cappedRate = node?.maxAnnualExpansion != null
-      ? Math.min(dynamicRate, node.maxAnnualExpansion)
+    const maxExp = getMaxExpansion(node, month);
+    const cappedRate = maxExp != null
+      ? Math.min(dynamicRate, maxExp)
       : dynamicRate;
 
     // Utilization gate: throttle investment when existing capacity is underused.
@@ -1294,6 +1311,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // designs fall back to CoWoS-only packaging (already required for every
       // accelerator). It still reports demand, tightness and expansion signals.
       if (nodeId === 'hybrid_bonding') continue;
+      // EUV scanners are long-lived capital tools, not a per-accelerator
+      // consumable: the installed base sets how many leading-edge wafers can be
+      // made, and deliveries set how fast that grows. EUV therefore limits the
+      // growth of advanced-wafer capacity (its expansion schedule), not each
+      // month's accelerator output.
+      if (nodeId === 'euv_tools') continue;
       const pool = SUBSTITUTION_POOLS[nodeId];
       if (pool) {
         if (!pooledPotentials[pool]) pooledPotentials[pool] = { potential: 0, intensity };
@@ -1612,15 +1635,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         if (forecastDemand > futureEffCap) {
           const gap = forecastDemand - futureEffCap;
           // Dynamic expansion: uncapped unless node defines a parallelism limit
-          const maxDynamic = node.maxAnnualExpansion != null
-            ? cap * (node.maxAnnualExpansion / 12)
+          const maxDynamic = getMaxExpansion(node, month) != null
+            ? cap * (getMaxExpansion(node, month) / 12)
             : cap * 1.0;
           const expansionAmount = Math.min(gap * 0.5, maxDynamic);
           // Floor at 5% of capacity for uncapped nodes (keeps progress on shortages);
           // for capped nodes, never exceed the monthly parallelism cap — otherwise
           // the floor would silently bypass maxAnnualExpansion (e.g., grid_interconnect
           // at 10%/yr would still gain 5% per trigger, ~33%/yr effective).
-          const expansionFloor = node.maxAnnualExpansion != null
+          const expansionFloor = getMaxExpansion(node, month) != null
             ? Math.min(cap * 0.05, maxDynamic)
             : cap * 0.05;
           state.dynamicExpansions.push({
