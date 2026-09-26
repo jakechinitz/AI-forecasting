@@ -1077,7 +1077,18 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     for (const step of sched) if (year <= step.until) return step.growth;
     return sched.length ? sched[sched.length - 1].growth : 0.15;
   };
-  results.pools = { aiWaferCeiling: [], aiMemoryCeilingGb: [], leadingEdgeScale: [], memoryScale: [], euvLogicInstalled: [] };
+  results.pools = { aiWaferCeiling: [], aiMemoryCeilingGb: [], leadingEdgeScale: [], memoryScale: [], euvLogicInstalled: [], industry: {} };
+  const industryPools = poolsCfg.industry || {};
+  const industryCap = {};
+  const scheduleGrowth = (sched, m, fallback) => {
+    const year = GLOBAL_PARAMS.startYear + Math.floor(((GLOBAL_PARAMS.startMonth || 1) - 1 + m) / 12);
+    for (const step of sched || []) if (year <= step.until) return step.growth;
+    return sched && sched.length ? sched[sched.length - 1].growth : fallback;
+  };
+  for (const [id, cfg] of Object.entries(industryPools)) {
+    industryCap[id] = cfg.industryStart || 0;
+    results.pools.industry[id] = { ceiling: [], aiShare: [], binding: [] };
+  }
 
   // Diagnostic: annualized GW each gate could support, per month
   results.gates = {};
@@ -1284,6 +1295,19 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     results.pools.leadingEdgeScale.push(leScale);
     results.pools.memoryScale.push(memScale);
     results.pools.euvLogicInstalled.push(euvLogicInstalled);
+
+    // Industry pools: AI's slice of power/transformer/labor industry output
+    for (const [id, cfg] of Object.entries(industryPools)) {
+      if (monthEffCap[id] === undefined) continue;
+      const ceiling = industryCap[id] * (cfg.conversion ?? 1) * (cfg.aiMaxShare ?? 1);
+      const bound = monthEffCap[id] > ceiling;
+      if (bound) monthEffCap[id] = ceiling;
+      const rec = results.pools.industry[id];
+      rec.ceiling.push(ceiling);
+      rec.aiShare.push(industryCap[id] > 0 ? monthEffCap[id] / (industryCap[id] * (cfg.conversion ?? 1)) : 0);
+      rec.binding.push(bound);
+      industryCap[id] *= Math.pow(1 + scheduleGrowth(cfg.growthSchedule, month, 0.05), 1 / 12);
+    }
 
     for (const node of NODES) {
       if (monthEffCap[node.id] === undefined) continue;

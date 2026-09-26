@@ -759,6 +759,48 @@ export const SHARED_SUPPLY_POOLS = {
     hbmWaferAreaMultiplier: 3,
     aiMaxShare: 0.6,                // AI ≈ 32-36% of DRAM wafer-equivalents in 2026
     source: 'TrendForce DRAM/HBM bit output; memory-maker fab schedules'
+  },
+
+  /**
+   * Industry pools for power and construction. Each is the WHOLE industry's
+   * output (in the AI node's units per month, after `conversion`), growing on
+   * its own physical schedule. AI's node grows with demand and can claim up to
+   * aiMaxShare of it, so when capital frees up AI can bid for a bigger slice
+   * of existing industry output instead of growing from its own small base.
+   */
+  industry: {
+    grid_interconnect: {
+      label: 'Grid connection capacity for new large loads',
+      industryStart: 2667,            // MW facility/month ≈ 32 GW/yr ex-China (US ~20 GW/yr new large-load/firm capacity; Europe, Gulf, Asia ex-China ~12)
+      growthSchedule: [{ until: 2032, growth: 0.12 }, { until: 2045, growth: 0.07 }],
+      aiMaxShare: 0.7,                // DCs ≈ 55% of forecast US load growth (Grid Strategies)
+      conversion: 1,
+      source: 'FERC, Grid Strategies, utility capex +17%/yr (EEI); 2-4 yr transmission/transformer lead times'
+    },
+    off_grid_power: {
+      label: 'Gas turbine, engine and fuel-cell output',
+      industryStart: 6667,            // MW nameplate/month ≈ 80 GW/yr (turbines 60-70 + recips/fuel cells ~10)
+      growthSchedule: [{ until: 2030, growth: 0.10 }, { until: 2045, growth: 0.05 }],
+      aiMaxShare: 0.4,                // DCs compete with utilities and industry for slots
+      conversion: 0.7,                // ~1.4 MW nameplate per MW of firm load (N+1 redundancy)
+      source: 'GE Vernova 20→30 GW/yr by 2030; Siemens ~15-16 GW, sold out to FY2028; MHI doubling; BNEF ~102 GW/yr by 2030; Caterpillar 3x recips'
+    },
+    transformers_lpt: {
+      label: 'Large power transformer output',
+      industryStart: 333,             // units/month ≈ 4,000/yr globally (US ~900/yr demand, ~20% domestic)
+      growthSchedule: [{ until: 2030, growth: 0.10 }, { until: 2045, growth: 0.06 }],
+      aiMaxShare: 0.4,                // utilities and other industry need most transformers
+      conversion: 1,
+      source: 'DOE LPT report; Wood Mackenzie 30% deficit; Hitachi/Siemens plant expansions 2027-28'
+    },
+    dc_construction: {
+      label: 'Skilled construction trades in datacenter regions',
+      industryStart: 3.0e6,           // workers (worker-months/month): electricians, pipefitters, HVAC in US/Europe/Gulf/Asia ex-China DC regions
+      growthSchedule: [{ until: 2032, growth: 0.07 }, { until: 2045, growth: 0.04 }],  // headcount +1-2%/yr plus modular productivity
+      aiMaxShare: 0.3,                // ~30% of electricians is the practical limit (SemiAnalysis/BLS arithmetic)
+      conversion: 1,
+      source: 'BLS: 819k US electricians, +1%/yr; ~12k MEP field hours/MW; modular builds cut field hours 2-3x'
+    }
   }
 };
 
