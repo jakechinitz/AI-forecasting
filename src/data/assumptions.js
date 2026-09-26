@@ -555,17 +555,18 @@ export const EFFICIENCY_ASSUMPTIONS_BASE = buildEfficiencyBlocks();
 // SUPPLY ASSUMPTIONS
 // ============================================
 
-// Base expansion rates represent the physical maximum the supply chain can expand
-// at when demand fully justifies it. Actual growth is demand-driven via tightness
-// elasticity in the simulation engine — these are ceilings, not schedules.
+// Baseline expansion that happens regardless of AI demand. Zero by default:
+// capacity grows only when demand signals it (shortages and demand forecasts),
+// within lead times, physical limits (node caps on truly physical inputs and
+// the shared EUV/DRAM pools), and the builders' capital (funding gate).
 const SUPPLY_TEMPLATE_YEAR1 = {
   label: SEGMENT_LABELS.year1,
   expansionRates: {
-    packaging: { value: 0.50, confidence: 'high', source: 'TSMC doubled CoWoS in 18mo; continued aggressive expansion' },
-    foundry: { value: 0.25, confidence: 'high', source: 'Advanced-node fabs + committed expansions coming online' },
-    memory: { value: 0.40, confidence: 'medium', source: 'HBM revenue 300%+ growth 2024; SK Hynix/Samsung expanding aggressively' },
-    datacenter: { value: 0.25, confidence: 'medium', source: '$6.7T capex through 2030 (McKinsey); hyperscaler $300B+/yr' },
-    power: { value: 0.10, confidence: 'medium', source: 'Key bottleneck; grid interconnection 2-5yr queues; 76GW potential with flexibility' }
+    packaging: { value: 0, confidence: 'high', source: 'TSMC doubled CoWoS in 18mo; continued aggressive expansion' },
+    foundry: { value: 0, confidence: 'high', source: 'Advanced-node fabs + committed expansions coming online' },
+    memory: { value: 0, confidence: 'medium', source: 'HBM revenue 300%+ growth 2024; SK Hynix/Samsung expanding aggressively' },
+    datacenter: { value: 0, confidence: 'medium', source: '$6.7T capex through 2030 (McKinsey); hyperscaler $300B+/yr' },
+    power: { value: 0, confidence: 'medium', source: 'Key bottleneck; grid interconnection 2-5yr queues; 76GW potential with flexibility' }
   }
 };
 
@@ -721,6 +722,43 @@ export const TRANSLATION_INTENSITIES = {
     maxShareOfInference: { value: 0.20, confidence: 'low', source: 'Cap on edge share of all inference tokens: frontier, reasoning and agentic work stays in datacenters' },
     activeDevices: { value: 8.5e9, growth: 0.02, confidence: 'medium', source: '~7B smartphones + ~1.5B PCs in use (context only)' },
     deviceLifeMonths: { value: 36, confidence: 'medium', source: 'Smartphone/PC replacement cycle ~3 years' }
+  }
+};
+
+// ============================================
+// SHARED PHYSICAL SUPPLY POOLS
+// ============================================
+/**
+ * Physical ceilings shared between AI and everything else. Nodes inside a pool
+ * (AI wafers, HBM, AI host DRAM) grow with demand; the pool caps them.
+ *  - Leading-edge logic: EUV installed base × wafer starts per tool. ASML
+ *    deliveries (euv_tools node, ASML's capacity plan) add to the base.
+ *    AI may take up to aiMaxShare; phones/PCs/other keep the rest.
+ *  - Memory: total DRAM capacity follows the fab construction schedule. HBM
+ *    uses ~3x the wafer area per bit of standard DRAM.
+ */
+export const SHARED_SUPPLY_POOLS = {
+  leadingEdge: {
+    euvInstalledStart: 320,         // end-2025, summed ASML shipments; TSMC >56%
+    logicShareOfEuv: 0.65,          // remainder mostly DRAM
+    waferStartsPerToolMonth: 2000,  // N3 ≈ 5-6 tools per 10k wafers/month; N2 ≈ 6-7
+    toolProductivityGrowth: 0.05,   // per-tool throughput upgrades, ~5-10%/yr
+    aiMaxShare: 0.8,                // AI took ~60% of N3 in 2026, ~86% planned 2027
+    source: 'ASML shipments (48 in 2025, ~65 in 2026); TSMC N3/N2 capacity (TrendForce); SemiAnalysis AI share of N3'
+  },
+  memory: {
+    dramGbPerMonthStart: 3.1e9,     // ~37 EB/yr run-rate end-2025 (~40 EB in 2026, TrendForce)
+    growthSchedule: [
+      { until: 2026, growth: 0.20 },  // Micron ~20% bit growth 2026
+      { until: 2027, growth: 0.18 },
+      { until: 2030, growth: 0.20 },  // new fabs: SK hynix Yongin/M15X 2027, Micron ID1 2027, ID2 2028, Samsung P5 ~2028, Micron NY ~2030
+      { until: 2032, growth: 0.15 },
+      { until: 2045, growth: 0.10 }
+    ],
+    gbPerHbmStack: 36,
+    hbmWaferAreaMultiplier: 3,
+    aiMaxShare: 0.6,                // AI ≈ 32-36% of DRAM wafer-equivalents in 2026
+    source: 'TrendForce DRAM/HBM bit output; memory-maker fab schedules'
   }
 };
 

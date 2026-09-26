@@ -197,7 +197,6 @@ const NODES_BASE = [
     startingCapacity: 1000000,  // Accelerator output across vendors: ~16.3M units in 2026 (JPM, +62% YoY; ~10M in 2025); pools sum to ~1.5M/month at the start
     committedExpansions: [],
     leadTimeDebottleneck: 6,
-    maxAnnualExpansionSchedule: [{ until: 2027, cap: 0.6 }, { until: 2032, cap: 0.35 }, { until: 2045, cap: 0.18 }],  // Units +62% (2026), +43% (2027 JPM: 23.3M); packaging/HBM/wafers bind before this does
     leadTimeNewBuild: 18,
     rampProfile: 's-curve',
 
@@ -240,7 +239,6 @@ const NODES_BASE = [
     startingCapacity: 500000,  // Second accelerator pool (ASIC-heavy inference parts); see gpu_datacenter
     committedExpansions: [],
     leadTimeDebottleneck: 6,
-    maxAnnualExpansionSchedule: [{ until: 2027, cap: 0.6 }, { until: 2032, cap: 0.35 }, { until: 2045, cap: 0.18 }],  // Units +62% (2026), +43% (2027 JPM: 23.3M); packaging/HBM/wafers bind before this does
     leadTimeNewBuild: 18,
     rampProfile: 'linear',
 
@@ -325,8 +323,6 @@ const NODES_BASE = [
     startingCapacity: 2200000,  // NICs/DPUs made on TSMC nodes; not a known bottleneck (sized to support ~40 GW/yr in 2026)
     committedExpansions: [],
     leadTimeDebottleneck: 4,
-    maxAnnualExpansion: 0.6,  // Merchant NIC/DPU supply on shared leading-edge wafers
-    maxAnnualExpansionSchedule: [{ until: 2032, cap: 0.4 }, { until: 2045, cap: 0.2 }],  // Follows accelerator growth; capped below packaging
     leadTimeNewBuild: 10,
     rampProfile: 's-curve',
 
@@ -396,8 +392,6 @@ const NODES_BASE = [
     // specialized lines. SK Hynix grew ~80% in 2024 at peak crisis effort; 100%
     // allows headroom for Samsung/Micron simultaneous ramps but caps unrealistic
     // 150%+ growth that shortage elasticity could otherwise produce.
-    maxAnnualExpansion: 0.5,  // HBM bit growth limited by TSV capacity and DRAM wafer diversion
-    maxAnnualExpansionSchedule: [{ until: 2027, cap: 0.55 }, { until: 2032, cap: 0.3 }, { until: 2045, cap: 0.17 }],  // HBM bits +105%/+130%/+70% (2024-26), +50-60% in 2027; stacks grow slower than bits as GB/stack rises
 
     baseRate: {
       value: 7000000,
@@ -421,8 +415,6 @@ const NODES_BASE = [
     startingCapacity: 290000000,  // Host DRAM for AI servers ~3.5 EB/yr in 2026 (~10% of ~40 EB standard DRAM bits; TrendForce)
     committedExpansions: [],
     leadTimeDebottleneck: 12,
-    maxAnnualExpansion: 0.2,  // DRAM bit supply grows ~15-25%/yr; makers expand cautiously after past gluts
-    maxAnnualExpansionSchedule: [{ until: 2028, cap: 0.35 }, { until: 2032, cap: 0.22 }, { until: 2045, cap: 0.12 }],  // DRAM bits +15-25%/yr (new fabs mid-2027 to 2030) plus AI taking share (~20% of DRAM wafers in 2026)
     leadTimeNewBuild: 24,
     rampProfile: 'linear',
 
@@ -465,8 +457,6 @@ const NODES_BASE = [
     startingCapacity: 5000000,  // NAND for AI servers; not a known bottleneck (sized to support ~40 GW/yr in 2026)
     committedExpansions: [],
     leadTimeDebottleneck: 6,
-    maxAnnualExpansion: 0.4,  // NAND supply grows ~20-40%/yr
-    maxAnnualExpansionSchedule: [{ until: 2032, cap: 0.4 }, { until: 2045, cap: 0.2 }],  // Follows accelerator growth; capped below packaging
     leadTimeNewBuild: 18,
     rampProfile: 'linear',
 
@@ -537,8 +527,6 @@ const NODES_BASE = [
     // Parallelism constraint: TSMC CoWoS doubled in 18 months at peak (~67%/yr).
     // 100% cap allows continued aggressive build-out (Amkor, ASE entering) but
     // prevents unrealistic 150%+ rates the shortage elasticity could otherwise drive.
-    maxAnnualExpansion: 0.6,  // CoWoS roughly doubled in 2024 and 2025; growth slowing as easy conversions are used up
-    maxAnnualExpansionSchedule: [{ until: 2027, cap: 0.7 }, { until: 2032, cap: 0.4 }, { until: 2045, cap: 0.2 }],  // History +150%/+100%/+65% (2024-26), +69% planned 2027; builds take 12-18 months
 
     baseRate: {
       value: 120000,
@@ -592,7 +580,6 @@ const NODES_BASE = [
     // Parallelism constraint: emerging tech with limited tool supply (EVG, ASMPT)
     // and process know-how. 80% allows fast scale from a low base but caps the
     // shortage-driven runaway rates the elasticity formula could otherwise hit.
-    maxAnnualExpansion: 0.80,
 
     baseRate: {
       value: 20000,
@@ -642,7 +629,6 @@ const NODES_BASE = [
     // Parallelism constraint: ABF is supplied by a handful of Japanese chemical
     // makers (Ajinomoto and a few competitors); throughput limited by reactor
     // capacity and feedstock supply. Historical industry growth ~20-30%/yr.
-    maxAnnualExpansion: 0.50,
 
     baseRate: {
       value: 100000,
@@ -688,8 +674,6 @@ const NODES_BASE = [
 
     // Parallelism constraint: OSAT (ASE, Amkor, JCET) growth limited by clean-room
     // build-out and tester capex. Industry historically grows ~20-40%/yr in boom.
-    maxAnnualExpansion: 0.5,  // Advanced test/assembly lines take 12-24 months to add
-    maxAnnualExpansionSchedule: [{ until: 2032, cap: 0.4 }, { until: 2045, cap: 0.2 }],  // Follows accelerator growth; capped below packaging
 
     baseRate: {
       value: 800000,
@@ -741,8 +725,6 @@ const NODES_BASE = [
     // Parallelism constraint: leading-edge fab capex is multi-year (36mo new build)
     // and gated by EUV tool throughput from ASML. Historical TSMC advanced-node
     // capacity grew ~25-35%/yr at peak. 50% cap allows aggressive scenarios.
-    maxAnnualExpansion: 0.25,  // Leading-edge wafer capacity grows ~20-30%/yr (TSMC N3/N2 ramps, fab construction 2-3 yrs)
-    maxAnnualExpansionSchedule: [{ until: 2028, cap: 0.3 }, { until: 2032, cap: 0.18 }, { until: 2045, cap: 0.12 }],  // AI share of N3 60% → 86% (2026-27) then saturates; total leading-edge capacity +15-25%/yr, bounded by EUV installed base (~+20%/yr)
 
     baseRate: {
       value: 180000,
@@ -766,8 +748,8 @@ const NODES_BASE = [
     startingCapacity: 5.4,  // ASML ~65 low-NA EUV tools shipped in 2026 (48 in 2025); ~385 installed end-2026. Limits wafer-capacity growth, not a per-accelerator gate
     committedExpansions: [],
     leadTimeDebottleneck: 36,
-    maxAnnualExpansion: 0.2,  // ASML ships ~50-60 EUV tools/yr against an installed base of ~250-300; High-NA ramps slowly
-    maxAnnualExpansionSchedule: [{ until: 2028, cap: 0.28 }, { until: 2045, cap: 0.12 }],  // ASML capacity +30% for 2027 and studying +30% for 2028; optics supply limits
+    growsAtPhysicalMax: true,
+    maxAnnualExpansionSchedule: [{ until: 2028, cap: 0.28 }, { until: 2045, cap: 0.10 }],  // PHYSICAL: ASML capacity +30% for 2027, studying +30% for 2028 (Zeiss optics limit); ~10%/yr after
     leadTimeNewBuild: 60,
     rampProfile: 'step',
 
@@ -813,7 +795,6 @@ const NODES_BASE = [
     startingCapacity: 250000,  // switch silicon; not a known bottleneck (sized to support ~40 GW/yr in 2026)
     committedExpansions: [],
     leadTimeDebottleneck: 6,
-    maxAnnualExpansionSchedule: [{ until: 2032, cap: 0.4 }, { until: 2045, cap: 0.2 }],  // Follows accelerator growth; capped below packaging
     leadTimeNewBuild: 15,
     rampProfile: 's-curve',
 
@@ -1035,8 +1016,6 @@ const NODES_BASE = [
     startingCapacity: 110000,  // CDUs/cold plates; not a known bottleneck (sized to support ~40 GW/yr in 2026)
     committedExpansions: [],
     leadTimeDebottleneck: 10,
-    maxAnnualExpansion: 0.6,  // CDU and cold-plate supply scaling with rack power
-    maxAnnualExpansionSchedule: [{ until: 2032, cap: 0.4 }, { until: 2045, cap: 0.2 }],  // Follows accelerator growth; capped below packaging
     leadTimeNewBuild: 18,
     rampProfile: 's-curve',
 
@@ -1107,8 +1086,6 @@ const NODES_BASE = [
     // Hyperscalers can spend unlimited capital but cannot hire unlimited electricians
     // or accelerate utility permitting. Historical DC capacity grew ~25-30%/yr peak.
     // Raised to 100% to allow aggressive buildout scenarios (modular DC, off-grid, etc.)
-    maxAnnualExpansion: 0.35,  // Shell construction scales with contractor capacity and permitting
-    maxAnnualExpansionSchedule: [{ until: 2027, cap: 0.6 }, { until: 2032, cap: 0.28 }, { until: 2045, cap: 0.1 }],  // One-off +50-80% in 2027 (already under construction), then 20-30%/yr to 2032, ~10%/yr after
 
     baseRate: {
       value: 1500,
@@ -1158,8 +1135,7 @@ const NODES_BASE = [
 
     // Parallelism constraint: regulatory permitting throughput, not capital.
     // Utility commissions process a finite number of interconnection studies per year.
-    maxAnnualExpansion: 0.2,  // Excel model: US grid 4.5→12 GW/yr and ex-US 4→13 GW/yr over 2026-2032 (~20%/yr)
-    maxAnnualExpansionSchedule: [{ until: 2032, cap: 0.2 }, { until: 2045, cap: 0.1 }],  // Utility capex +17%/yr, 2-4 yr transformer/transmission lead times; 15-25%/yr to 2030-32, ~10%/yr after (tied to firm generation build)
+    maxAnnualExpansionSchedule: [{ until: 2032, cap: 0.2 }, { until: 2045, cap: 0.1 }],  // PHYSICAL/INSTITUTIONAL: utility interconnection and transmission build (2-4 yr transformer/line lead times, permitting); utility capex +17%/yr
 
     baseRate: {
       value: 2500,
@@ -1205,8 +1181,7 @@ const NODES_BASE = [
 
     // Parallelism constraint: ~3,500 skilled LPT winding technicians globally;
     // training pipeline adds ~5-8% workforce/yr. Capital is not the bottleneck.
-    maxAnnualExpansion: 0.2,  // Excel model: electrical equipment 7.5→22 GW/yr over 2026-2032 (~20%/yr)
-    maxAnnualExpansionSchedule: [{ until: 2028, cap: 0.15 }, { until: 2032, cap: 0.2 }, { until: 2045, cap: 0.1 }],  // LPT plants take 2-3 yrs (Hitachi, Siemens expansions land 2027-28): ~15%/yr, ~20% as new plants open, then ~10%
+    maxAnnualExpansionSchedule: [{ until: 2028, cap: 0.15 }, { until: 2032, cap: 0.2 }, { until: 2045, cap: 0.1 }],  // PHYSICAL: transformer factory capacity; new LPT plants take 2-3 yrs (Hitachi VA, Siemens NC land 2027-28)
 
     baseRate: {
       value: 250,
@@ -1254,7 +1229,7 @@ const NODES_BASE = [
 
     // Parallelism constraint: permitting + environmental review for new generation
     // sites. Labor can be hired; regulatory throughput cannot.
-    maxAnnualExpansion: 0.25,
+    maxAnnualExpansion: 0.25,  // PHYSICAL: grid-scale generation build (firm capacity additions)
 
     baseRate: {
       value: 8000,
@@ -1344,8 +1319,7 @@ const NODES_BASE = [
 
     // Parallelism constraint: skilled electrical/mechanical trades labor pool.
     // Apprenticeship pipeline grows ~5%/yr; poaching from other sectors adds ~3%.
-    maxAnnualExpansion: 0.17,  // Excel model: US labor/permitting 9→24 GW/yr over 2026-2032 (~17%/yr)
-    maxAnnualExpansionSchedule: [{ until: 2032, cap: 0.15 }, { until: 2045, cap: 0.08 }],  // Electricians grow ~1%/yr (BLS) but modular builds cut field hours ~2-3x and non-US labor is more elastic; binding from ~2027 in TX/OH
+    maxAnnualExpansionSchedule: [{ until: 2032, cap: 0.15 }, { until: 2045, cap: 0.08 }],  // PHYSICAL: skilled-trades pipeline (electricians +~1%/yr; 4-5 yr apprenticeships), stretched by modular construction and non-US labor
 
     baseRate: {
       value: 5000000,
@@ -1432,8 +1406,7 @@ const NODES_BASE = [
     // Parallelism constraint: turbine/panel manufacturing + EPC crew availability.
     // Gas turbines are factory-built (GE/Siemens can ramp production lines).
     // Solar panels are commodity. Main bottleneck is EPC labor for installation.
-    maxAnnualExpansion: 0.3,  // Excel model: on-site generation 3→12 GW/yr over 2026-2032 (~26%/yr); large turbines booked through 2028
-    maxAnnualExpansionSchedule: [{ until: 2029, cap: 1.0 }, { until: 2032, cap: 0.25 }, { until: 2045, cap: 0.1 }],  // 75 GW of binding OEM orders; SemiAnalysis 40+ GW BTM by 2028, BTM equipment >50 GW/yr by 2029 → very fast ramp to 2029, then tied to turbine/recip output (~100 GW/yr global by 2030, DCs 30-50%)
+    maxAnnualExpansionSchedule: [{ until: 2029, cap: 1.0 }, { until: 2032, cap: 0.25 }, { until: 2045, cap: 0.1 }],  // PHYSICAL: turbine/engine/fuel-cell factory output (GE Vernova 20→30 GW/yr by 2030; Siemens, MHI sold out to ~2028-30; Bloom 1→2 GW/yr)
 
     yieldModel: 'simple',
     yieldSimpleLoss: 0.05,

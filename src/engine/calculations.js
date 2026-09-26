@@ -19,6 +19,7 @@ import {
   GLOBAL_PARAMS,
   FLEET_ANCHOR,
   FINANCING_ASSUMPTIONS,
+  SHARED_SUPPLY_POOLS,
   DEMAND_ASSUMPTIONS,
   EFFICIENCY_ASSUMPTIONS,
   SUPPLY_ASSUMPTIONS,
@@ -976,6 +977,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const compoundOrganicGrowth = (nodeId, month, tightness, utilization) => {
     const cat = SUPPLY_CATEGORY_MAP[nodeId];
     if (!cat) return;
+    // Sold-out upstream capital goods (e.g., EUV scanners) expand at their
+    // physical maximum: every tool made is bought, so output follows the
+    // producer's capacity build, not AI demand in a given month.
+    const physNode = NODE_MAP.get(nodeId);
+    if (physNode?.growsAtPhysicalMax) {
+      const maxRate = getMaxExpansion(physNode, month) ?? 0;
+      runningSupplyMult[nodeId] *= Math.pow(1 + maxRate, 1 / 12);
+      return;
+    }
     const util = (utilization !== undefined && utilization !== null) ? utilization : 1.0;
 
     // Contraction path: utilization below the investment floor AND a glutted
@@ -1049,6 +1059,25 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   Object.assign(results.fleet, { edgeEquivGW: [], edgePowerGW: [], dcPowerGW: [], edgeTokenShare: [], edgeUnitsDeployed: [], edgeWattsPerDevice: [] });
   const utilPath = financingAssumptions?.paths?.utilization || {};
   const idleShare = financingAssumptions?.scalars?.idlePowerShare ?? 0.5;
+
+  // Shared physical supply pools (see SHARED_SUPPLY_POOLS in assumptions):
+  //  - Leading-edge logic wafers are bounded by the EUV installed base
+  //    (ASML deliveries accumulate); AI can take up to a maximum share.
+  //  - DRAM wafers are bounded by memory-fab capacity on its construction
+  //    schedule; HBM (≈3x wafer area per bit), AI host DRAM and edge share it.
+  // Nodes inside a pool grow with demand; the pool is the physical ceiling.
+  const poolsCfg = SHARED_SUPPLY_POOLS || {};
+  const lePool = poolsCfg.leadingEdge || {};
+  const memPool = poolsCfg.memory || {};
+  let euvLogicInstalled = (lePool.euvInstalledStart ?? 320) * (lePool.logicShareOfEuv ?? 0.65);
+  let dramGbPerMonth = memPool.dramGbPerMonthStart ?? 3.0e9;
+  const memGrowthAt = (m) => {
+    const year = GLOBAL_PARAMS.startYear + Math.floor(((GLOBAL_PARAMS.startMonth || 1) - 1 + m) / 12);
+    const sched = memPool.growthSchedule || [];
+    for (const step of sched) if (year <= step.until) return step.growth;
+    return sched.length ? sched[sched.length - 1].growth : 0.15;
+  };
+  results.pools = { aiWaferCeiling: [], aiMemoryCeilingGb: [], leadingEdgeScale: [], memoryScale: [], euvLogicInstalled: [] };
 
   // Diagnostic: annualized GW each gate could support, per month
   results.gates = {};
@@ -1227,18 +1256,45 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // STEP 1: POTENTIALS (with organic supply growth)
     // =======================================================
     const potentials = {};
+    const monthEffCap = {};
     for (const node of NODES) {
       if (node.id === 'gpu_datacenter' || node.id === 'gpu_inference') continue;
       if (node.group === 'A') continue;
-
       const state = nodeState[node.id];
       const sMult = runningSupplyMult[node.id] || 1;
       const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);
       const y = calculateNodeYield(node, month);
-      const effCap = cap * (node.maxCapacityUtilization || 0.95) * y;
-
-      potentials[node.id] = (state.type === 'STOCK') ? (state.inventory + effCap) : effCap;
+      monthEffCap[node.id] = cap * (node.maxCapacityUtilization || 0.95) * y;
     }
+
+    // Leading-edge pool: AI wafer starts ≤ EUV-supported logic wafers × max AI share
+    const toolProductivity = Math.pow(1 + (lePool.toolProductivityGrowth ?? 0), month / 12);
+    const aiWaferCeiling = euvLogicInstalled * (lePool.waferStartsPerToolMonth ?? 2000) * toolProductivity * (lePool.aiMaxShare ?? 0.8);
+    const leScale = monthEffCap.advanced_wafers > aiWaferCeiling ? aiWaferCeiling / monthEffCap.advanced_wafers : 1;
+    if (monthEffCap.advanced_wafers !== undefined) monthEffCap.advanced_wafers *= leScale;
+    // Memory pool: HBM (wafer-area-weighted) + AI host DRAM ≤ max AI share of DRAM capacity
+    const aiMemCeiling = dramGbPerMonth * (memPool.aiMaxShare ?? 0.7);
+    const hbmGbEq = (monthEffCap.hbm_stacks || 0) * (memPool.gbPerHbmStack ?? 36) * (memPool.hbmWaferAreaMultiplier ?? 3);
+    const memUse = hbmGbEq + (monthEffCap.dram_server || 0);
+    const memScale = memUse > aiMemCeiling ? aiMemCeiling / memUse : 1;
+    if (monthEffCap.hbm_stacks !== undefined) monthEffCap.hbm_stacks *= memScale;
+    if (monthEffCap.dram_server !== undefined) monthEffCap.dram_server *= memScale;
+    results.pools.aiWaferCeiling.push(aiWaferCeiling);
+    results.pools.aiMemoryCeilingGb.push(aiMemCeiling);
+    results.pools.leadingEdgeScale.push(leScale);
+    results.pools.memoryScale.push(memScale);
+    results.pools.euvLogicInstalled.push(euvLogicInstalled);
+
+    for (const node of NODES) {
+      if (monthEffCap[node.id] === undefined) continue;
+      const state = nodeState[node.id];
+      potentials[node.id] = (state.type === 'STOCK') ? (state.inventory + monthEffCap[node.id]) : monthEffCap[node.id];
+    }
+
+    // Pools evolve: EUV deliveries this month join the installed base (logic share);
+    // DRAM fab capacity follows its construction schedule.
+    euvLogicInstalled += (monthEffCap.euv_tools || 0) * (lePool.logicShareOfEuv ?? 0.65);
+    dramGbPerMonth *= Math.pow(1 + memGrowthAt(month), 1 / 12);
 
     // On-device silicon claims shared wafer/EUV/DRAM supply first (phone and
     // PC makers hold long-term contracts). Devices refresh every edgeLifeMonths.
@@ -1553,7 +1609,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const sMult = runningSupplyMult[node.id] || 1;
       const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);
       const y = calculateNodeYield(node, month);
-      const effCap = cap * (node.maxCapacityUtilization || 0.95) * y;
+      // Same pool-limited effective capacity used in gating
+      const effCap = monthEffCap[node.id] ?? cap * (node.maxCapacityUtilization || 0.95) * y;
 
       const inventoryIn = state.inventory;
       const backlogIn = state.backlog;
