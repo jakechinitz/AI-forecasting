@@ -192,7 +192,7 @@ export function softEfficiencyCap(raw, knee) {
 }
 
 // Planning knobs
-const DEFAULT_CALIBRATION_RATIO = 1.15;
+const DEFAULT_CALIBRATION_RATIO = 1.5;
 const CATCHUP_MONTHS = 6;
 const DEFAULT_BUFFER_MONTHS = 2;
 
@@ -943,9 +943,11 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // --- calibration ---
   const calibrationCfg = {
     enabled: scenarioOverrides?.calibration?.enabled ?? true,
-    // Month-0 required ÷ installed (effective units). Set so 2026 average
-    // required compute ≈ the Excel funding model's 2026 figure (~37.5 GW):
-    // the market starts modestly short and the gap widens through the year.
+    // Month-0 required ÷ installed (effective units). 1.5: every hyperscaler
+    // reports being capacity-constrained through 2026 (rising GPU rental
+    // prices, the 2026 memory crunch), and ~20 GW IT is being energized in
+    // 2026. A ratio near 1.15 (the Excel's implied 2026 level) would make
+    // 2026 demand-bound at ~12 GW, contradicting that evidence.
     targetRatio: scenarioOverrides?.calibration?.targetRatio ?? DEFAULT_CALIBRATION_RATIO,
     minScale: scenarioOverrides?.calibration?.minScale ?? 0.02,
     maxScale: scenarioOverrides?.calibration?.maxScale ?? 50
@@ -1040,6 +1042,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const edgeDeviceGrowth = resolveAssumptionValue(edgeCfg.activeDevices?.growth, 0.02);
   const edgeLifeMonths = Math.max(1, resolveAssumptionValue(edgeCfg.deviceLifeMonths?.value, 36));
   const EDGE_SHARED_NODES = { advanced_wafers: edgeWaferX, euv_tools: edgeWaferX, dram_server: edgeDramX };
+  // Edge competes for shared supply rather than taking unlimited priority:
+  // it can claim at most this share of a shared node's monthly potential.
+  const EDGE_MAX_SUPPLY_SHARE = resolveAssumptionValue(edgeCfg.maxShareOfSharedSupply?.value, 0.35);
   let edgeInstalledEff = null;
   Object.assign(results.fleet, { edgeEquivGW: [], edgePowerGW: [], dcPowerGW: [], edgeTokenShare: [], edgeUnitsDeployed: [], edgeWattsPerDevice: [] });
   const utilPath = financingAssumptions?.paths?.utilization || {};
@@ -1247,8 +1252,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const need = edgeUnits * (monthIntensity[id] || 0) * x;
       edgeDemand[id] = need;
       if (need > EPSILON && potentials[id] !== undefined) {
-        edgeServedFrac = Math.min(edgeServedFrac, potentials[id] / need);
-        potentials[id] = Math.max(0, potentials[id] - need);
+        const take = Math.min(need, potentials[id] * EDGE_MAX_SUPPLY_SHARE);
+        edgeServedFrac = Math.min(edgeServedFrac, take / need);
+        potentials[id] = Math.max(0, potentials[id] - take);
       }
     }
     edgeServedFrac = clamp(edgeServedFrac, 0, 1);

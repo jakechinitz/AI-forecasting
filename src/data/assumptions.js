@@ -55,7 +55,9 @@ export const FLEET_ANCHOR = {
   // IT kW per accelerator for the opening fleet. GB200 NVL72 ≈ 120 kW / 72 GPUs
   // ≈ 1.7 kW; HGX H100 ≈ 10.2 kW / 8 ≈ 1.3 kW; TPU/Trainium lower. Fleet blend ≈ 1.4.
   kwPerAccelerator: 1.4,
-  source: 'AI Capex Funding Model (Sept 2026): opening AI fleet ≈ 24 GW end-2025'
+  // Scope: global ex-China, matching the Excel (its builder tiers and chip caps
+  // exclude China). Physical supply nodes are calibrated to ex-China supply.
+  source: 'AI Capex Funding Model (Sept 2026): opening AI fleet ≈ 24 GW end-2025, ex-China'
 };
 
 const MODEL_START_YEAR = FLEET_ANCHOR.asOfYearEnd + 1;
@@ -393,7 +395,7 @@ const buildDemandBlocks = () => {
   blocks.years6_10.trainingGrowth.midtier.value = 0.3;
   blocks.years6_10.contextLength.averageTokens = 32000;
   blocks.years6_10.contextLength.growthRate = 0.25;
-  blocks.years6_10.intensityGrowth.value = 0.35;
+  blocks.years6_10.intensityGrowth.value = 0.25;
   // Edge offload Years 6-10: mature ecosystem, on-device becomes default for simple inference
   blocks.years6_10.edgeOffload.consumer.value = 0.5;
   blocks.years6_10.edgeOffload.enterprise.value = 0.25;
@@ -407,7 +409,7 @@ const buildDemandBlocks = () => {
   blocks.years11_15.trainingGrowth.midtier.value = 0.2;
   blocks.years11_15.contextLength.averageTokens = 64000;
   blocks.years11_15.contextLength.growthRate = 0.12;
-  blocks.years11_15.intensityGrowth.value = 0.33;
+  blocks.years11_15.intensityGrowth.value = 0.26;
   // Edge offload Years 11-15: edge AI pervasive; cloud reserved for frontier/long-context
   blocks.years11_15.edgeOffload.consumer.value = 0.6;
   blocks.years11_15.edgeOffload.enterprise.value = 0.35;
@@ -421,7 +423,7 @@ const buildDemandBlocks = () => {
   blocks.years16_20.trainingGrowth.midtier.value = 0.12;
   blocks.years16_20.contextLength.averageTokens = 128000;
   blocks.years16_20.contextLength.growthRate = 0.05;
-  blocks.years16_20.intensityGrowth.value = 0.28;
+  blocks.years16_20.intensityGrowth.value = 0.26;
   // Edge offload Years 16-20: steady state — cloud for frontier, edge for everything else
   blocks.years16_20.edgeOffload.consumer.value = 0.65;
   blocks.years16_20.edgeOffload.enterprise.value = 0.4;
@@ -471,7 +473,7 @@ const EFFICIENCY_TEMPLATE_YEAR1 = {
   hardwareEfficiency: {
     h: { value: 0.40, confidence: 'high', source: 'H200/B100/B200 deployment; ~2-4x gen-over-gen for inference', historicalRange: [0.20, 0.50] },
     h_memory: { value: 0.25, confidence: 'medium', source: 'HBM3E, larger capacity stacks', historicalRange: [0.12, 0.35] },
-    kw_growth: { value: 0.20, confidence: 'medium', source: 'IT power per new accelerator: B200 ~1.0 kW → B300 ~1.4 kW → Rubin higher; rack power 120 → 200+ kW', historicalRange: [0.00, 0.35] }
+    kw_growth: { value: 0.20, confidence: 'medium', source: 'All-in IT kW per accelerator: HGX H100 1.3-1.4, GB200 1.8-2.0, GB300 2.0-2.2, VR200 2.8-3.4; TPU ~1.1-1.3 and Trainium ~0.9 moderate the blend (2026 ≈ 1.6 kW)', historicalRange: [0.00, 0.35] }
   }
 };
 
@@ -488,7 +490,7 @@ const buildEfficiencyBlocks = () => {
   blocks.year2.systemsEfficiency.s_training.value = 0.08;
   blocks.year2.hardwareEfficiency.h.value = 0.32;
   blocks.year2.hardwareEfficiency.h_memory.value = 0.22;
-  blocks.year2.hardwareEfficiency.kw_growth.value = 0.07;
+  blocks.year2.hardwareEfficiency.kw_growth.value = 0.15;
 
   // Year 3: Still strong (~2.5x = 60% cost reduction)
   blocks.year3.modelEfficiency.m_inference.value = 0.15;
@@ -497,7 +499,7 @@ const buildEfficiencyBlocks = () => {
   blocks.year3.systemsEfficiency.s_training.value = 0.06;
   blocks.year3.hardwareEfficiency.h.value = 0.25;
   blocks.year3.hardwareEfficiency.h_memory.value = 0.18;
-  blocks.year3.hardwareEfficiency.kw_growth.value = 0;
+  blocks.year3.hardwareEfficiency.kw_growth.value = 0.10;
 
   // Year 4: Moderating (~2.0x = 50% cost reduction)
   blocks.year4.modelEfficiency.m_inference.value = 0.12;
@@ -506,7 +508,7 @@ const buildEfficiencyBlocks = () => {
   blocks.year4.systemsEfficiency.s_training.value = 0.05;
   blocks.year4.hardwareEfficiency.h.value = 0.20;
   blocks.year4.hardwareEfficiency.h_memory.value = 0.15;
-  blocks.year4.hardwareEfficiency.kw_growth.value = 0;
+  blocks.year4.hardwareEfficiency.kw_growth.value = 0.05;
 
   // Year 5: Settling (~1.8x = 44% cost reduction)
   blocks.year5.modelEfficiency.m_inference.value = 0.1;
@@ -669,14 +671,14 @@ export const TRANSLATION_INTENSITIES = {
 
   // Accelerators → Components
   gpuToComponents: {
-    hbmStacksPerGpu: { value: 8, confidence: 'high', source: 'H100/H200 class specs' },
-    cowosWaferEquivPerGpu: { value: 0.3, confidence: 'medium', source: 'Package wafer-equivalent normalization' },
+    hbmStacksPerGpu: { value: 7, confidence: 'medium', source: 'GB300/Rubin/TPU v7: 8 stacks; MI455X: 12; Trainium/others fewer → blended ~7' },
+    cowosWaferEquivPerGpu: { value: 0.075, confidence: 'medium', source: '~12 effective B300/Rubin packages per CoWoS-L wafer (0.083); smaller ASIC interposers fit more → blended ~0.075' },
 
     hybridBondingPerGpu: { value: 0.35, confidence: 'low', source: 'Hybrid bonding roadmap estimates' },
     hybridBondingAdoption: { initial: 0.02, target: 0.25, halflifeMonths: 36, confidence: 'low', source: 'Adoption curve (share of GPUs using hybrid bonding over time)' },
 
-    advancedWafersPerGpu: { value: 0.3, confidence: 'high', source: 'Reticle/multi-die normalization' },
-    serverDramGbPerGpu: { value: 128, confidence: 'medium', source: 'System DRAM per GPU (DDR5, 8-channel)' },
+    advancedWafersPerGpu: { value: 0.06, confidence: 'medium', source: 'B300: two ~800mm² dies, ~22-24 accelerators per wafer (0.045); + Grace/Vera, NVSwitch, NICs ≈ 0.06 (Epoch B200 cost breakdown)' },
+    serverDramGbPerGpu: { value: 256, confidence: 'medium', source: 'Grace 480 GB per 2 GPUs; x86 HGX ~2 TB per 8 GPUs; Vera up to 750 GB per GPU' },
     ssdTbPerGpu: { value: 2, confidence: 'medium', source: 'Datacenter NVMe storage per GPU' }
   },
 
@@ -688,7 +690,7 @@ export const TRANSLATION_INTENSITIES = {
     kwPerGpu: { value: FLEET_ANCHOR.kwPerAccelerator, confidence: 'medium', source: 'Fleet blend: HGX H100 ~1.3 kW, GB200 NVL72 ~1.7 kW per GPU incl. CPU/network; TPU/Trainium lower' },
     pue: { value: 1.3, confidence: 'high', source: 'Hyperscaler PUE' },
     workerMonthsPerMw: { value: 100, confidence: 'medium', source: '~80-150k worker-months per GW IT (Abilene ~6.4k workers, 1.2 GW facility, ~2 yrs; ~12k MEP field hours/MW)' },
-    ftesPerMw: { value: 8, confidence: 'low', source: 'Ongoing ops staffing per MW (technicians, security, NOC)' }
+    ftesPerMw: { value: 1.0, confidence: 'medium', source: 'Permanent ops staff: Meta Hyperion ~500 operational jobs for 2+ GW; large AI campuses ~0.25-1.5 per MW' },
   },
 
   powerChain: {
@@ -715,6 +717,7 @@ export const TRANSLATION_INTENSITIES = {
     waferIntensityVsDatacenter: { value: 1.0, confidence: 'low', source: 'Low NPU duty cycle offset by much smaller on-device models' },
     dramIntensityVsDatacenter: { value: 1.0, confidence: 'low', source: 'Phone DRAM 8-12 GB → 16-24 GB for on-device models; shares DRAM fabs with servers' },
     energyPerTokenVsDatacenter: { value: 0.6, confidence: 'low', source: 'Same model ~2.3x less efficient at the edge after PUE; edge models smaller (phones ~10x, Macs/self-hosted ~2-3x) → blended ≈0.6x' },
+    maxShareOfSharedSupply: { value: 0.35, confidence: 'low', source: 'Edge buyers compete for wafers/DRAM; they can take at most ~35% of the AI-available supply in a month' },
     maxShareOfInference: { value: 0.20, confidence: 'low', source: 'Cap on edge share of all inference tokens: frontier, reasoning and agentic work stays in datacenters' },
     activeDevices: { value: 8.5e9, growth: 0.02, confidence: 'medium', source: '~7B smartphones + ~1.5B PCs in use (context only)' },
     deviceLifeMonths: { value: 36, confidence: 'medium', source: 'Smartphone/PC replacement cycle ~3 years' }
