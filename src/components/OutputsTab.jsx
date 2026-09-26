@@ -49,6 +49,17 @@ function buildSheet(annual, tiers, tierMeta) {
       ]
     },
     {
+      title: 'Energy and edge AI',
+      rows: [
+        { label: 'Share of inference tokens served at the edge (phones, PCs, Macs, self-hosted)', unit: '%', values: col('edgeTokenShare'), f: fmt.pct1 },
+        { label: 'Datacenter capacity avoided by edge (if run in DCs)', unit: 'GW', values: col('edgeEquivGW'), f: fmt.gw },
+        { label: 'Datacenter AI power (average draw, incl. cooling)', unit: 'GW', values: col('dcPowerGW'), f: fmt.gw },
+        { label: 'Edge AI power (average draw)', unit: 'GW', values: col('edgePowerGW'), f: fmt.gw },
+        { label: 'Total AI power (average draw)', unit: 'GW', values: col('totalAiPowerGW'), f: fmt.gw, bold: true },
+        { label: 'Total AI energy', unit: 'TWh/yr', values: annual.map((r) => (r.totalAiPowerGW == null ? null : r.totalAiPowerGW * 8.76)), f: fmt.usd }
+      ]
+    },
+    {
       title: 'Unit economics per GW',
       rows: [
         { label: 'Frontier tokens/kWh (new vintage, mid-year)', unit: 'M tok/kWh', values: col('frontierTokPerKwhM'), f: fmt.num1 },

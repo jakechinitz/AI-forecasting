@@ -284,7 +284,10 @@ const DEMAND_TEMPLATE_YEAR1 = {
     dcInferenceShare: { value: 0.60, confidence: 'medium', source: 'Inference ~60% of datacenter GPU fleet; training clusters concentrated at frontier labs' }
   },
 
-  // Edge offload: fraction of inference tokens served on-device (phones, laptops, NPUs)
+  // Edge offload: fraction of inference tokens served outside hyperscale
+  // datacenters: phones and laptops, Macs, self-hosted small servers, and edge
+  // boxes (distributed compute). The total edge share is capped by
+  // TRANSLATION_INTENSITIES.edge.maxShareOfInference.
   // rather than in datacenter GPUs. Offloaded tokens bypass the entire DC supply chain
   // (no transformers, no cooling, no grid interconnect). Driven by model distillation
   // (Llama-4-Small, Gemma, Phi) running on Apple Neural Engine, Snapdragon NPU, etc.
@@ -304,7 +307,10 @@ const DEMAND_TEMPLATE_YEAR1 = {
   // Extra tokens-per-request growth on top of inferenceGrowth. Zero for Years
   // 1-5: those growth rates come from MEASURED token counts (Google, OpenAI,
   // OpenRouter), which already include longer reasoning and agent chains.
-  // Years 6-20 keep their original per-request growth + intensity structure.
+  // Years 6-20 keep the per-request growth + intensity structure, with intensity
+  // raised (Jevons effect: as cost per token falls, agents run longer, more
+  // often, with larger contexts), so compute demand keeps outgrowing efficiency
+  // and outrunning what the supply chain can build.
   intensityGrowth: {
     value: 0,
     confidence: 'medium',
@@ -331,8 +337,10 @@ const buildDemandBlocks = () => {
   });
 
   // Targeted tweaks (only the values that should change by period)
-  // Token growth continues the observed deceleration (~50x → ~7x → ~3.6x):
-  // blended ≈ 2.6x (Y2), 2.1x (Y3), 1.8x (Y4), 1.6x (Y5). Agentic share keeps rising.
+  // Token growth decelerates from ~3.6x (Y1) to ~2.6x (Y2), then holds near
+  // 2x through Year 5 (≈2.3x, 2.1x, 2.0x), in line with the Excel funding
+  // model: better models raise tokens per task (agents, reasoning), so volume
+  // keeps compounding even as user growth saturates. Agentic share keeps rising.
   // Year 2
   blocks.year2.inferenceGrowth.consumer.value = 1.00;   // 2x
   blocks.year2.inferenceGrowth.enterprise.value = 1.50;  // 2.5x
@@ -342,36 +350,36 @@ const buildDemandBlocks = () => {
   // Edge offload Year 2: Apple Intelligence / Gemini Nano adoption growing
   blocks.year2.edgeOffload.consumer.value = 0.05;
   blocks.year2.edgeOffload.enterprise.value = 0.01;
-  blocks.year2.edgeOffload.agentic.value = 0.00;
+  blocks.year2.edgeOffload.agentic.value = 0.0;
 
   // Year 3
-  blocks.year3.inferenceGrowth.consumer.value = 0.70;    // 1.7x
-  blocks.year3.inferenceGrowth.enterprise.value = 1.00;  // 2x
-  blocks.year3.inferenceGrowth.agentic.value = 2.00;     // 3x
-  blocks.year3.trainingGrowth.frontier.value = 1.0;
-  blocks.year3.trainingGrowth.midtier.value = 0.9;
+  blocks.year3.inferenceGrowth.consumer.value = 0.9;
+  blocks.year3.inferenceGrowth.enterprise.value = 1.3;
+  blocks.year3.inferenceGrowth.agentic.value = 2.3;
+  blocks.year3.trainingGrowth.frontier.value = 1.3;
+  blocks.year3.trainingGrowth.midtier.value = 1.2;
   // Edge offload Year 3: distilled models becoming mainstream on flagships
   blocks.year3.edgeOffload.consumer.value = 0.12;
   blocks.year3.edgeOffload.enterprise.value = 0.03;
   blocks.year3.edgeOffload.agentic.value = 0.01;
 
   // Year 4
-  blocks.year4.inferenceGrowth.consumer.value = 0.50;    // 1.5x
-  blocks.year4.inferenceGrowth.enterprise.value = 0.75;  // 1.75x
-  blocks.year4.inferenceGrowth.agentic.value = 1.30;     // 2.3x
-  blocks.year4.trainingGrowth.frontier.value = 0.7;
-  blocks.year4.trainingGrowth.midtier.value = 0.6;
+  blocks.year4.inferenceGrowth.consumer.value = 0.7;
+  blocks.year4.inferenceGrowth.enterprise.value = 1.1;
+  blocks.year4.inferenceGrowth.agentic.value = 1.9;
+  blocks.year4.trainingGrowth.frontier.value = 1.0;
+  blocks.year4.trainingGrowth.midtier.value = 0.9;
   // Edge offload Year 4: mid-range phones get capable NPUs; enterprise edge pilots
   blocks.year4.edgeOffload.consumer.value = 0.22;
   blocks.year4.edgeOffload.enterprise.value = 0.08;
   blocks.year4.edgeOffload.agentic.value = 0.02;
 
   // Year 5
-  blocks.year5.inferenceGrowth.consumer.value = 0.35;    // 1.35x
-  blocks.year5.inferenceGrowth.enterprise.value = 0.55;  // 1.55x
-  blocks.year5.inferenceGrowth.agentic.value = 0.90;     // 1.9x
-  blocks.year5.trainingGrowth.frontier.value = 0.5;
-  blocks.year5.trainingGrowth.midtier.value = 0.45;
+  blocks.year5.inferenceGrowth.consumer.value = 0.6;
+  blocks.year5.inferenceGrowth.enterprise.value = 1.0;
+  blocks.year5.inferenceGrowth.agentic.value = 1.6;
+  blocks.year5.trainingGrowth.frontier.value = 0.8;
+  blocks.year5.trainingGrowth.midtier.value = 0.7;
   // Edge offload Year 5: most consumer queries handled locally for simple tasks
   blocks.year5.edgeOffload.consumer.value = 0.35;
   blocks.year5.edgeOffload.enterprise.value = 0.15;
@@ -385,11 +393,11 @@ const buildDemandBlocks = () => {
   blocks.years6_10.trainingGrowth.midtier.value = 0.3;
   blocks.years6_10.contextLength.averageTokens = 32000;
   blocks.years6_10.contextLength.growthRate = 0.25;
-  blocks.years6_10.intensityGrowth.value = 0.25;
+  blocks.years6_10.intensityGrowth.value = 0.35;
   // Edge offload Years 6-10: mature ecosystem, on-device becomes default for simple inference
-  blocks.years6_10.edgeOffload.consumer.value = 0.50;
+  blocks.years6_10.edgeOffload.consumer.value = 0.5;
   blocks.years6_10.edgeOffload.enterprise.value = 0.25;
-  blocks.years6_10.edgeOffload.agentic.value = 0.10;
+  blocks.years6_10.edgeOffload.agentic.value = 0.1;
 
   // Years 11-15
   blocks.years11_15.inferenceGrowth.consumer.value = 0.12;
@@ -399,9 +407,9 @@ const buildDemandBlocks = () => {
   blocks.years11_15.trainingGrowth.midtier.value = 0.2;
   blocks.years11_15.contextLength.averageTokens = 64000;
   blocks.years11_15.contextLength.growthRate = 0.12;
-  blocks.years11_15.intensityGrowth.value = 0.15;
+  blocks.years11_15.intensityGrowth.value = 0.33;
   // Edge offload Years 11-15: edge AI pervasive; cloud reserved for frontier/long-context
-  blocks.years11_15.edgeOffload.consumer.value = 0.60;
+  blocks.years11_15.edgeOffload.consumer.value = 0.6;
   blocks.years11_15.edgeOffload.enterprise.value = 0.35;
   blocks.years11_15.edgeOffload.agentic.value = 0.15;
 
@@ -413,11 +421,11 @@ const buildDemandBlocks = () => {
   blocks.years16_20.trainingGrowth.midtier.value = 0.12;
   blocks.years16_20.contextLength.averageTokens = 128000;
   blocks.years16_20.contextLength.growthRate = 0.05;
-  blocks.years16_20.intensityGrowth.value = 0.10;
+  blocks.years16_20.intensityGrowth.value = 0.28;
   // Edge offload Years 16-20: steady state — cloud for frontier, edge for everything else
   blocks.years16_20.edgeOffload.consumer.value = 0.65;
-  blocks.years16_20.edgeOffload.enterprise.value = 0.40;
-  blocks.years16_20.edgeOffload.agentic.value = 0.20;
+  blocks.years16_20.edgeOffload.enterprise.value = 0.4;
+  blocks.years16_20.edgeOffload.agentic.value = 0.2;
 
   return blocks;
 };
@@ -684,8 +692,32 @@ export const TRANSLATION_INTENSITIES = {
   },
 
   powerChain: {
-    transformersPerMw: { value: 0.02, confidence: 'medium', source: '~1 LPT / 50 MW' },
+    transformersPerMw: { value: 0.2, confidence: 'low', source: 'Electrical-equipment lineups per MW (LPT + MV transformers + switchgear), calibrated so 2026 supply ≈ Excel electrical-equipment cap (~11.5 GW/yr IT)' },
     redundancyFactor: { value: 1.5, confidence: 'high' }
+  },
+
+  // Edge inference (phones, PCs, Macs, self-hosted servers). Tokens moved to the edge leave the datacenter
+  // (no GPUs, CoWoS, HBM, DC power, cooling, networking) but still need
+  // silicon from the SAME wafer, EUV and DRAM supply, and still use energy.
+  // Edge work is sized in datacenter-equivalent compute units, then:
+  //  - wafers/DRAM per unit relative to a datacenter accelerator doing the same
+  //    work. ~1x: phone NPUs sit idle ~95% of the time (≈10x more silicon per
+  //    token than a DC GPU at ~50% utilization) but run models ~10x smaller.
+  //  - phone makers hold long-term wafer/DRAM contracts, so edge demand is
+  //    served before GPUs when these nodes are short.
+  //  - energy per token vs the average datacenter token (all-in, incl. cooling):
+  //    the SAME model is ~3x less efficient at the edge than batched server
+  //    inference (arXiv 2603.23640), ≈2.3x after datacenter PUE. Edge models are
+  //    smaller: ~10x for phones (≈0.23x), ~2-3x for Macs and self-hosted
+  //    servers (≈0.8-1.1x). Blended ≈0.6x.
+  //  - maxShareOfInference caps the total edge share of inference tokens.
+  edge: {
+    waferIntensityVsDatacenter: { value: 1.0, confidence: 'low', source: 'Low NPU duty cycle offset by much smaller on-device models' },
+    dramIntensityVsDatacenter: { value: 1.0, confidence: 'low', source: 'Phone DRAM 8-12 GB → 16-24 GB for on-device models; shares DRAM fabs with servers' },
+    energyPerTokenVsDatacenter: { value: 0.6, confidence: 'low', source: 'Same model ~2.3x less efficient at the edge after PUE; edge models smaller (phones ~10x, Macs/self-hosted ~2-3x) → blended ≈0.6x' },
+    maxShareOfInference: { value: 0.20, confidence: 'low', source: 'Cap on edge share of all inference tokens: frontier, reasoning and agentic work stays in datacenters' },
+    activeDevices: { value: 8.5e9, growth: 0.02, confidence: 'medium', source: '~7B smartphones + ~1.5B PCs in use (context only)' },
+    deviceLifeMonths: { value: 36, confidence: 'medium', source: 'Smartphone/PC replacement cycle ~3 years' }
   }
 };
 

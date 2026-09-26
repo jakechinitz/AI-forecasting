@@ -37,9 +37,9 @@ const TABLE_DEFS = {
   'edge-offload': {
     category: 'demand',
     columns: [
-      { path: ['edgeOffload', 'consumer'], label: 'Consumer', suffix: '%', isShare: true, help: 'On-device (phone/laptop NPU)' },
+      { path: ['edgeOffload', 'consumer'], label: 'Consumer', suffix: '%', isShare: true, help: 'Phones, PCs, Macs' },
       { path: ['edgeOffload', 'enterprise'], label: 'Enterprise', suffix: '%', isShare: true, help: 'Edge inference servers' },
-      { path: ['edgeOffload', 'agentic'], label: 'Agentic', suffix: '%', isShare: true, help: 'On-device agent loops' }
+      { path: ['edgeOffload', 'agentic'], label: 'Agentic', suffix: '%', isShare: true, help: 'Self-hosted agent runners' }
     ]
   },
   'model-eff': {
@@ -502,20 +502,27 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
       // Unconstrained demand: requiredBase is the GPU fleet size the demand model wants
       const dcRequired = results.nodes?.gpu_datacenter?.requiredBase?.[endMonth] || 0;
       const infRequired = results.nodes?.gpu_inference?.requiredBase?.[endMonth] || 0;
+      // Average draw (not nameplate): datacenter facility power at the year's
+      // utilization, plus edge AI power. Compared with average grid load.
+      const dcPow = results.fleet?.dcPowerGW?.[endMonth];
+      const itGW = results.fleet?.installedGW?.[endMonth];
+      const drawFactor = dcPow != null && itGW ? dcPow / (itGW * PUE) : 1;
       const reqItGW = results.fleet?.requiredGW?.[endMonth];
-      const demandGW = reqItGW != null ? reqItGW * PUE : (dcRequired + infRequired) * WATTS_PER_GPU / 1e9;
+      const demandGW = reqItGW != null ? reqItGW * PUE * drawFactor : (dcRequired + infRequired) * WATTS_PER_GPU / 1e9;
 
-      // Constrained: what actually got built (from installedBase via impliedAIs)
-      const constrainedGW = row.totalPowerGW;
+      const constrainedGW = dcPow != null ? dcPow : row.totalPowerGW;
+      const edgeGW = results.fleet?.edgePowerGW?.[endMonth] || 0;
+      const aiTotalGW = constrainedGW + edgeGW;
 
       const usBaseGW = US_AVG_ELECTRICITY_GW * Math.pow(1 + US_ELECTRICITY_CAGR, cumYears);
-      const usTotalGW = usBaseGW + constrainedGW;
-      const aiPct = (constrainedGW / usTotalGW) * 100;
+      const usTotalGW = usBaseGW + aiTotalGW;
+      const aiPct = (aiTotalGW / usTotalGW) * 100;
 
       return {
         key: row.key,
         demandGW,
         constrainedGW,
+        edgeGW,
         usBaseGW,
         usTotalGW,
         aiPct
@@ -749,8 +756,10 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
           <div className="section">
             <h4 className="section-title">Edge Offload</h4>
             <p className="section-description">
-              Fraction of inference tokens served on-device (phones, laptops, NPUs) rather than in datacenter GPUs.
-              Offloaded tokens bypass the entire DC supply chain — no transformers, no cooling, no grid interconnect.
+              Fraction of inference tokens served at the edge (phones, PCs, Macs, self-hosted small servers) rather than
+              in hyperscale datacenters. Edge tokens skip datacenter power, cooling, CoWoS and HBM, but still use
+              wafers, EUV and DRAM from the same supply, and still use energy. The total edge share is capped
+              at {((TRANSLATION_INTENSITIES?.edge?.maxShareOfInference?.value ?? 1) * 100).toFixed(0)}% of inference tokens.
             </p>
             {renderEditableTable('edge-offload')}
           </div>
@@ -838,9 +847,10 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
             <div className="section">
               <h4 className="section-title">AI Power as % of US Electricity</h4>
               <p className="section-description">
-                Demand GW = unconstrained (what the model wants). Constrained GW = what actually gets
-                built after supply bottlenecks. US baseline (~{US_AVG_ELECTRICITY_GW} GW avg load) grows
-                at {(US_ELECTRICITY_CAGR * 100).toFixed(0)}%/yr non-AI. AI Share uses constrained GW.
+                Average power draw, global AI. Demand = datacenter power if all required compute were
+                built. Datacenter = what gets built after bottlenecks and funding, at that year&apos;s utilization,
+                incl. cooling. Edge = AI inference on phones, PCs, Macs and self-hosted servers. US baseline (~{US_AVG_ELECTRICITY_GW} GW avg load)
+                grows at {(US_ELECTRICITY_CAGR * 100).toFixed(0)}%/yr non-AI. AI Share uses datacenter + edge.
               </p>
               <div className="assumptions-table-wrap">
                 <table className="assumptions-table assumptions-table--metrics">
@@ -848,12 +858,16 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                     <tr>
                       <th className="assumptions-header-cell assumptions-header-label">Year</th>
                       <th className="assumptions-header-cell">
-                        <div className="assumptions-col-title">AI Demand</div>
-                        <div className="assumptions-col-years">GW (unconstrained)</div>
+                        <div className="assumptions-col-title">DC Demand</div>
+                        <div className="assumptions-col-years">GW avg (unconstrained)</div>
                       </th>
                       <th className="assumptions-header-cell">
-                        <div className="assumptions-col-title">AI Actual</div>
-                        <div className="assumptions-col-years">GW (constrained)</div>
+                        <div className="assumptions-col-title">Datacenter</div>
+                        <div className="assumptions-col-years">GW avg (built)</div>
+                      </th>
+                      <th className="assumptions-header-cell">
+                        <div className="assumptions-col-title">Edge</div>
+                        <div className="assumptions-col-years">GW avg</div>
                       </th>
                       <th className="assumptions-header-cell">
                         <div className="assumptions-col-title">US Base</div>
@@ -883,6 +897,9 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                           </td>
                           <td className="assumptions-input-cell">
                             <span className="assumptions-metric">{fmtGW(row.constrainedGW)}</span>
+                          </td>
+                          <td className="assumptions-input-cell">
+                            <span className="assumptions-metric">{fmtGW(row.edgeGW)}</span>
                           </td>
                           <td className="assumptions-input-cell">
                             <span className="assumptions-metric">{row.usBaseGW.toFixed(0)}</span>
