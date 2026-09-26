@@ -327,11 +327,12 @@ const NODES_BASE = [
     inputIntensity: 1,
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 400000,
+    startingCapacity: 912000,  // rescaled to the Excel-anchored fleet (was 400000)
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 100000, type: 'committed' }
+      { date: '2025-06', capacityAdd: 228000, type: 'committed' }
     ],
     leadTimeDebottleneck: 4,
+    maxAnnualExpansion: 0.6,  // Merchant NIC/DPU supply on shared leading-edge wafers
     leadTimeNewBuild: 10,
     rampProfile: 's-curve',
 
@@ -405,7 +406,7 @@ const NODES_BASE = [
     // specialized lines. SK Hynix grew ~80% in 2024 at peak crisis effort; 100%
     // allows headroom for Samsung/Micron simultaneous ramps but caps unrealistic
     // 150%+ growth that shortage elasticity could otherwise produce.
-    maxAnnualExpansion: 1.00,
+    maxAnnualExpansion: 0.5,  // HBM bit growth limited by TSV capacity and DRAM wafer diversion
 
     baseRate: {
       value: 7000000,
@@ -426,11 +427,12 @@ const NODES_BASE = [
     inputIntensity: 128,
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    startingCapacity: 34000000,
+    startingCapacity: 81600000,  // rescaled: ~1.1 EB/yr AI-server DRAM in 2026 (GB200-class ~240 GB/GPU); tight in the 2026 memory crunch (was 34000000)
     committedExpansions: [
-      { date: '2026-01', capacityAdd: 4000000, type: 'optional' }
+      { date: '2026-01', capacityAdd: 9600000, type: 'optional' }
     ],
     leadTimeDebottleneck: 12,
+    maxAnnualExpansion: 0.2,  // DRAM bit supply grows ~15-25%/yr; makers expand cautiously after past gluts
     leadTimeNewBuild: 24,
     rampProfile: 'linear',
 
@@ -470,11 +472,12 @@ const NODES_BASE = [
     inputIntensity: 2,
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    startingCapacity: 540000,
+    startingCapacity: 1998000,  // rescaled to the Excel-anchored fleet (was 540000)
     committedExpansions: [
-      { date: '2026-01', capacityAdd: 80000, type: 'optional' }
+      { date: '2026-01', capacityAdd: 296000, type: 'optional' }
     ],
     leadTimeDebottleneck: 6,
+    maxAnnualExpansion: 0.4,  // NAND supply grows ~20-40%/yr
     leadTimeNewBuild: 18,
     rampProfile: 'linear',
 
@@ -519,11 +522,11 @@ const NODES_BASE = [
     inputIntensity: 0.3,
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 120000,    // TSMC doubled CoWoS capacity through 2025
+    startingCapacity: 235200,  // rescaled to the Excel-anchored fleet (~12 GW-equiv chip supply in 2026) (was 120000)
     committedExpansions: [
-      { date: '2026-06', capacityAdd: 30000, type: 'committed' },
-      { date: '2027-01', capacityAdd: 40000, type: 'committed' },
-      { date: '2027-06', capacityAdd: 20000, type: 'optional' }
+      { date: '2026-06', capacityAdd: 58800, type: 'committed' },
+      { date: '2027-01', capacityAdd: 78400, type: 'committed' },
+      { date: '2027-06', capacityAdd: 39200, type: 'optional' }
     ],
     leadTimeDebottleneck: 30,
     leadTimeNewBuild: 24,
@@ -549,7 +552,7 @@ const NODES_BASE = [
     // Parallelism constraint: TSMC CoWoS doubled in 18 months at peak (~67%/yr).
     // 100% cap allows continued aggressive build-out (Amkor, ASE entering) but
     // prevents unrealistic 150%+ rates the shortage elasticity could otherwise drive.
-    maxAnnualExpansion: 1.00,
+    maxAnnualExpansion: 0.6,  // CoWoS roughly doubled in 2024 and 2025; growth slowing as easy conversions are used up
 
     baseRate: {
       value: 120000,
@@ -674,9 +677,9 @@ const NODES_BASE = [
     inputIntensity: 1,
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    startingCapacity: 800000,
+    startingCapacity: 1016000,  // rescaled to the Excel-anchored fleet (was 800000)
     committedExpansions: [
-      { date: '2026-01', capacityAdd: 100000, type: 'optional' }
+      { date: '2026-01', capacityAdd: 127000, type: 'optional' }
     ],
     leadTimeDebottleneck: 24,
     leadTimeNewBuild: 18,
@@ -701,7 +704,7 @@ const NODES_BASE = [
 
     // Parallelism constraint: OSAT (ASE, Amkor, JCET) growth limited by clean-room
     // build-out and tester capex. Industry historically grows ~20-40%/yr in boom.
-    maxAnnualExpansion: 0.80,
+    maxAnnualExpansion: 0.5,  // Advanced test/assembly lines take 12-24 months to add
 
     baseRate: {
       value: 800000,
@@ -727,10 +730,10 @@ const NODES_BASE = [
     inputIntensity: 0.3,
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 180000,
+    startingCapacity: 232200,  // rescaled to the Excel-anchored fleet (was 180000)
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 20000, type: 'committed' },
-      { date: '2026-06', capacityAdd: 40000, type: 'committed' }
+      { date: '2025-06', capacityAdd: 25800, type: 'committed' },
+      { date: '2026-06', capacityAdd: 51600, type: 'committed' }
     ],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 36,
@@ -756,7 +759,7 @@ const NODES_BASE = [
     // Parallelism constraint: leading-edge fab capex is multi-year (36mo new build)
     // and gated by EUV tool throughput from ASML. Historical TSMC advanced-node
     // capacity grew ~25-35%/yr at peak. 50% cap allows aggressive scenarios.
-    maxAnnualExpansion: 0.50,
+    maxAnnualExpansion: 0.25,  // Leading-edge wafer capacity grows ~20-30%/yr (TSMC N3/N2 ramps, fab construction 2-3 yrs)
 
     baseRate: {
       value: 180000,
@@ -777,11 +780,12 @@ const NODES_BASE = [
     inputIntensity: 0.00002,
     parentNodeIds: ['advanced_wafers'],
 
-    startingCapacity: 4,
+    startingCapacity: 5.2,  // rescaled to the Excel-anchored fleet (was 4)
     committedExpansions: [
-      { date: '2027-01', capacityAdd: 1, type: 'optional' }
+      { date: '2027-01', capacityAdd: 1.3, type: 'optional' }
     ],
     leadTimeDebottleneck: 36,
+    maxAnnualExpansion: 0.2,  // ASML ships ~50-60 EUV tools/yr against an installed base of ~250-300; High-NA ramps slowly
     leadTimeNewBuild: 60,
     rampProfile: 'step',
 
@@ -824,9 +828,9 @@ const NODES_BASE = [
     inputIntensity: 0.125,
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 100000,
+    startingCapacity: 119000,  // rescaled to the Excel-anchored fleet (was 100000)
     committedExpansions: [
-      { date: '2025-06', capacityAdd: 20000, type: 'committed' }
+      { date: '2025-06', capacityAdd: 23800, type: 'committed' }
     ],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 15,
@@ -1053,6 +1057,7 @@ const NODES_BASE = [
       { date: '2026-01', capacityAdd: 20000, type: 'optional' }
     ],
     leadTimeDebottleneck: 10,
+    maxAnnualExpansion: 0.6,  // CDU and cold-plate supply scaling with rack power
     leadTimeNewBuild: 18,
     rampProfile: 's-curve',
 
@@ -1092,7 +1097,7 @@ const NODES_BASE = [
     description: 'Operational data center power capacity',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.0013,  // kwPerGpu(1.0) * pue(1.3) / 1000 = MW per GPU
+    inputIntensity: 0.00182,  // kwPerGpu(1.4) * pue(1.3) / 1000 = MW per accelerator (engine scales with kW growth)
     parentNodeIds: ['gpu_datacenter', 'gpu_inference', 'grid_interconnect', 'off_grid_power'],
 
     startingCapacity: 1500,     // ~1.5 GW/month of new AI DC power coming online
@@ -1127,7 +1132,7 @@ const NODES_BASE = [
     // Hyperscalers can spend unlimited capital but cannot hire unlimited electricians
     // or accelerate utility permitting. Historical DC capacity grew ~25-30%/yr peak.
     // Raised to 100% to allow aggressive buildout scenarios (modular DC, off-grid, etc.)
-    maxAnnualExpansion: 1.00,
+    maxAnnualExpansion: 0.35,  // Shell construction scales with contractor capacity and permitting
 
     baseRate: {
       value: 1500,
@@ -1148,10 +1153,10 @@ const NODES_BASE = [
     description: 'Utility grid connection approvals (3-5 year hookup queues)',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.0013,  // MW per GPU (same as datacenter_mw)
+    inputIntensity: 0.00182,  // MW per accelerator (same as datacenter_mw)
     parentNodeIds: ['datacenter_mw'],
 
-    startingCapacity: 2500,
+    startingCapacity: 920,  // Excel model 2026: US grid 4.5 + ex-US 4 GW/yr IT ≈ 11 GW/yr facility (was 2500)
     committedExpansions: [],
     leadTimeDebottleneck: 36,
     leadTimeNewBuild: 60,
@@ -1177,7 +1182,7 @@ const NODES_BASE = [
 
     // Parallelism constraint: regulatory permitting throughput, not capital.
     // Utility commissions process a finite number of interconnection studies per year.
-    maxAnnualExpansion: 0.10,
+    maxAnnualExpansion: 0.2,  // Excel model: US grid 4.5→12 GW/yr and ex-US 4→13 GW/yr over 2026-2032 (~20%/yr)
 
     baseRate: {
       value: 2500,
@@ -1195,7 +1200,7 @@ const NODES_BASE = [
     description: 'High-voltage transformers for substations',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.000026,  // mwPerGpu * transformersPerMw (0.0013 * 0.02)
+    inputIntensity: 0.000364,  // mwPerGpu * transformersPerMw (0.00182 * 0.2)
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 250,
@@ -1226,7 +1231,7 @@ const NODES_BASE = [
 
     // Parallelism constraint: ~3,500 skilled LPT winding technicians globally;
     // training pipeline adds ~5-8% workforce/yr. Capital is not the bottleneck.
-    maxAnnualExpansion: 0.15,
+    maxAnnualExpansion: 0.2,  // Excel model: electrical equipment 7.5→22 GW/yr over 2026-2032 (~20%/yr)
 
     baseRate: {
       value: 250,
@@ -1244,7 +1249,7 @@ const NODES_BASE = [
     description: 'Contracted incremental generation for new loads',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.0013,  // mwPerGpu (1:1 with datacenter MW demand)
+    inputIntensity: 0.00182,  // mwPerGpu (1:1 with datacenter MW demand)
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 8000,
@@ -1292,7 +1297,7 @@ const NODES_BASE = [
     description: 'Generators, UPS, batteries for redundancy',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.00195,  // mwPerGpu * redundancyFactor (0.0013 * 1.5)
+    inputIntensity: 0.00273,  // mwPerGpu * redundancyFactor (0.00182 * 1.5)
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 10000,
@@ -1336,10 +1341,10 @@ const NODES_BASE = [
     description: 'Skilled labor availability for DC buildouts',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.52,  // mwPerGpu * 400 worker-months per MW
+    inputIntensity: 0.728,  // mwPerGpu * 400 worker-months per MW
     parentNodeIds: ['datacenter_mw'],
 
-    startingCapacity: 5000000,
+    startingCapacity: 600000,  // Excel model 2026: labor/permitting ~13 GW/yr IT (US 9 + ex-US 4) (was 5000000)
     committedExpansions: [],
     leadTimeDebottleneck: 12,
     leadTimeNewBuild: 36,
@@ -1364,7 +1369,7 @@ const NODES_BASE = [
 
     // Parallelism constraint: skilled electrical/mechanical trades labor pool.
     // Apprenticeship pipeline grows ~5%/yr; poaching from other sectors adds ~3%.
-    maxAnnualExpansion: 0.08,
+    maxAnnualExpansion: 0.17,  // Excel model: US labor/permitting 9→24 GW/yr over 2026-2032 (~17%/yr)
 
     baseRate: {
       value: 5000000,
@@ -1382,7 +1387,7 @@ const NODES_BASE = [
     description: 'Ops staffing for running/maintaining data centers',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.0104,  // mwPerGpu * 8 FTEs per MW
+    inputIntensity: 0.01456,  // mwPerGpu * 8 FTEs per MW
     parentNodeIds: ['datacenter_mw'],
 
     startingCapacity: 50000,
@@ -1428,13 +1433,13 @@ const NODES_BASE = [
     description: 'Behind-the-meter generation: gas turbines (18mo), solar+storage (12-18mo), SMRs (36-60mo). Bypasses grid interconnect queue.',
 
     demandDriverType: 'derived',
-    inputIntensity: 0.0013,
+    inputIntensity: 0.00182,
     parentNodeIds: ['datacenter_mw'],
 
-    startingCapacity: 1000,
+    startingCapacity: 325,  // Excel model 2026: on-site generation 3 GW/yr IT ≈ 3.9 GW/yr facility (was 1000)
     committedExpansions: [
-      { date: '2026-06', capacityAdd: 500, type: 'committed', source: 'Announced behind-the-meter gas projects (Microsoft/Constellation, Amazon/Talen)' },
-      { date: '2027-01', capacityAdd: 1000, type: 'optional', source: 'Pipeline of solar+storage co-location projects' }
+      { date: '2026-06', capacityAdd: 162.5, type: 'committed', source: 'Announced behind-the-meter gas projects (Microsoft/Constellation, Amazon/Talen)' },
+      { date: '2027-01', capacityAdd: 325, type: 'optional', source: 'Pipeline of solar+storage co-location projects' }
     ],
     leadTimeDebottleneck: 12,
     leadTimeNewBuild: 24,
@@ -1454,7 +1459,7 @@ const NODES_BASE = [
     // Parallelism constraint: turbine/panel manufacturing + EPC crew availability.
     // Gas turbines are factory-built (GE/Siemens can ramp production lines).
     // Solar panels are commodity. Main bottleneck is EPC labor for installation.
-    maxAnnualExpansion: 0.50,
+    maxAnnualExpansion: 0.3,  // Excel model: on-site generation 3→12 GW/yr over 2026-2032 (~26%/yr); large turbines booked through 2028
 
     yieldModel: 'simple',
     yieldSimpleLoss: 0.05,

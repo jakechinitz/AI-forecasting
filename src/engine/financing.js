@@ -319,7 +319,8 @@ export function createFinancingModel(fin, { startYear: firstModelYear, pue }) {
       debtCapacityTotal: c.debtCapacityTotal,
       equityCapacityTotal: c.equityCapacityTotal,
       shareOfMarketDebtUsed: safeDiv(sum('debtRaised'), c.debtCapacityTotal),
-      selfFunding: totalOcf - returns >= C
+      selfFunding: totalOcf - returns >= C,
+      ...(fleet.extras || {})
     });
     current = null;
   }

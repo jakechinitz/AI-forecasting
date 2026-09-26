@@ -569,9 +569,18 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   // These tokens never hit the datacenter supply chain — no GPUs, no transformers, no cooling.
   // The share is user-configurable per segment and ramps over time (S-curve adoption).
   const edgeOffload = block?.edgeOffload || {};
-  const edgeConsumer = clamp(resolveGrowthRate(edgeOffload.consumer, 0), 0, 1);
-  const edgeEnterprise = clamp(resolveGrowthRate(edgeOffload.enterprise, 0), 0, 1);
-  const edgeAgentic = clamp(resolveGrowthRate(edgeOffload.agentic, 0), 0, 1);
+  const edgeConsumerRaw = clamp(resolveGrowthRate(edgeOffload.consumer, 0), 0, 1);
+  const edgeEnterpriseRaw = clamp(resolveGrowthRate(edgeOffload.enterprise, 0), 0, 1);
+  const edgeAgenticRaw = clamp(resolveGrowthRate(edgeOffload.agentic, 0), 0, 1);
+
+  // Cap the total edge share of inference tokens (scale segment shares down together)
+  const edgeCap = clamp(resolveAssumptionValue(TRANSLATION_INTENSITIES?.edge?.maxShareOfInference?.value, 1), 0, 1);
+  const allTokens = consumerTokensTotal + enterpriseTokensTotal + agenticTokensTotal;
+  const uncappedEdge = consumerTokensTotal * edgeConsumerRaw + enterpriseTokensTotal * edgeEnterpriseRaw + agenticTokensTotal * edgeAgenticRaw;
+  const edgeScale = allTokens > EPSILON && uncappedEdge / allTokens > edgeCap ? (edgeCap * allTokens) / uncappedEdge : 1;
+  const edgeConsumer = edgeConsumerRaw * edgeScale;
+  const edgeEnterprise = edgeEnterpriseRaw * edgeScale;
+  const edgeAgentic = edgeAgenticRaw * edgeScale;
 
   // Datacenter tokens = total tokens × (1 - edge share)
   const consumerTokens = consumerTokensTotal * (1 - edgeConsumer);
@@ -588,6 +597,14 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   const agenticGpus = agenticTokens / Math.max(agenticTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
 
   const requiredInference = consumerGpus + enterpriseGpus + agenticGpus;
+
+  // On-device work in the same datacenter-equivalent effective units. It does
+  // not need datacenter capacity, but it draws on shared silicon supply
+  // (wafers, EUV, DRAM) and uses energy.
+  const requiredEdge =
+    (consumerTokensTotal * edgeConsumer) / Math.max(consumerTokPerSec * secondsPerMonth * efficiencyGain, EPSILON)
+    + (enterpriseTokensTotal * edgeEnterprise) / Math.max(enterpriseTokPerSec * secondsPerMonth * efficiencyGain, EPSILON)
+    + (agenticTokensTotal * edgeAgentic) / Math.max(agenticTokPerSec * secondsPerMonth * efficiencyGain, EPSILON);
 
   // ==========================================================
   // TRAINING: accelerator-hours model (training IS compute-limited)
@@ -614,6 +631,7 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
     requiredTotal: requiredInference + requiredTraining,
     requiredInference,
     requiredTraining,
+    requiredEdge,
     hwIndex,
     kwIndex: eff.KW,
     inferenceDemand,
@@ -996,6 +1014,20 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     fleetTokPerKwhM: [], frontierTokPerKwhM: [], kwPerNewAccelerator: [],
     trainingShare: []
   };
+  // On-device (edge) inference: shares wafer/EUV/DRAM supply, adds energy
+  const edgeCfg = TRANSLATION_INTENSITIES?.edge || {};
+  const edgeWaferX = resolveAssumptionValue(edgeCfg.waferIntensityVsDatacenter?.value, 1.0);
+  const edgeDramX = resolveAssumptionValue(edgeCfg.dramIntensityVsDatacenter?.value, 1.0);
+  const edgeEnergyX = resolveAssumptionValue(edgeCfg.energyPerTokenVsDatacenter?.value, 0.23);
+  const edgeDevices0 = resolveAssumptionValue(edgeCfg.activeDevices?.value, 8.5e9);
+  const edgeDeviceGrowth = resolveAssumptionValue(edgeCfg.activeDevices?.growth, 0.02);
+  const edgeLifeMonths = Math.max(1, resolveAssumptionValue(edgeCfg.deviceLifeMonths?.value, 36));
+  const EDGE_SHARED_NODES = { advanced_wafers: edgeWaferX, euv_tools: edgeWaferX, dram_server: edgeDramX };
+  let edgeInstalledEff = null;
+  Object.assign(results.fleet, { edgeEquivGW: [], edgePowerGW: [], dcPowerGW: [], edgeTokenShare: [], edgeUnitsDeployed: [], edgeWattsPerDevice: [] });
+  const utilPath = financingAssumptions?.paths?.utilization || {};
+  const idleShare = financingAssumptions?.scalars?.idlePowerShare ?? 0.5;
+
   // Diagnostic: annualized GW each gate could support, per month
   results.gates = {};
   const recordGate = (name, gpus, m, kw) => {
@@ -1161,7 +1193,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         priorScarcityRatio: totalEff > EPSILON ? Math.max(0, req.requiredTotal - totalEff) / totalEff : 0,
         preSpendRatio: nextLen > 0 && reqAvg > EPSILON ? (reqNextSum / nextLen) / reqAvg : 1
       });
-      yearAccum = { requiredGWSum: 0, months: 0, tokens: 0 };
+      yearAccum = { requiredGWSum: 0, months: 0, tokens: 0, edgeEquivGW: 0, edgePowerGW: 0, dcPowerGW: 0, edgeShare: 0, edgeWatts: 0 };
     }
 
     const backlogPaydown = gpuState.backlog / BACKLOG_PAYDOWN_MONTHS_GPU;
@@ -1185,6 +1217,25 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
       potentials[node.id] = (state.type === 'STOCK') ? (state.inventory + effCap) : effCap;
     }
+
+    // On-device silicon claims shared wafer/EUV/DRAM supply first (phone and
+    // PC makers hold long-term contracts). Devices refresh every edgeLifeMonths.
+    if (edgeInstalledEff === null) edgeInstalledEff = req.requiredEdge || 0;
+    const edgeRetireEff = edgeInstalledEff / edgeLifeMonths;
+    const edgeNeedEff = Math.max(0, (req.requiredEdge || 0) - (edgeInstalledEff - edgeRetireEff));
+    const edgeUnits = edgeNeedEff / hwIdx; // physical datacenter-equivalent units at this month's hardware
+    const edgeDemand = {};
+    let edgeServedFrac = 1;
+    for (const [id, x] of Object.entries(EDGE_SHARED_NODES)) {
+      const need = edgeUnits * (monthIntensity[id] || 0) * x;
+      edgeDemand[id] = need;
+      if (need > EPSILON && potentials[id] !== undefined) {
+        edgeServedFrac = Math.min(edgeServedFrac, potentials[id] / need);
+        potentials[id] = Math.max(0, potentials[id] - need);
+      }
+    }
+    edgeServedFrac = clamp(edgeServedFrac, 0, 1);
+    edgeInstalledEff = Math.max(0, edgeInstalledEff - edgeRetireEff + edgeNeedEff * edgeServedFrac);
 
     // =======================================================
     // STEP 2: GATING
@@ -1456,8 +1507,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const planUnits = isInfra ? Math.max(0, planDeployTotal - totalRetirements) : planDeployTotal;
       const actualUnits = isInfra ? Math.max(0, actualDeployTotal - totalRetirements) : actualDeployTotal;
 
-      const planDemand = planUnits * intensity;
-      const actualConsumption = actualUnits * intensity;
+      const edgeNeed = edgeDemand[node.id] || 0;
+      const planDemand = planUnits * intensity + edgeNeed;
+      const actualConsumption = actualUnits * intensity + edgeNeed * edgeServedFrac;
 
       // Effective demand: producers respond to what customers actually consume,
       // not the unconstrained order book. When a different component is the fleet
@@ -1630,11 +1682,31 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     results.fleet.kwPerNewAccelerator.push(kwNew);
     results.fleet.trainingShare.push(req.requiredTotal > EPSILON ? req.requiredTraining / req.requiredTotal : 0);
 
+    // Energy: average draw = idle share + (1 − idle) × utilization (Excel convention)
+    const utilNow = utilPath[calendarYear] ?? utilPath[String(calendarYear)] ?? 0.6;
+    const drawFactor = idleShare + (1 - idleShare) * utilNow;
+    const edgeEquivGW = (req.requiredEdge || 0) * kwPerEff / 1e6;
+    const dcPowerGW = (fleetKW / 1e6) * drawFactor * pue;
+    const edgePowerGW = edgeEquivGW * drawFactor * pue * edgeEnergyX;
+    const dcTokens = (req.inferenceDemand.consumer || 0) + (req.inferenceDemand.enterprise || 0) + (req.inferenceDemand.agentic || 0);
+    results.fleet.edgeEquivGW.push(edgeEquivGW);
+    results.fleet.dcPowerGW.push(dcPowerGW);
+    results.fleet.edgePowerGW.push(edgePowerGW);
+    results.fleet.edgeTokenShare.push(dcTokens > EPSILON ? (req.edgeTokensTotal || 0) / (dcTokens * scaleUsed) : 0);
+    results.fleet.edgeUnitsDeployed.push(edgeUnits * edgeServedFrac);
+    const devicesNow = edgeDevices0 * Math.pow(1 + edgeDeviceGrowth, month / 12);
+    results.fleet.edgeWattsPerDevice.push(devicesNow > 0 ? edgePowerGW * 1e9 / devicesNow : 0);
+
     financing.recordMonth({ deployedGW, retiredGW, binding, lostToFundingGW });
     if (yearAccum) {
       yearAccum.requiredGWSum += requiredGW;
       yearAccum.months += 1;
       yearAccum.tokens += (req.inferenceDemand.consumer || 0) + (req.inferenceDemand.enterprise || 0) + (req.inferenceDemand.agentic || 0);
+      yearAccum.edgeEquivGW += edgeEquivGW;
+      yearAccum.edgePowerGW += edgePowerGW;
+      yearAccum.dcPowerGW += dcPowerGW;
+      yearAccum.edgeShare += results.fleet.edgeTokenShare[month];
+      yearAccum.edgeWatts += results.fleet.edgeWattsPerDevice[month];
     }
     if (monthOfYear === 11 || month === months - 1) {
       financing.closeYear({
@@ -1642,7 +1714,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         requiredGW: yearAccum && yearAccum.months ? yearAccum.requiredGWSum / yearAccum.months : requiredGW,
         requiredGWYearEnd: requiredGW,
         installedGW: fleetKW / 1e6,
-        scarcityRatio: fleetEff > EPSILON ? Math.max(0, req.requiredTotal - fleetEff) / fleetEff : 0
+        scarcityRatio: fleetEff > EPSILON ? Math.max(0, req.requiredTotal - fleetEff) / fleetEff : 0,
+        extras: yearAccum && yearAccum.months ? {
+          edgeTokenShare: yearAccum.edgeShare / yearAccum.months,
+          edgeEquivGW: yearAccum.edgeEquivGW / yearAccum.months,
+          edgePowerGW: yearAccum.edgePowerGW / yearAccum.months,
+          dcPowerGW: yearAccum.dcPowerGW / yearAccum.months,
+          totalAiPowerGW: (yearAccum.edgePowerGW + yearAccum.dcPowerGW) / yearAccum.months,
+          edgeWattsPerDevice: yearAccum.edgeWatts / yearAccum.months
+        } : {}
       });
     }
   }
