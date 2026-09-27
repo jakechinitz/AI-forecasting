@@ -1016,13 +1016,15 @@ const NODES_BASE = [
     name: 'Data Center Capacity',
     group: 'H',
     unit: 'MW/month',
-    description: 'Operational data center power capacity',
+    description: 'Datacenter shells (building, MEP, fit-out) completed by the construction pipeline',
 
     demandDriverType: 'derived',
-    // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (kW per accelerator × PUE ÷ 1000, scaled by kw_growth)
+    // Capacity = the construction pipeline's completions each month
+    // (BUILD_ASSUMPTIONS.pipeline: starts, 18-month builds, on-time share,
+    // slips). startingCapacity is reference only: the opening pipeline sets 2026.
     parentNodeIds: ['gpu_datacenter', 'gpu_inference', 'grid_interconnect', 'off_grid_power'],
 
-    startingCapacity: 3680,  // Facility construction ~25-35 GW IT/yr globally in 2026 (JLL, SemiAnalysis 22 GW US under vertical construction for 2027) → ~30 GW IT ≈ 37.5 GW facility/yr ÷ 0.85
+    startingCapacity: 3680,  // reference: ~25-35 GW IT/yr facility construction globally in 2026 (JLL, SemiAnalysis)
     committedExpansions: [],
     leadTimeDebottleneck: 24,
     leadTimeNewBuild: 48,
@@ -1046,7 +1048,7 @@ const NODES_BASE = [
     geoRiskFlag: true,
     exportControlSensitivity: 'low',
 
-    // Growth: demand-driven, no growth cap; construction labor and power hookups gate as their own nodes.
+    // Growth: construction starts follow expected need, paced by crews (dc_construction) and the budget; power hookups gate separately.
 
     baseRate: {
       value: 3680,

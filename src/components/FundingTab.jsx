@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import NumInput, { Kpi } from './NumInput.jsx';
 import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, ComposedChart,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine
@@ -6,13 +7,12 @@ import {
 
 /**
  * Capital & Funding tab — inputs and outputs of the financing layer ported
- * from AI_Capex_Funding_Model.xlsx. Edits flow into the simulation: fundable
- * capex caps monthly deployments when the funding constraint is on.
+ * from AI_Capex_Funding_Model.xlsx. Edits flow into the simulation: each
+ * year's fundable capex is the budget for construction payments and chip
+ * purchases when the funding constraint is on.
  */
 
 const SCALAR_FIELDS = [
-  { key: 'preSpendFraction', label: 'Pre-spend fraction (next year’s build paid this year)', kind: 'pct' },
-  { key: 'computeShareOfCapex', label: 'Compute & networking share of $/GW', kind: 'pct', help: 'Also the cost of replacing retired compute (shell and power are reused)' },
   { key: 'computeLifeYears', label: 'Compute life (years)', kind: 'num', help: 'Drives depreciation AND when accelerators retire in the physical model' },
   { key: 'facilityLifeYears', label: 'Facility & power life (years)', kind: 'num' },
   { key: 'cashTaxRate', label: 'Cash tax rate on AI EBIT', kind: 'pct' },
@@ -42,58 +42,11 @@ const TIER_FIELDS = [
 
 const PATH_FIELDS = [
   { key: 'priceChange', label: 'Blended $/M token price change', kind: 'pct' },
-  { key: 'utilization', label: 'Effective utilization', kind: 'pct' },
-  { key: 'capexPerGw', label: 'All-in capex per GW ($B)', kind: 'num' }
+  { key: 'utilization', label: 'Effective utilization (energized fleet)', kind: 'pct' }
 ];
-
-// Numeric cell that keeps its own text while typing and commits on blur or
-// Enter, so partial entries ("-", "0.") never reach the model. Escape reverts.
-function NumInput({ value, kind, step, onChange, width = 64 }) {
-  const format = (v) => (v == null || Number.isNaN(+v)
-    ? ''
-    : String(kind === 'pct' ? +(v * 100).toFixed(2) : +(+v).toFixed(4)));
-  const [text, setText] = useState(format(value));
-  const [editing, setEditing] = useState(false);
-  useEffect(() => { if (!editing) setText(format(value)); }, [value, kind, editing]);
-  const commit = () => {
-    setEditing(false);
-    const n = parseFloat(text);
-    if (Number.isFinite(n)) {
-      const next = kind === 'pct' ? n / 100 : n;
-      if (next !== value) onChange(next);
-    } else {
-      setText(format(value));
-    }
-  };
-  return (
-    <input
-      type="number"
-      className="fin-input"
-      style={{ width }}
-      step={step ?? 1}
-      value={text}
-      onFocus={() => setEditing(true)}
-      onChange={(e) => setText(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') e.currentTarget.blur();
-        if (e.key === 'Escape') { setText(format(value)); setEditing(false); e.currentTarget.blur(); }
-      }}
-    />
-  );
-}
 
 const money = (v) => (v == null ? '-' : `$${Math.round(v).toLocaleString('en-US')}B`);
 
-function Kpi({ label, value, sub }) {
-  return (
-    <div className="fin-kpi">
-      <div className="fin-kpi-label">{label}</div>
-      <div className="fin-kpi-value">{value}</div>
-      {sub && <div className="fin-kpi-sub">{sub}</div>}
-    </div>
-  );
-}
 
 function FundingTab({ results, financing, onFinancingChange, onResetFinancing }) {
   const [chartYears, setChartYears] = useState(10);
@@ -118,9 +71,10 @@ function FundingTab({ results, financing, onFinancingChange, onResetFinancing })
 
   const buildData = useMemo(() => view.map((r) => ({
     year: r.year,
-    built: r.deployedGW,
-    deferred: r.deferredByFundingGW,
-    unmet: r.unmetGW
+    bought: r.purchasedGW,
+    energized: r.deployedGW,
+    stranded: r.strandedGWYearEnd,
+    deferred: r.deferredByFundingGW
   })), [view]);
 
   const leverage = useMemo(() => view.map((r, i) => {
@@ -141,16 +95,16 @@ function FundingTab({ results, financing, onFinancingChange, onResetFinancing })
   if (!fin) return <div className="loading-state"><p>No financing results.</p></div>;
 
   const deferredTotal = view.reduce((s, r) => s + r.deferredByFundingGW, 0);
+  const fundingYears = view.filter((r) => r.procurementBinding === 'Funding' || r.startsBinding === 'Funding').map((r) => r.year);
   const peak = view.reduce((best, r) => (r.totalCapex > (best?.totalCapex ?? -1) ? r : best), null);
   const debtTotal = view.reduce((s, r) => s + r.debtRaised, 0);
   const unfundedTotal = view.reduce((s, r) => s + r.unfundedCapex, 0);
   const opDeficitTotal = view.reduce((s, r) => s + r.operatingDeficit, 0);
   const firstYear = annual[0]?.year;
-  const bindingYears = view.filter((r) => r.bindingConstraint === 'Funding').map((r) => r.year);
 
   const tierShareSum = financing.tiers.reduce((s, t) => s + (t.share || 0), 0);
   const badChannels = financing.channels.filter((c) => Math.abs((c.alloc || []).reduce((s, v) => s + v, 0) - 1) > 1e-6);
-  const pathYears = Object.keys(financing.paths.capexPerGw).map(Number).sort((a, b) => a - b);
+  const pathYears = Object.keys(financing.paths.utilization).map(Number).sort((a, b) => a - b);
 
   const tooltipStyle = { background: 'var(--bg-elevated)', border: '1px solid var(--bg-tertiary)', fontSize: 12 };
   const axis = { tick: { fontSize: 10, fill: 'var(--text-muted)' } };
@@ -163,7 +117,8 @@ function FundingTab({ results, financing, onFinancingChange, onResetFinancing })
           <p className="tab-description">
             Who pays for the build. Each year, three builder tiers fund capex from operating cash flow, cash, debt and equity,
             limited by leverage ceilings, capital-markets capacity and how much outside money management will use.
-            When the constraint is on, anything the tiers cannot fund is not built.
+            When the constraint is on, that fundable capex is the budget: construction under way is paid first, then chip
+            orders; builders also pace new construction starts to what the budget can carry over the next year.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-sm)', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -181,7 +136,7 @@ function FundingTab({ results, financing, onFinancingChange, onResetFinancing })
 
       <div className="fin-kpis">
         <Kpi label="System self-funding year" value={fin.selfFundingYear.system || 'Beyond horizon'} sub="OCF − returns ≥ capex" />
-        <Kpi label={`Build deferred by funding (${view[0]?.year}–${view[view.length - 1]?.year})`} value={`${deferredTotal.toFixed(1)} GW`} sub={bindingYears.length ? `Funding binds: ${bindingYears[0]}–${bindingYears[bindingYears.length - 1]}` : 'Funding never binds'} />
+        <Kpi label={`Chip orders deferred by funding (${view[0]?.year}–${view[view.length - 1]?.year})`} value={`${deferredTotal.toFixed(1)} GW`} sub={fundingYears.length ? `Funding limits orders or starts: ${fundingYears.join(', ')}` : 'Funding never binds'} />
         <Kpi label="Peak annual AI capex" value={money(peak?.totalCapex)} sub={peak ? `in ${peak.year}` : ''} />
         <Kpi label="Debt raised (cumulative)" value={money(debtTotal)} sub={`${view[0]?.year}–${view[view.length - 1]?.year}`} />
         <Kpi label="Unfunded capex" value={money(unfundedTotal)} sub={`${financing.applyFundingConstraint ? 'Gate on: stays 0' : 'Gate off: charged to cash'}${opDeficitTotal > 0.5 ? ` · operating deficit ${money(opDeficitTotal)}` : ''}`} />
@@ -216,7 +171,7 @@ function FundingTab({ results, financing, onFinancingChange, onResetFinancing })
         </div>
 
         <div className="chart-container">
-          <div className="chart-header"><h3 className="chart-title">GW built vs deferred by funding</h3></div>
+          <div className="chart-header"><h3 className="chart-title">Chips bought vs energized (GW IT)</h3></div>
           <ResponsiveContainer width="100%" height={280}>
             <ComposedChart data={buildData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--bg-tertiary)" />
@@ -224,9 +179,10 @@ function FundingTab({ results, financing, onFinancingChange, onResetFinancing })
               <YAxis {...axis} />
               <Tooltip contentStyle={tooltipStyle} formatter={(v) => `${(+v).toFixed(1)} GW`} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar dataKey="built" stackId="g" fill="#1d9bf0" name="GW built" />
-              <Bar dataKey="deferred" stackId="g" fill="#f4212e" name="Deferred by funding (sum of monthly)" />
-              <Line type="monotone" dataKey="unmet" stroke="#ff7a00" dot={false} strokeWidth={2} name="Unmet demand, year-end" />
+              <Bar dataKey="bought" fill="#7856ff" name="Chips bought" />
+              <Bar dataKey="energized" fill="#1d9bf0" name="Energized" />
+              <Line type="monotone" dataKey="stranded" stroke="#ff7a00" dot={false} strokeWidth={2} name="Bought, not yet energized (year-end)" />
+              <Line type="monotone" dataKey="deferred" stroke="#f4212e" dot={false} strokeDasharray="4 4" name="Orders deferred by funding" />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -269,8 +225,9 @@ function FundingTab({ results, financing, onFinancingChange, onResetFinancing })
 
       <h2 className="section-title" style={{ marginTop: 'var(--space-xl)' }}>Inputs</h2>
       <p className="section-description">
-        Ported from AI_Capex_Funding_Model.xlsx (Sept 2026 anchors). Physical quantities, fleet efficiency by vintage, training
-        share and the scarcity ratio come from the simulation, not from these inputs.
+        Ported from AI_Capex_Funding_Model.xlsx, with builder tiers recalibrated to Q2-2026 capex guidance. Physical quantities,
+        fleet efficiency by vintage, training share, the scarcity ratio and capex per GW (bottom-up, Spend by Input tab) come
+        from the simulation, not from these inputs.
       </p>
 
       <div className="grid grid-2">

@@ -286,9 +286,11 @@ function AnalysisTab({ results, onSelectNode }) {
           <div>
             <h4 style={{ fontSize: '0.875rem', marginBottom: 'var(--space-sm)' }}>What Binds</h4>
             <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-              Each month, deployments = min(demand plan, accelerator supply, every gating component,
-              funding). The list on the left counts which one set deployments. Component tightness
-              below shows pressure on nodes that were not the binding limit.
+              The build runs in three stages each month: construction (starts paced by crews and the
+              budget), chip buying (limited by accelerator and component supply and funding), and
+              energization = min(demand plan, chips in hand, empty shells, power hookups and other
+              infrastructure). The list on the left counts what limited energization. Component
+              tightness below shows pressure on nodes that were not the binding limit.
             </p>
           </div>
           <div>

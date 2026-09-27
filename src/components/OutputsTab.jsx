@@ -32,7 +32,12 @@ const yearAverages = (series, annual) => annual.map((_, i) => {
 // Gates in reading order: demand, capital, chips, then components by name
 const GATE_ORDER = ['Plan (demand)', 'Funding', 'GPU supply (fab + inventory)'];
 
-function buildSheet(annual, tiers, tierMeta, gates) {
+const SPEND_GROUP_TITLES = {
+  compute: 'Compute & servers', network: 'Networking', facility: 'Facilities', power: 'Power',
+  embedded: 'Supplier value inside accelerator prices (not added to totals)', opex: 'Operating spend (not capex)'
+};
+
+function buildSheet(annual, tiers, tierMeta, gates, spend) {
   const col = (key) => annual.map((r) => r[key]);
   const tierCol = (id, key) => (tiers[id] || []).map((r) => r[key]);
   const gateNames = Object.keys(gates || {}).sort((a, b) => {
@@ -50,6 +55,7 @@ function buildSheet(annual, tiers, tierMeta, gates) {
         { label: 'Required installed GW (year average)', unit: 'GW', values: col('requiredGW'), f: fmt.gw },
         { label: 'Required installed GW (year-end)', unit: 'GW', values: col('requiredGWYearEnd'), f: fmt.gw },
         { label: 'Installed GW, opening', unit: 'GW', values: col('openingGW'), f: fmt.gw },
+        { label: 'Chips bought', unit: 'GW', values: col('purchasedGW'), f: fmt.gw },
         { label: 'GW built (energized)', unit: 'GW', values: col('deployedGW'), f: fmt.gw, bold: true },
         { label: '  of which replacing retirements', unit: 'GW', values: col('replacementGW'), f: fmt.gw },
         { label: '  of which net new', unit: 'GW', values: col('netNewGW'), f: fmt.gw },
@@ -57,9 +63,23 @@ function buildSheet(annual, tiers, tierMeta, gates) {
         { label: 'Installed GW, year-end', unit: 'GW', values: col('installedGW'), f: fmt.gw, bold: true },
         { label: 'Unmet demand (required − installed)', unit: 'GW', values: col('unmetGW'), f: fmt.gw },
         { label: 'Scarcity ratio (unmet ÷ installed)', unit: 'x', values: col('scarcityRatio'), f: fmt.num2 },
-        { label: 'Build deferred by funding (sum of monthly shortfalls)', unit: 'GW', values: col('deferredByFundingGW'), f: fmt.gw, highlight: true },
-        { label: 'Binding constraint (most months)', unit: '', values: col('bindingConstraint'), f: fmt.text },
+        { label: 'Share of demand served (year average)', unit: '%', values: col('servedFraction'), f: fmt.pct },
+        { label: 'Chip orders deferred by funding', unit: 'GW', values: col('deferredByFundingGW'), f: fmt.gw, highlight: true },
+        { label: 'Energization limited by (most months)', unit: '', values: col('bindingConstraint'), f: fmt.text },
+        { label: 'Chip buying limited by (most months)', unit: '', values: col('procurementBinding'), f: fmt.text },
+        { label: 'Construction starts limited by (most months)', unit: '', values: col('startsBinding'), f: fmt.text },
         { label: 'Build growth', unit: '%', values: col('buildGrowth'), f: fmt.pct }
+      ]
+    },
+    {
+      title: 'Construction pipeline and stranded chips',
+      rows: [
+        { label: 'Construction starts', unit: 'GW IT', values: col('startsGW'), f: fmt.gw },
+        { label: 'Shell completions', unit: 'GW IT', values: col('completionsGW'), f: fmt.gw },
+        { label: 'Under construction, year-end', unit: 'GW IT', values: col('underConstructionGWYearEnd'), f: fmt.gw },
+        { label: 'Shells complete but empty, year-end', unit: 'GW IT', values: col('readyShellsGWYearEnd'), f: fmt.gw },
+        { label: 'Chips bought but not energized, year-end', unit: 'GW IT', values: col('strandedGWYearEnd'), f: fmt.gw, highlight: true },
+        { label: 'Stranded chips as share of the year’s purchases', unit: '%', values: annual.map((r) => (r.purchasedGW > 0 ? r.strandedGWYearEnd / r.purchasedGW : null)), f: fmt.pct }
       ]
     },
     {
@@ -100,7 +120,7 @@ function buildSheet(annual, tiers, tierMeta, gates) {
         { label: 'D&A/GW', unit: '$B/GW', values: col('daPerGw'), f: fmt.usd2 },
         { label: 'EBIT/GW', unit: '$B/GW', values: col('ebitPerGw'), f: fmt.usd2 },
         { label: 'OCF/GW', unit: '$B/GW', values: col('ocfPerGw'), f: fmt.usd2, bold: true },
-        { label: 'Capex per GW (new build)', unit: '$B/GW', values: col('capexPerGw'), f: fmt.usd1 },
+        { label: 'Capex per GW IT, new build (bottom-up, start of year)', unit: '$B/GW', values: col('capexPerGw'), f: fmt.usd1 },
         { label: 'Payback on new GW', unit: 'years', values: col('paybackYears'), f: fmt.yrs },
         { label: 'Unlevered pre-tax ROIC', unit: '%', values: col('roic'), f: fmt.pct1 },
         { label: 'Self-fundable growth g* (OCF/GW ÷ capex/GW)', unit: '%', values: col('gStar'), f: fmt.pct1 },
@@ -112,14 +132,25 @@ function buildSheet(annual, tiers, tierMeta, gates) {
     {
       title: 'Capex',
       rows: [
-        { label: 'Capex timing factor (pre-spend)', unit: 'x', values: col('timingFactor'), f: fmt.num2 },
-        { label: 'New-build capex', unit: '$B', values: col('newBuildCapex'), f: fmt.usd },
-        { label: 'Replacement capex (compute share)', unit: '$B', values: col('replacementCapex'), f: fmt.usd },
+        { label: 'Chips, servers & networking (paid when bought)', unit: '$B', values: col('computeCapex'), f: fmt.usd },
+        { label: 'Facilities & power (paid during construction)', unit: '$B', values: col('facilityCapex'), f: fmt.usd },
         { label: 'TOTAL AI capex', unit: '$B', values: col('totalCapex'), f: fmt.usd, bold: true },
         { label: 'Capex growth', unit: '%', values: growth(annual, 'totalCapex'), f: fmt.pct },
         { label: 'Capex per GW deployed (new + replacement)', unit: '$B/GW', values: col('capexPerGwDeployed'), f: fmt.usd1 }
       ]
     },
+    ...(spend ? [{
+      title: 'Spend by input ($B; see the Spend by Input tab for growth, volumes and prices)',
+      rows: [
+        ...['compute', 'network', 'facility', 'power'].flatMap((g) => [
+          ...spend.inputs.filter((i) => i.group === g).map((i) => ({ label: `${SPEND_GROUP_TITLES[g]}: ${i.label}`, unit: '$B', values: i.spendB, f: fmt.usd }))
+        ]),
+        { label: 'TOTAL CAPEX (all inputs)', unit: '$B', values: spend.totals.capex.spendB, f: fmt.usd, bold: true },
+        { label: 'Capex growth', unit: '%', values: spend.totals.capex.growth, f: fmt.pct },
+        ...spend.inputs.filter((i) => i.group === 'embedded').map((i) => ({ label: `Inside accelerators: ${i.label}`, unit: '$B', values: i.spendB, f: fmt.usd })),
+        ...spend.inputs.filter((i) => i.group === 'opex').map((i) => ({ label: `Opex: ${i.label}`, unit: '$B', values: i.spendB, f: fmt.usd }))
+      ]
+    }] : []),
     {
       title: 'Funding (all tiers)',
       rows: [
@@ -191,7 +222,7 @@ function OutputsTab({ results, scenario }) {
   const fin = results?.financing;
 
   const sections = useMemo(
-    () => (fin ? buildSheet(annual, fin.tiers, fin.tierMeta, results?.gates) : []),
+    () => (fin ? buildSheet(annual, fin.tiers, fin.tierMeta, results?.gates, results?.spend) : []),
     [annual, fin, results]
   );
 

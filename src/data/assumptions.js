@@ -749,12 +749,145 @@ export const SHARED_SUPPLY_POOLS = {
 };
 
 // ============================================
+// BUILD PIPELINE: FACILITIES, CHIP PROCUREMENT, DEMAND RESPONSE
+// ============================================
+/**
+ * Datacenter facilities are built through an explicit construction pipeline:
+ * projects start, are paid for and staffed during construction, and complete
+ * on schedule or late. Completed shells wait for power and for chips.
+ *
+ * Buyers order accelerators for the capacity they are SCHEDULED to energize.
+ * When shells or power arrive late, the chips wait in inventory (stranded:
+ * bought, not plugged in), and buyers cut new orders until the stock clears.
+ *
+ * MW here are facility MW (IT × PUE), global ex-China.
+ */
+const FACILITY_PIPELINE = {
+  constructionMonths: 18,           // Goldman: DCs take 18-24 months to build; AI campuses are fast-tracked
+  // Share of capacity that completes on schedule (by calendar year of the
+  // scheduled completion). The rest slips, on average slipMonthsMean months.
+  onTimeShareSchedule: [
+    { until: 2028, share: 0.50 },   // Goldman: only ~half of AI capacity scheduled through 2028 on time (50-60% for the next 1-2 years)
+    { until: 2045, share: 0.72 }    // Goldman: historical on-time rate ~72%
+  ],
+  slipMonthsMean: 12,               // delays of 6-24 months are typical (power, equipment, labor, permits)
+  // Opening pipeline (under construction at end-2025), scheduled completions.
+  // Sized so ACTUAL 2026 completions ≈ 23-25 GW facility (US 16-18 GW gross
+  // energizable per Jefferies satellite count ÷ ~0.72 US share) with only
+  // half arriving on schedule.
+  openingScheduledMW: { firstYear: 34000, nextHalfYear: 20000 },
+  openingSlippedMW: 6000,           // 2025-scheduled capacity still unfinished at the start
+  openingReadyShellsMW: 0,          // Nadella: short of warm shells, not chips
+  // New starts: developers start projects to cover the capacity they expect to
+  // need at completion; permitting and site work add a decision lag, and the
+  // gap is closed over several months rather than all at once.
+  permitLagMonths: 6,
+  startSmoothingMonths: 12,
+  openingStartsMWPerMonth: 2700,    // starts already decided for the first permitLagMonths (~2025 start pace)
+  source: 'Goldman Sachs (on-time rates, 18-24 mo builds); Jefferies/Alphaville satellite count (US 16-18 GW gross energizable in 2026, low twenties in 2027); SemiAnalysis (22 GW US under vertical construction)'
+};
+
+const PROCUREMENT = {
+  // Buyers take delivery this many months ahead of scheduled energization
+  procurementLeadMonths: 3,
+  // Extra stock buyers want in hand (precautionary buying / hoarding), in
+  // months of expected energization
+  hoardMonths: 2,
+  // Months over which buyers work excess (or missing) inventory back to target
+  inventoryAdjustMonths: 6,
+  // Accelerators bought but not energized at the start (IT GW, 2025 vintage)
+  openingStrandedGW: 2.0,
+  source: 'Nadella (Nov 2025): chips sitting in inventory without warm shells; Morgan Stanley (Aug 2026): 33 GW US power shortfall = 34% of chip demand through 2028'
+};
+
+/**
+ * How token demand responds when compute stays scarce. Growth rates are
+ * calibrated on tokens actually SERVED at the opening shortage; these rules
+ * only act when scarcity is worse than that baseline.
+ *  - priceElasticity: demand falls as the scarcity price premium rises
+ *    (demand ∝ premium^-elasticity, relative to the opening premium).
+ *  - unservedHalfLifeMonths: unserved demand beyond the opening shortage
+ *    decays with this half-life (users give up or go elsewhere).
+ *  - capabilityFeedback: 0 in the base case. Above 0, a build shortfall also
+ *    slows demand GROWTH (less compute → slower model progress → weaker
+ *    adoption); growth is scaled by (served share vs baseline)^feedback.
+ */
+const DEMAND_RESPONSE = {
+  priceElasticity: 0.5,
+  unservedHalfLifeMonths: 6,
+  capabilityFeedback: 0,
+  source: 'Model design: growth rates are measured on served tokens (see DEMAND_ASSUMPTIONS year 1)'
+};
+
+// ============================================
+// UNIT COSTS (dollars per input)
+// ============================================
+/**
+ * Prices for every supply-chain input, so spend by input = physical volume ×
+ * unit price. Volumes come from the engine (accelerators bought, components
+ * per accelerator, facility MW under construction). Prices are January 2026
+ * levels (global ex-China, contract not spot), then change at the annual rate
+ * for each time block. passThrough: share of the node's scarcity price index
+ * (tightness) that shows up in the price actually paid; contracted inputs
+ * pass little through.
+ *
+ * group: compute | network | facility | power (capex), embedded (value inside
+ * accelerator prices; not added to totals), opex.
+ * basis: perKw (× kW per accelerator bought), perUnit (× node intensity per
+ * accelerator bought), perMwFacility (× facility MW paid for during
+ * construction), plus special quantity rules noted per input.
+ */
+const pc = (year1, year2, year3, year4, year5, years6_10, years11_15, years16_20) =>
+  ({ year1, year2, year3, year4, year5, years6_10, years11_15, years16_20 });
+
+export const COST_ASSUMPTIONS_BASE = {
+  inputs: [
+    // --- Compute & servers (paid when accelerators are bought) ---
+    {
+      id: 'accelerators', label: 'Accelerators (GPU / ASIC modules)', group: 'compute', basis: 'perKw',
+      unit: '$ per kW', price: 18000, node: 'gpu_datacenter', passThrough: 0.15,
+      change: pc(0, 0, -0.03, -0.05, -0.05, -0.06, -0.06, -0.05),
+      source: 'Nvidia DC compute ~$300B CY26 + AMD ~$15B + custom ASICs ~$50-65B over ~15.5M ex-China units (JPM 16.3M global) ≈ $25-27k/unit ≈ $18k per kW; $/kW roughly flat per generation (Rubin prices rise with power)'
+    },
+    { id: 'host_cpu', label: 'Host CPUs', group: 'compute', basis: 'perUnit', node: 'cpu_server', unit: '$ per CPU', price: 3000, passThrough: 0.1, change: pc(0, -0.03, -0.05, -0.05, -0.05, -0.05, -0.04, -0.03), source: 'Grace ~$3k; x86 server CPUs $3-8k; blended per AI server CPU' },
+    { id: 'host_dram', label: 'Server DRAM', group: 'compute', basis: 'perUnit', node: 'dram_server', unit: '$ per GB', price: 9, passThrough: 0, change: pc(0.45, 0.05, -0.20, -0.15, -0.10, -0.10, -0.08, -0.06), source: 'TrendForce: server DRAM contract +~90% Q1-26, +13-18% Q3-26; LTAs $7.8-21/GB; crunch into 2027, new fabs 2027-28' },
+    { id: 'ssd', label: 'Datacenter SSDs', group: 'compute', basis: 'perUnit', node: 'ssd_datacenter', unit: '$ per TB', price: 110, passThrough: 0, change: pc(0.70, -0.10, -0.25, -0.15, -0.12, -0.12, -0.10, -0.08), source: 'TrendForce: enterprise SSD contract +53-58% Q1-26, +48-53% Q2, NAND +10-15% Q3; no new fab supply before 2027' },
+    { id: 'nics', label: 'NICs / DPUs', group: 'network', basis: 'perUnit', node: 'dpu_nic', unit: '$ per NIC', price: 1500, passThrough: 0.1, change: pc(0, -0.05, -0.05, -0.05, -0.05, -0.05, -0.04, -0.03), source: 'ConnectX-8 SuperNIC / BlueField ~$1.5-3k; one per accelerator' },
+    { id: 'server_assembly', label: 'Server assembly (ODM)', group: 'compute', basis: 'perUnit', node: 'server_assembly', unit: '$ per 8-accelerator server', price: 15000, passThrough: 0.2, change: pc(0, 0, -0.02, -0.02, -0.02, -0.02, -0.02, -0.02), source: 'ODM value-add (boards, chassis, power supplies, integration, margin) ~$30B on ~2M server-equivalents' },
+    { id: 'racks', label: 'Racks, PDUs & in-rack power', group: 'compute', basis: 'perUnit', node: 'rack_pdu', unit: '$ per rack', price: 40000, passThrough: 0.2, change: pc(0.05, 0.03, 0, 0, 0, -0.01, -0.01, -0.01), source: 'Rack, busbar, power shelves and PDUs for 40 accelerators' },
+    // --- Networking ---
+    { id: 'switches', label: 'Switch systems (scale-up & scale-out)', group: 'network', basis: 'perUnit', node: 'switch_asics', unit: '$ per switch ASIC', price: 22000, passThrough: 0.1, change: pc(0, -0.03, -0.05, -0.05, -0.05, -0.05, -0.04, -0.03), source: 'Nvidia networking ~$60B CY26 run-rate + Arista/Celestica/whitebox; NVLink and Ethernet/InfiniBand switch systems' },
+    { id: 'optics', label: 'Optical transceivers', group: 'network', basis: 'perUnit', node: 'optical_transceivers', unit: '$ per accelerator-set', price: 1500, passThrough: 0.2, change: pc(0, -0.05, -0.08, -0.08, -0.08, -0.08, -0.06, -0.05), source: "Dell'Oro: AI cluster optics ~$26B in 2026; ~$0.5/Gbps (AOI): 800G ~$400-900, 1.6T ~$700-1,300; 2-3 modules per accelerator" },
+    { id: 'cables', label: 'Copper cables & AECs', group: 'network', basis: 'perUnit', node: 'infiniband_cables', unit: '$ per cable', price: 100, passThrough: 0.1, change: pc(0, -0.03, -0.05, -0.05, -0.05, -0.05, -0.04, -0.03), source: 'DAC/AEC per link' },
+    // --- Facility (paid over construction) ---
+    { id: 'shell_mep', label: 'Shell, MEP & fit-out (incl. field labor)', group: 'facility', basis: 'perMwFacility', node: 'dc_construction', unit: '$ per MW facility', price: 8.5e6, passThrough: 0.2, change: pc(0.06, 0.05, 0.04, 0.03, 0.03, 0.02, 0.02, 0.02), source: 'JLL 2026: shell & core $11.3M/MW (+6%); Cushman & Wakefield 2026: $17.6M/MW fully equipped (+21% since Q4-24); here per MW facility, excluding items priced separately below' },
+    { id: 'liquid_cooling', label: 'Liquid cooling (CDUs, cold plates)', group: 'facility', basis: 'coolingPerMwFacility', node: 'liquid_cooling', unit: '$ per CDU-unit (20 accelerators)', price: 14000, passThrough: 0.2, change: pc(0.05, 0.05, 0, -0.02, -0.02, -0.02, -0.02, -0.02), source: 'Tom\'s Hardware: ~$50k cooling per NVL72 rack (~$700 per accelerator), rising to ~$56k for NVL144' },
+    // --- Power (paid over construction) ---
+    { id: 'transformers', label: 'Large power transformers', group: 'power', basis: 'transformersPerMwFacility', node: 'transformers_lpt', unit: '$ per transformer', price: 4.0e6, passThrough: 0.2, change: pc(0.15, 0.08, 0, -0.02, -0.03, -0.03, -0.02, -0.02), source: 'Substation units $0.15-2M+; LPTs (100+ MVA) several $M; finished-unit costs +30-60% in 2026 (GOES, copper); 128-144 wk lead times' },
+    { id: 'backup_power', label: 'Backup power (gensets, UPS, batteries)', group: 'power', basis: 'backupPerMwFacility', node: 'backup_power', unit: '$ per MW backup', price: 0.8e6, passThrough: 0.2, change: pc(0.08, 0.05, 0.02, 0, 0, -0.01, -0.01, -0.01), source: 'Diesel gensets ~$0.5-0.7M/MW plus UPS and batteries; 1.5 MW of backup per MW facility' },
+    { id: 'onsite_generation', label: 'On-site generation (turbines, engines)', group: 'power', basis: 'onsitePerMwFacility', node: 'off_grid_power', unit: '$ per MW firm load', price: 3.0e6, passThrough: 0.2, change: pc(0.12, 0.08, 0.03, 0, -0.02, -0.03, -0.02, -0.02), source: 'New gas orders ~$2,000-2,500/kW installed (GE Vernova pricing +10-20 pts in H1-26; WoodMac turbines ~$600/kW by 2027 equipment only); ~1.4 MW nameplate per MW firm' },
+    { id: 'grid_connection', label: 'Grid connection (developer-paid)', group: 'power', basis: 'gridPerMwFacility', node: 'grid_interconnect', unit: '$ per MW grid', price: 0.25e6, passThrough: 0.2, change: pc(0.05, 0.05, 0.05, 0.03, 0.03, 0.02, 0.02, 0.02), source: 'Substations and network upgrades ~$100-500/kW where the developer pays (most PJM upgrades are socialized)' },
+    // --- Supplier value embedded in accelerator prices (not added to totals) ---
+    { id: 'emb_hbm', label: 'HBM memory', group: 'embedded', basis: 'perUnit', node: 'hbm_stacks', unit: '$ per stack', price: 500, passThrough: 0, change: pc(0.10, 0.05, -0.05, -0.05, -0.05, -0.05, -0.04, -0.03), source: 'HBM3E ~$13-17/GB (~$300/36GB stack early 2026), HBM4 ~$550/stack; +~20% 2026 contract prices; mix 55% HBM4 in 2027' },
+    { id: 'emb_wafers', label: 'Leading-edge logic wafers', group: 'embedded', basis: 'perUnit', node: 'advanced_wafers', unit: '$ per wafer', price: 20000, passThrough: 0, change: pc(0.05, 0.12, 0.08, 0.05, 0.03, 0.02, 0.02, 0.02), source: 'TSMC N3 ~$20k/wafer (Aug 2026), N2 ~$30k; mix shifts to N2/A16 from 2027' },
+    { id: 'emb_cowos', label: 'CoWoS advanced packaging', group: 'embedded', basis: 'perUnit', node: 'cowos_capacity', unit: '$ per wafer-equivalent', price: 10000, passThrough: 0, change: pc(0.05, 0.03, 0, -0.03, -0.03, -0.03, -0.03, -0.02), source: 'TrendForce (Apr 2026): CoWoS wafer ASP nearing 7nm-class levels' },
+    { id: 'emb_substrate', label: 'ABF substrates', group: 'embedded', basis: 'perUnit', node: 'abf_substrate', unit: '$ per sqm', price: 15000, passThrough: 0, change: pc(0.05, 0, -0.03, -0.03, -0.03, -0.03, -0.02, -0.02), source: '~$300 of substrate per large accelerator package' },
+    { id: 'emb_test', label: 'Final test & assembly (OSAT)', group: 'embedded', basis: 'perUnit', node: 'osat_test', unit: '$ per accelerator', price: 150, passThrough: 0, change: pc(0, 0, -0.02, -0.02, -0.02, -0.02, -0.02, -0.02), source: 'OSAT test/burn-in per accelerator' },
+    // --- Operating spend (not capex) ---
+    { id: 'electricity', label: 'Datacenter electricity', group: 'opex', basis: 'electricity', unit: '$ per kWh', price: null, passThrough: 0, change: pc(0, 0, 0, 0, 0, 0, 0, 0), source: 'Uses FINANCING_ASSUMPTIONS.scalars.electricityPricePerKwh and average power draw (idle + utilization)' },
+    { id: 'ops_staff', label: 'Datacenter operations staff', group: 'opex', basis: 'staff', unit: '$ per FTE-year', price: 180000, passThrough: 0.1, change: pc(0.04, 0.04, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03), source: 'Loaded cost of DC technicians and engineers; ~1 FTE per MW (serverToInfra.ftesPerMw)' }
+  ],
+  source: 'See each input. Accelerator prices are blended across Nvidia, AMD and custom ASICs; facility prices are global ex-China averages.'
+};
+
+// ============================================
 // CAPITAL FINANCING (ported from AI_Capex_Funding_Model.xlsx, Sept 2026)
 // ============================================
 /**
  * Economics + funding layer. The physical engine decides what CAN be built;
  * this layer decides what can be PAID FOR. When applyFundingConstraint is on,
- * each year's fundable capex (by builder tier) caps monthly deployments.
+ * each year's fundable capex (by builder tier) is a monthly budget shared by
+ * chip purchases and construction payments (rationed proportionally when short).
  *
  * Linked from the physical engine (not inputs here): installed / required /
  * deployed GW, fleet tokens/kWh by vintage, training share, scarcity ratio.
@@ -783,9 +916,10 @@ export const FINANCING_ASSUMPTIONS_BASE = {
     blendedPricePerMTokens: 0.55   // $/M tokens, back-solved from ~$65B 2025 AI compute revenue
   },
 
+  // Capex is built bottom-up from COST_ASSUMPTIONS: chips are paid when
+  // bought, facilities while under construction. Capex per GW and the compute
+  // share of capex are therefore outputs, not inputs.
   scalars: {
-    preSpendFraction: 0.40,        // share of next year's build paid this year (GPUs ahead of power)
-    computeShareOfCapex: 0.65,     // compute & networking share of $/GW (Barclays 65-70%)
     computeLifeYears: 6,           // depreciation life, compute
     facilityLifeYears: 20,         // depreciation life, facility & power
     cashTaxRate: 0.20,
@@ -807,37 +941,43 @@ export const FINANCING_ASSUMPTIONS_BASE = {
       { 2026: -0.40, 2027: -0.30, 2028: -0.25, 2029: -0.20, 2030: -0.20, 2031: -0.15, 2032: -0.15 },
       (year) => (year <= 2035 ? -0.12 : -0.10)
     ),
-    // Effective utilization incl. MFU, idle, stranded GPUs awaiting power
+    // Effective utilization of the ENERGIZED fleet (MFU, idle, hoarded
+    // capacity). Chips bought but not yet energized are tracked separately.
     utilization: buildPath(
       { 2026: 0.50, 2027: 0.53, 2028: 0.56, 2029: 0.58, 2030: 0.60, 2031: 0.62, 2032: 0.65 },
       (year, prev) => Math.min(0.70, +(prev + 0.01).toFixed(2))
-    ),
-    // All-in capex per GW energized ($B)
-    capexPerGw: buildPath(
-      { 2026: 60, 2027: 62, 2028: 64, 2029: 66, 2030: 68, 2031: 70, 2032: 72 },
-      (year, prev) => prev + 1
     )
   },
 
   // Builder tiers. share = base allocation of each year's build (normalized to sum to 1)
   tiers: [
     {
+      // Calibrated to Q2-2026 guidance: 2026 capex ~$730B (AMZN ~$220B, GOOGL
+      // $195-205B, MSFT ~$175B CY26, META $130-145B), ~90% AI; operating cash
+      // flow ~$640B; buybacks + dividends ~$150B; ~1/3 of capex funded
+      // externally (bonds, SPVs, Alphabet's 2026 equity raise).
       id: 'A', name: 'Big-4 hyperscalers', note: 'MSFT, GOOGL, AMZN, META',
-      share: 0.68, legacyOcf: 450, legacyOcfGrowth: 0.07, shareholderReturns: 180,
-      cash: 380, minCash: 150, debt: 260, legacyEbitda: 620, legacyEbitdaGrowth: 0.07,
-      maxExternalShareOfCapex: 0.45, costOfDebt: 0.05, maxDebtToEbitda: 1.5
+      share: 0.72, legacyOcf: 520, legacyOcfGrowth: 0.07, shareholderReturns: 150,
+      cash: 380, minCash: 150, debt: 260, legacyEbitda: 700, legacyEbitdaGrowth: 0.07,
+      maxExternalShareOfCapex: 0.40, costOfDebt: 0.05, maxDebtToEbitda: 1.5
     },
     {
-      id: 'B', name: 'Leveraged builders', note: 'Oracle, CoreWeave/Nebius/neoclouds, xAI',
-      share: 0.24, legacyOcf: 25, legacyOcfGrowth: 0.05, shareholderReturns: 5,
+      // Oracle (~$50B), CoreWeave (~$30-35B), xAI (~$30B), other neoclouds and
+      // third-party developers of leased AI shells; ~85-90% externally financed
+      // (DDTLs, project finance, ABS).
+      id: 'B', name: 'Leveraged builders', note: 'Oracle, CoreWeave/Nebius/neoclouds, xAI, DC developers',
+      share: 0.22, legacyOcf: 25, legacyOcfGrowth: 0.05, shareholderReturns: 5,
       cash: 40, minCash: 15, debt: 170, legacyEbitda: 40, legacyEbitdaGrowth: 0.05,
-      maxExternalShareOfCapex: 0.70, costOfDebt: 0.09, maxDebtToEbitda: 4.0
+      // Contracted-offtake project finance supports ~6x (CoreWeave runs above 6x)
+      maxExternalShareOfCapex: 0.88, costOfDebt: 0.09, maxDebtToEbitda: 6.0
     },
     {
+      // Stargate UAE, Humain (PIF), G42, SoftBank, EU/Asia sovereign AI
+      // (~$50B in 2026), mostly equity-funded.
       id: 'C', name: 'Sovereign & other', note: 'Gulf, SoftBank/Stargate equity, other',
-      share: 0.08, legacyOcf: 0, legacyOcfGrowth: 0, shareholderReturns: 0,
+      share: 0.06, legacyOcf: 0, legacyOcfGrowth: 0, shareholderReturns: 0,
       cash: 20, minCash: 5, debt: 10, legacyEbitda: 0, legacyEbitdaGrowth: 0,
-      maxExternalShareOfCapex: 0.80, costOfDebt: 0.085, maxDebtToEbitda: 4.0
+      maxExternalShareOfCapex: 0.92, costOfDebt: 0.085, maxDebtToEbitda: 4.0
     }
   ],
 
@@ -864,6 +1004,20 @@ export const FINANCING_ASSUMPTIONS_BASE = {
 // Monthly-updater overrides (assumptionOverrides.json → "financing"). Arrays
 // (tiers, channels) are replaced wholesale; objects merge key by key.
 export const FINANCING_ASSUMPTIONS = deepMerge(FINANCING_ASSUMPTIONS_BASE, assumptionOverrides?.financing || {});
+
+// Build pipeline, procurement and demand response (assumptionOverrides.json → "build")
+export const BUILD_ASSUMPTIONS_BASE = {
+  pipeline: FACILITY_PIPELINE,
+  procurement: PROCUREMENT,
+  demandResponse: DEMAND_RESPONSE
+};
+export const BUILD_ASSUMPTIONS = deepMerge(BUILD_ASSUMPTIONS_BASE, assumptionOverrides?.build || {});
+
+// Unit costs (assumptionOverrides.json → "costs": { <inputId>: { price, change: { year2: ... } } })
+export const COST_ASSUMPTIONS = {
+  ...COST_ASSUMPTIONS_BASE,
+  inputs: COST_ASSUMPTIONS_BASE.inputs.map((input) => deepMerge(input, assumptionOverrides?.costs?.[input.id] || {}))
+};
 
 // ============================================
 // SCENARIOS
@@ -963,6 +1117,33 @@ export const SCENARIOS = {
     overrides: {
       financing: {
         marketCapacityMultiplier: { debt: 0.4, equity: 0.2 }
+      }
+    }
+  },
+
+  buildDelays: {
+    id: 'buildDelays',
+    name: 'Build Delays Slow AI Progress',
+    description: 'Only 40% of capacity completes on time through 2030, with slips averaging 15 months; the compute shortfall also slows demand growth (less compute → slower model progress → weaker adoption).',
+    summary: { demand: 'Growth slows with the build shortfall (feedback 0.5)', efficiency: 'Base', supply: '40% on time to 2030, 15-month slips' },
+    overrides: {
+      build: {
+        pipeline: { onTimeShareSchedule: [{ until: 2030, share: 0.40 }, { until: 2045, share: 0.72 }], slipMonthsMean: 15 },
+        demandResponse: { capabilityFeedback: 0.5 }
+      }
+    }
+  },
+
+  hyperscalerPullback: {
+    id: 'hyperscalerPullback',
+    name: 'Hyperscaler Pullback',
+    description: 'The Big-4 choose to slow the arms race: external funding capped at 20% of capex and shareholder returns raised 50%.',
+    summary: { demand: 'Base', efficiency: 'Base', supply: 'Big-4 fundable capex cut (external ≤20%, returns +50%)' },
+    overrides: {
+      financing: {
+        tiers: FINANCING_ASSUMPTIONS_BASE.tiers.map((t) => (t.id === 'A'
+          ? { ...t, maxExternalShareOfCapex: 0.20, shareholderReturns: t.shareholderReturns * 1.5 }
+          : t))
       }
     }
   },

@@ -6,6 +6,8 @@ import {
   EFFICIENCY_ASSUMPTIONS,
   SUPPLY_ASSUMPTIONS,
   FINANCING_ASSUMPTIONS,
+  BUILD_ASSUMPTIONS,
+  COST_ASSUMPTIONS,
   SCENARIOS
 } from './data/assumptions.js';
 import { runSimulation, formatMonth, formatNumber } from './engine/calculations.js';
@@ -25,10 +27,12 @@ import GrowthRatesTab from './components/GrowthRatesTab.jsx';
 import PrintoutTab from './components/PrintoutTab.jsx';
 import FundingTab from './components/FundingTab.jsx';
 import OutputsTab from './components/OutputsTab.jsx';
+import SpendTab from './components/SpendTab.jsx';
 
 import './styles/app.css';
 
 const TABS = [
+  { id: 'spend', label: 'Spend by Input', icon: '\u2211', description: '$ per input, y/y growth' },
   { id: 'assumptions', label: 'Assumptions', icon: '\u2699', description: 'Inputs & efficiencies' },
   { id: 'nodes', label: 'Node Library', icon: '\u25CE', description: 'Supply chain map' },
   { id: 'demand', label: 'Demand Drivers', icon: '\u2197', description: 'Workload demand' },
@@ -44,10 +48,22 @@ const TABS = [
 ];
 
 const cloneFinancing = () => JSON.parse(JSON.stringify(FINANCING_ASSUMPTIONS));
+const cloneBuild = () => JSON.parse(JSON.stringify(BUILD_ASSUMPTIONS));
+const cloneCosts = () => JSON.parse(JSON.stringify(COST_ASSUMPTIONS));
+
+// Set a value at a nested path (objects and arrays), creating objects as needed
+const setAtPath = (root, path, value) => {
+  let current = root;
+  for (let i = 0; i < path.length - 1; i++) {
+    if (current[path[i]] === undefined) current[path[i]] = {};
+    current = current[path[i]];
+  }
+  current[path[path.length - 1]] = value;
+};
 
 function App() {
   // State
-  const [activeTab, setActiveTab] = useState('assumptions');
+  const [activeTab, setActiveTab] = useState('spend');
   const [selectedScenario, setSelectedScenario] = useState('base');
   const [selectedNode, setSelectedNode] = useState('gpu_datacenter');
   const [isSimulating, setIsSimulating] = useState(false);
@@ -59,7 +75,9 @@ function App() {
     demand: JSON.parse(JSON.stringify(DEMAND_ASSUMPTIONS)),
     efficiency: JSON.parse(JSON.stringify(EFFICIENCY_ASSUMPTIONS)),
     supply: JSON.parse(JSON.stringify(SUPPLY_ASSUMPTIONS)),
-    financing: cloneFinancing()
+    financing: cloneFinancing(),
+    build: cloneBuild(),
+    costs: cloneCosts()
   });
 
   // Run simulation when assumptions or scenario change
@@ -138,6 +156,32 @@ function App() {
     setCustomAssumptions(prev => ({ ...prev, financing: cloneFinancing() }));
   }, []);
 
+  // Build pipeline / procurement / demand-response edits: path into `build`
+  const handleBuildChange = useCallback((path, value) => {
+    setCustomAssumptions(prev => {
+      const updated = JSON.parse(JSON.stringify(prev));
+      setAtPath(updated.build, path, value);
+      return updated;
+    });
+  }, []);
+
+  // Unit-cost edits: input id + path within that input (e.g. ['change', 'year2'])
+  const handleCostChange = useCallback((inputId, path, value) => {
+    setCustomAssumptions(prev => {
+      const updated = JSON.parse(JSON.stringify(prev));
+      const input = updated.costs.inputs.find((i) => i.id === inputId);
+      if (input) setAtPath(input, path, value);
+      return updated;
+    });
+  }, []);
+
+  const handleResetBuild = useCallback(() => {
+    setCustomAssumptions(prev => ({ ...prev, build: cloneBuild() }));
+  }, []);
+  const handleResetCosts = useCallback(() => {
+    setCustomAssumptions(prev => ({ ...prev, costs: cloneCosts() }));
+  }, []);
+
   // Render active tab content
   const renderTabContent = () => {
     if (simulationError && !isSimulating) {
@@ -160,6 +204,20 @@ function App() {
     }
 
     switch (activeTab) {
+      case 'spend':
+        return (
+          <SpendTab
+            results={simulationResults}
+            costs={customAssumptions.costs}
+            onCostChange={handleCostChange}
+            onResetCosts={handleResetCosts}
+            build={customAssumptions.build}
+            onBuildChange={handleBuildChange}
+            onResetBuild={handleResetBuild}
+            scenario={SCENARIOS[selectedScenario]}
+          />
+        );
+
       case 'assumptions':
         return (
           <AssumptionsTab
