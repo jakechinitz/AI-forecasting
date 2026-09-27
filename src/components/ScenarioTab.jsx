@@ -18,6 +18,9 @@ function adjustmentList(overrides = {}) {
   if (overrides.supply || overrides.supplyAssumptions) out.push('Supply shock');
   if (overrides.financing) out.push('Financing');
   if (overrides.calibration || overrides.startingState) out.push('Opening shortage');
+  if (overrides.build?.pipeline || overrides.build?.procurement) out.push('Construction pipeline');
+  if (overrides.build?.demandResponse) out.push('Demand response');
+  if (overrides.costs) out.push('Unit costs');
   return out;
 }
 

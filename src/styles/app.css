@@ -1304,3 +1304,14 @@
   font-size: 0.75rem;
   margin: 0 0 var(--space-sm);
 }
+
+/* Spend by Input */
+.spend-sheet td { vertical-align: top; }
+.spend-growth {
+  font-size: 0.6875rem;
+  color: var(--accent-success, #00ba7c);
+  line-height: 1.2;
+}
+.spend-growth.neg { color: var(--accent-danger, #f4212e); }
+.spend-unit { font-size: 0.6875rem; color: var(--text-muted); }
+.spend-note { font-weight: 400; font-size: 0.75rem; color: var(--text-muted); }

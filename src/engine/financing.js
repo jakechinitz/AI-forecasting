@@ -2,20 +2,22 @@
  * Capital financing layer — port of AI_Capex_Funding_Model.xlsx.
  *
  * The physical engine (calculations.js) decides what CAN be built each month.
- * This module decides what can be PAID FOR, per calendar year, and returns a
- * monthly cap that the engine applies as one more gate in its weakest-link
- * rule (deployments = min(plan, GPU supply, components, funding)).
+ * This module decides what can be PAID FOR, per calendar year. The year's
+ * fundable capex is a cumulative monthly budget (allowance()) that the engine
+ * spends on construction payments and chip purchases, rationing both
+ * proportionally when the budget is short.
  *
  * Sheet mapping:
  *   Capital_Markets  → channelCapacity()
- *   Fleet_Economics  → unitEconomics()
- *   Capex            → monthly capex = $/GW × timing × (net-new GW + replacement GW × compute share)
+ *   Fleet_Economics  → unitEconomics() (capex per GW comes from the engine's
+ *                      bottom-up cost model instead of an input path)
+ *   Capex            → recordMonth(): chips when bought, facilities during construction
  *   Funding          → startYear() (max fundable per tier) and closeYear() (waterfall)
  *   Dashboard        → annual rows in results.financing
  *
  * Non-circularity (same as the Excel): AI revenue is earned on the OPENING
- * fleet, scarcity premium uses the PRIOR year's unmet ratio, and fundable
- * capex depends only on opening balances.
+ * fleet, the scarcity premium comes from the PRIOR year's unmet demand, and
+ * fundable capex depends only on opening balances.
  *
  * Fixes vs the Excel:
  *  1. Revenue is capped at demand: tokens sold = fleet capacity × min(1, required ÷ installed).
@@ -43,7 +45,7 @@ function num(raw, fallback, lo = -Infinity, hi = Infinity) {
 
 // Share-like scalars must stay in [0, 1]; lives must be at least a year.
 const SCALAR_BOUNDS = {
-  preSpendFraction: [0, 1], computeShareOfCapex: [0, 1], cashTaxRate: [0, 1],
+  cashTaxRate: [0, 1],
   variableCostPctOfRevenue: [0, 1], idlePowerShare: [0, 1],
   computeLifeYears: [1, 50], facilityLifeYears: [1, 100],
   scarcityElasticity: [0, Infinity], maxScarcityPremium: [1, Infinity],
@@ -166,10 +168,12 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
 
   function unitEconomics(year, ctx) {
     const util = pathValue('utilization', year);
-    const capexPerGw = pathValue('capexPerGw', year);
+    // New-build capex per GW IT and its compute share, from the cost model
+    const capexPerGw = Math.max(0, ctx.capexPerGw || 0);
+    const computeShare = Math.min(1, Math.max(0, ctx.computeShareOfCapex ?? 0.65));
     basePrice = basePrice * (1 + pathValue('priceChange', year));
     const priorScarcity = lastScarcityRatio ?? ctx.priorScarcityRatio ?? 0;
-    const premium = Math.min(scalars.maxScarcityPremium, 1 + scalars.scarcityElasticity * Math.max(0, priorScarcity));
+    const premium = ctx.premium ?? scarcityPremium(scalars, priorScarcity);
     const effPrice = basePrice * premium;
 
     const inferenceShare = Math.max(0, 1 - ctx.trainingShare);
@@ -182,14 +186,14 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
     const energyPerGw = KWH_PER_GW_YEAR * pue * (scalars.idlePowerShare + (1 - scalars.idlePowerShare) * util) * scalars.electricityPricePerKwh / 1e9;
     const variablePerGw = realizedRevPerGw * scalars.variableCostPctOfRevenue;
     const ebitdaPerGw = realizedRevPerGw - variablePerGw - energyPerGw - scalars.otherOpexPerGwYr;
-    const daPerGw = capexPerGw * scalars.computeShareOfCapex / scalars.computeLifeYears
-      + capexPerGw * (1 - scalars.computeShareOfCapex) / scalars.facilityLifeYears;
+    const daPerGw = capexPerGw * computeShare / scalars.computeLifeYears
+      + capexPerGw * (1 - computeShare) / scalars.facilityLifeYears;
     const ebitPerGw = ebitdaPerGw - daPerGw;
     const taxPerGw = Math.max(0, ebitPerGw) * scalars.cashTaxRate;
     const ocfPerGw = ebitdaPerGw - taxPerGw;
 
     return {
-      util, capexPerGw, basePrice, premium, effPrice, inferenceShare, servedFraction,
+      util, capexPerGw, computeShare, basePrice, premium, effPrice, inferenceShare, servedFraction,
       theoreticalRevPerGw, jensenRevPerGw, realizedRevPerGw,
       realizedPctOfJensen: safeDiv(realizedRevPerGw, jensenRevPerGw),
       energyPerGw, variablePerGw, otherOpexPerGw: scalars.otherOpexPerGwYr,
@@ -251,50 +255,37 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
     });
 
     const fundableCapex = tierPlans.reduce((s, p) => s + p.maxFundable, 0);
-    const k = scalars.preSpendFraction;
-    const timingFactor = (1 - k) + k * Math.max(0.8, Math.min(1.6, ctx.preSpendRatio || 1));
 
     current = {
       year, ctx, econ, openingGW, aiRevenue, aiEbitdaTotal, aiOcfTotal,
-      debtCapacityTotal, equityCapacityTotal, tierPlans, fundableCapex, timingFactor,
-      capexYTD: 0, newBuildCapex: 0, replacementCapex: 0,
-      deployedGW: 0, replacementGW: 0, retiredGW: 0, deferredByFundingGW: 0,
+      debtCapacityTotal, equityCapacityTotal, tierPlans, fundableCapex,
+      capexYTD: 0, computeCapex: 0, facilityCapex: 0,
+      deployedGW: 0, replacementGW: 0, retiredGW: 0, purchasedGW: 0, deferredByFundingGW: 0,
       bindingCounts: {}, monthsSeen: 0
     };
     return current;
   }
 
   /**
-   * Maximum accelerators deployable this month given the year's remaining
-   * fundable capex, paced evenly (cumulative YTD allowance).
+   * Capex budget ($B) still available this month: the year's fundable capex
+   * paced evenly (cumulative YTD allowance) minus what has been spent.
+   * Infinity when the funding constraint is off.
    */
-  function capForMonth({ monthOfYear, kwPerNewAccel, retiredGW }) {
+  function allowance(monthOfYear) {
     if (!current || !applyConstraint) return Infinity;
-    const allowance = current.fundableCapex * ((monthOfYear + 1) / 12) - current.capexYTD;
-    if (!(allowance > 0)) return 0;
-    const perGw = current.econ.capexPerGw * current.timingFactor;
-    if (!(perGw > 0)) return Infinity; // free capex: funding cannot bind
-    const R = allowance / perGw; // GW-equivalents at full cost
-    // Replacements (up to retired GW) cost only the compute share
-    const cs = Math.max(scalars.computeShareOfCapex, 1e-9);
-    const gw = R <= retiredGW * cs ? R / cs : retiredGW + (R - retiredGW * cs);
-    const units = (gw * 1e6) / Math.max(kwPerNewAccel, 1e-9);
-    return Number.isFinite(units) ? Math.max(0, units) : 0;
+    const a = current.fundableCapex * ((monthOfYear + 1) / 12) - current.capexYTD;
+    return Number.isFinite(a) ? Math.max(0, a) : 0;
   }
 
-  function recordMonth({ deployedGW, retiredGW, binding, deferredByFundingGW }) {
+  function recordMonth({ computeCapex = 0, facilityCapex = 0, deployedGW = 0, retiredGW = 0, purchasedGW = 0, binding, deferredByFundingGW }) {
     if (!current) return;
-    const replacementGW = Math.min(deployedGW, retiredGW);
-    const netNewGW = deployedGW - replacementGW;
-    const perGw = current.econ.capexPerGw * current.timingFactor;
-    const newBuild = netNewGW * perGw;
-    const replacement = replacementGW * perGw * scalars.computeShareOfCapex;
-    current.newBuildCapex += newBuild;
-    current.replacementCapex += replacement;
-    current.capexYTD += newBuild + replacement;
+    current.computeCapex += computeCapex;
+    current.facilityCapex += facilityCapex;
+    current.capexYTD += computeCapex + facilityCapex;
     current.deployedGW += deployedGW;
-    current.replacementGW += replacementGW;
+    current.replacementGW += Math.min(deployedGW, retiredGW);
     current.retiredGW += retiredGW;
+    current.purchasedGW += purchasedGW;
     current.deferredByFundingGW += deferredByFundingGW || 0;
     current.bindingCounts[binding] = (current.bindingCounts[binding] || 0) + 1;
     current.monthsSeen += 1;
@@ -409,10 +400,10 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
       aiEbitda: c.aiEbitdaTotal,
       aiOcf: c.aiOcfTotal,
       buildGrowth: annual.length ? safeDiv(c.deployedGW, annual[annual.length - 1].deployedGW, 1) - 1 : null,
+      purchasedGW: c.purchasedGW,
       // Capex
-      timingFactor: c.timingFactor,
-      newBuildCapex: c.newBuildCapex,
-      replacementCapex: c.replacementCapex,
+      computeCapex: c.computeCapex,
+      facilityCapex: c.facilityCapex,
       totalCapex: C,
       capexPerGwDeployed: safeDiv(C, c.deployedGW),
       // Funding (system)
@@ -458,5 +449,13 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
     };
   }
 
-  return { scalars, pathValue, startYear, capForMonth, recordMonth, closeYear, finalize };
+  // This year's fundable capex ($B), Infinity when the constraint is off
+  const fundableThisYear = () => (current && applyConstraint ? current.fundableCapex : Infinity);
+
+  return { scalars, pathValue, startYear, allowance, fundableThisYear, recordMonth, closeYear, finalize };
+}
+
+/** Scarcity price premium: 1 + elasticity × unmet-demand ratio, capped */
+export function scarcityPremium(scalars, scarcityRatio) {
+  return Math.min(scalars.maxScarcityPremium, 1 + scalars.scarcityElasticity * Math.max(0, scarcityRatio || 0));
 }

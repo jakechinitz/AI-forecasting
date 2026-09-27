@@ -10,6 +10,8 @@ function growthLimitText(node) {
   if (node.growsAtPhysicalMax) return 'Grows on its physical expansion schedule (every unit made is bought). Non-gating: sets the leading-edge wafer ceiling.';
   if (node.id === 'advanced_wafers') return 'Demand-driven; capped by the EUV-supported leading-edge wafer ceiling (AI share of logic wafer starts).';
   if (node.id === 'hbm_stacks' || node.id === 'dram_server') return 'Demand-driven; capped by the AI share of DRAM wafer capacity (HBM weighted at ~3x wafer area per bit).';
+  if (node.id === 'datacenter_mw') return 'Construction pipeline: starts follow expected need at completion, paced by crews and the budget; ~half complete on time through 2028 (Goldman), the rest slip.';
+  if (node.id === 'dc_construction') return 'Crews for projects under construction; demand-driven, capped at 30% of skilled trades in DC regions (industry pool).';
   const industry = SHARED_SUPPLY_POOLS.industry?.[node.id];
   if (industry) return `Demand-driven; capped at ${Math.round((industry.aiMaxShare ?? 1) * 100)}% of industry output (${industry.label}).`;
   if (node.maxAnnualExpansion != null) return `Demand-driven; physical ramp limit of ${Math.round(node.maxAnnualExpansion * 100)}%/yr.`;
