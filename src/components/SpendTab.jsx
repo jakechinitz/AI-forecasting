@@ -204,11 +204,11 @@ function SpendTab({ results, costs, onCostChange, onResetCosts, build, onBuildCh
             {mode === 'spend' && totalRow('Facilities & power', spend.totals.facilities)}
             {mode === 'spend' && totalRow('TOTAL AI CAPEX', spend.totals.capex)}
 
-            {sectionRow('Supplier value inside accelerator prices', 'already counted in Accelerators above')}
+            {sectionRow('Supplier value inside the ex-HBM accelerator price', 'already counted above')}
             {spend.inputs.filter((i) => i.group === 'embedded').map(inputRow)}
             {mode === 'spend' && (
               <tr>
-                <td className="sheet-label">Accelerator vendor margin & other</td>
+                <td className="sheet-label">Accelerator vendor margin & other (ex-HBM price less the items above)</td>
                 {years.map((_, y) => <Cell key={y} value={vendorResidual[y]} growth={growthOf(vendorResidual)[y]} />)}
               </tr>
             )}

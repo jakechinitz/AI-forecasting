@@ -34,7 +34,7 @@ const GATE_ORDER = ['Plan (demand)', 'Funding', 'GPU supply (fab + inventory)'];
 
 const SPEND_GROUP_TITLES = {
   compute: 'Compute & servers', network: 'Networking', facility: 'Facilities', power: 'Power',
-  embedded: 'Supplier value inside accelerator prices (not added to totals)', opex: 'Operating spend (not capex)'
+  embedded: 'Supplier value inside the ex-HBM accelerator price (not added to totals)', opex: 'Operating spend (not capex)'
 };
 
 function buildSheet(annual, tiers, tierMeta, gates, spend) {

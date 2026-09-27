@@ -623,7 +623,16 @@ export const TRANSLATION_INTENSITIES = {
 
     advancedWafersPerGpu: { value: 0.06, confidence: 'medium', source: 'B300: two ~800mm² dies, ~22-24 accelerators per wafer (0.045); + Grace/Vera, NVSwitch, NICs ≈ 0.06 (Epoch B200 cost breakdown)' },
     serverDramGbPerGpu: { value: 256, confidence: 'medium', source: 'Grace 480 GB per 2 GPUs; x86 HGX ~2 TB per 8 GPUs; Vera up to 750 GB per GPU' },
-    ssdTbPerGpu: { value: 2, confidence: 'medium', source: 'Datacenter NVMe storage per GPU' }
+    ssdTbPerGpu: { value: 2, confidence: 'medium', source: 'Datacenter NVMe storage per GPU' },
+    // Memory per accelerator keeps rising (annual growth per time block). HBM
+    // grows through bigger stacks (12-hi 36 GB → 16-hi 48-64 GB), so the stack
+    // count per accelerator stays at hbmStacksPerGpu while GB per stack rises;
+    // both feed the DRAM wafer ceiling (SHARED_SUPPLY_POOLS.memory).
+    memoryContentGrowth: {
+      hbmGb: { year1: 0.10, year2: 0.20, year3: 0.20, year4: 0.15, year5: 0.15, years6_10: 0.10, years11_15: 0.07, years16_20: 0.05 },
+      hostDramGb: { year1: 0.10, year2: 0.35, year3: 0.20, year4: 0.10, year5: 0.10, years6_10: 0.06, years11_15: 0.04, years16_20: 0.03 },
+      source: 'HBM per accelerator: B300/Rubin 288 GB, MI455X 432 GB, TPU v7 192 GB; Rubin Ultra planned 1 TB but mainline SKU may drop to 192 GB on HBM supply (TrendForce, Aug 2026). Host memory: Vera 1.5 TB per CPU (~750 GB per GPU) vs Grace ~240 GB; CSPs adding RDIMM for agentic AI'
+    }
   },
 
   // Servers → Infrastructure
@@ -844,14 +853,20 @@ export const COST_ASSUMPTIONS_BASE = {
   inputs: [
     // --- Compute & servers (paid when accelerators are bought) ---
     {
-      id: 'accelerators', label: 'Accelerators (GPU / ASIC modules)', group: 'compute', basis: 'perKw',
-      unit: '$ per kW', price: 18000, node: 'gpu_datacenter', passThrough: 0.15,
+      id: 'accelerators', label: 'Accelerators ex-HBM (logic, packaging, vendor margin)', group: 'compute', basis: 'perKw',
+      unit: '$ per kW', price: 15800, node: 'gpu_datacenter', passThrough: 0.15,
       change: pc(0, 0, -0.03, -0.05, -0.05, -0.06, -0.06, -0.05),
-      source: 'Nvidia DC compute ~$300B CY26 + AMD ~$15B + custom ASICs ~$50-65B over ~15.5M ex-China units (JPM 16.3M global) ≈ $25-27k/unit ≈ $18k per kW; $/kW roughly flat per generation (Rubin prices rise with power)'
+      source: 'Nvidia DC compute ~$300B CY26 + AMD ~$15B + custom ASICs ~$50-65B over ~15.5M ex-China units (JPM 16.3M global) ≈ $25-27k/unit ≈ $18k per kW including HBM; less ~$2.2k/kW of HBM at January prices. $/kW roughly flat per generation (Rubin prices rise with power)'
+    },
+    {
+      id: 'hbm', label: 'HBM memory', group: 'compute', basis: 'perUnit', node: 'hbm_stacks', qtyKey: 'hbm_gb',
+      unit: '$ per GB', price: 12, passThrough: 0,
+      change: pc(0.25, 0.50, 0, -0.15, -0.10, -0.08, -0.06, -0.05),
+      source: 'Passed through at market price. HBM3E ~$11-13/GB early 2026 with ~20% 2026 contract increases; HBM4 ~$550 per 36 GB stack (~$15/GB); Seoul Economic Daily (Jul 2026): HBM4 prices could roughly double in 2027; Nvidia buys below market'
     },
     { id: 'host_cpu', label: 'Host CPUs', group: 'compute', basis: 'perUnit', node: 'cpu_server', unit: '$ per CPU', price: 3000, passThrough: 0.1, change: pc(0, -0.03, -0.05, -0.05, -0.05, -0.05, -0.04, -0.03), source: 'Grace ~$3k; x86 server CPUs $3-8k; blended per AI server CPU' },
-    { id: 'host_dram', label: 'Server DRAM', group: 'compute', basis: 'perUnit', node: 'dram_server', unit: '$ per GB', price: 9, passThrough: 0, change: pc(0.45, 0.05, -0.20, -0.15, -0.10, -0.10, -0.08, -0.06), source: 'TrendForce: server DRAM contract +~90% Q1-26, +13-18% Q3-26; LTAs $7.8-21/GB; crunch into 2027, new fabs 2027-28' },
-    { id: 'ssd', label: 'Datacenter SSDs', group: 'compute', basis: 'perUnit', node: 'ssd_datacenter', unit: '$ per TB', price: 110, passThrough: 0, change: pc(0.70, -0.10, -0.25, -0.15, -0.12, -0.12, -0.10, -0.08), source: 'TrendForce: enterprise SSD contract +53-58% Q1-26, +48-53% Q2, NAND +10-15% Q3; no new fab supply before 2027' },
+    { id: 'host_dram', label: 'Server DRAM', group: 'compute', basis: 'perUnit', node: 'dram_server', unit: '$ per GB', price: 11, passThrough: 0, change: pc(1.00, 0.15, -0.10, -0.25, -0.15, -0.10, -0.08, -0.06), source: '64 GB DDR5 RDIMM contract ~$255 (Q3-25) → ~$873 (Q1-26) → >$1,000 (Q2-26); Citi ~$1,590 by Q4-26 (~$25/GB); TrendForce lifts 4Q26 outlook; SemiAnalysis: double-digit ASP rise again in 2027; Deloitte: crunch may not ease until 2029' },
+    { id: 'ssd', label: 'Datacenter SSDs', group: 'compute', basis: 'perUnit', node: 'ssd_datacenter', unit: '$ per TB', price: 120, passThrough: 0, change: pc(1.00, 0, -0.25, -0.20, -0.12, -0.12, -0.10, -0.08), source: 'TrendForce: enterprise SSD contract +53-58% Q1-26, +48-53% Q2, NAND +10-15% Q3 and rising into 4Q26; no new fab supply before 2027' },
     { id: 'nics', label: 'NICs / DPUs', group: 'network', basis: 'perUnit', node: 'dpu_nic', unit: '$ per NIC', price: 1500, passThrough: 0.1, change: pc(0, -0.05, -0.05, -0.05, -0.05, -0.05, -0.04, -0.03), source: 'ConnectX-8 SuperNIC / BlueField ~$1.5-3k; one per accelerator' },
     { id: 'server_assembly', label: 'Server assembly (ODM)', group: 'compute', basis: 'perUnit', node: 'server_assembly', unit: '$ per 8-accelerator server', price: 15000, passThrough: 0.2, change: pc(0, 0, -0.02, -0.02, -0.02, -0.02, -0.02, -0.02), source: 'ODM value-add (boards, chassis, power supplies, integration, margin) ~$30B on ~2M server-equivalents' },
     { id: 'racks', label: 'Racks, PDUs & in-rack power', group: 'compute', basis: 'perUnit', node: 'rack_pdu', unit: '$ per rack', price: 40000, passThrough: 0.2, change: pc(0.05, 0.03, 0, 0, 0, -0.01, -0.01, -0.01), source: 'Rack, busbar, power shelves and PDUs for 40 accelerators' },
@@ -867,8 +882,7 @@ export const COST_ASSUMPTIONS_BASE = {
     { id: 'backup_power', label: 'Backup power (gensets, UPS, batteries)', group: 'power', basis: 'backupPerMwFacility', node: 'backup_power', unit: '$ per MW backup', price: 0.8e6, passThrough: 0.2, change: pc(0.08, 0.05, 0.02, 0, 0, -0.01, -0.01, -0.01), source: 'Diesel gensets ~$0.5-0.7M/MW plus UPS and batteries; 1.5 MW of backup per MW facility' },
     { id: 'onsite_generation', label: 'On-site generation (turbines, engines)', group: 'power', basis: 'onsitePerMwFacility', node: 'off_grid_power', unit: '$ per MW firm load', price: 3.0e6, passThrough: 0.2, change: pc(0.12, 0.08, 0.03, 0, -0.02, -0.03, -0.02, -0.02), source: 'New gas orders ~$2,000-2,500/kW installed (GE Vernova pricing +10-20 pts in H1-26; WoodMac turbines ~$600/kW by 2027 equipment only); ~1.4 MW nameplate per MW firm' },
     { id: 'grid_connection', label: 'Grid connection (developer-paid)', group: 'power', basis: 'gridPerMwFacility', node: 'grid_interconnect', unit: '$ per MW grid', price: 0.25e6, passThrough: 0.2, change: pc(0.05, 0.05, 0.05, 0.03, 0.03, 0.02, 0.02, 0.02), source: 'Substations and network upgrades ~$100-500/kW where the developer pays (most PJM upgrades are socialized)' },
-    // --- Supplier value embedded in accelerator prices (not added to totals) ---
-    { id: 'emb_hbm', label: 'HBM memory', group: 'embedded', basis: 'perUnit', node: 'hbm_stacks', unit: '$ per stack', price: 500, passThrough: 0, change: pc(0.10, 0.05, -0.05, -0.05, -0.05, -0.05, -0.04, -0.03), source: 'HBM3E ~$13-17/GB (~$300/36GB stack early 2026), HBM4 ~$550/stack; +~20% 2026 contract prices; mix 55% HBM4 in 2027' },
+    // --- Supplier value inside the ex-HBM accelerator price (not added to totals) ---
     { id: 'emb_wafers', label: 'Leading-edge logic wafers', group: 'embedded', basis: 'perUnit', node: 'advanced_wafers', unit: '$ per wafer', price: 20000, passThrough: 0, change: pc(0.05, 0.12, 0.08, 0.05, 0.03, 0.02, 0.02, 0.02), source: 'TSMC N3 ~$20k/wafer (Aug 2026), N2 ~$30k; mix shifts to N2/A16 from 2027' },
     { id: 'emb_cowos', label: 'CoWoS advanced packaging', group: 'embedded', basis: 'perUnit', node: 'cowos_capacity', unit: '$ per wafer-equivalent', price: 10000, passThrough: 0, change: pc(0.05, 0.03, 0, -0.03, -0.03, -0.03, -0.03, -0.02), source: 'TrendForce (Apr 2026): CoWoS wafer ASP nearing 7nm-class levels' },
     { id: 'emb_substrate', label: 'ABF substrates', group: 'embedded', basis: 'perUnit', node: 'abf_substrate', unit: '$ per sqm', price: 15000, passThrough: 0, change: pc(0.05, 0, -0.03, -0.03, -0.03, -0.03, -0.02, -0.02), source: '~$300 of substrate per large accelerator package' },

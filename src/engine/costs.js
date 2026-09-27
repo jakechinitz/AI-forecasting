@@ -91,7 +91,9 @@ export function createCostModel(costCfg, { months, blockKeyFor, defaults }) {
     let total = 0;
     inputs.forEach((i) => {
       if (![...CHIP_GROUPS, 'embedded'].includes(i.group)) return;
-      const qty = i.basis === 'perKw' ? kwNew : (intensity[i.node] || 0);
+      // qtyKey lets an input be counted in different units than its node
+      // (HBM is priced per GB; the node counts stacks)
+      const qty = i.basis === 'perKw' ? kwNew : (intensity[i.qtyKey || i.node] || 0);
       const $ = qty * priceAt(i.id, month, priceIndex(i.node));
       qtyPerUnit[i.id] = qty;
       perUnit[i.id] = $;

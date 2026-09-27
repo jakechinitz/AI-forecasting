@@ -1126,6 +1126,17 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const startMonthIndex = (GLOBAL_PARAMS.startMonth || 1) - 1;
   const idleShare = financing.scalars.idlePowerShare;
 
+  // Memory content per accelerator (compounded annual growth by time block)
+  const memGrowthCfg = TRANSLATION_INTENSITIES?.gpuToComponents?.memoryContentGrowth || {};
+  const contentIndex = (sched) => {
+    const arr = new Float64Array(months);
+    arr[0] = 1;
+    for (let m = 1; m < months; m++) arr[m] = arr[m - 1] * Math.pow(1 + numOr(sched?.[getBlockKeyForMonth(m)], 0), 1 / 12);
+    return arr;
+  };
+  const hbmContentIndex = contentIndex(memGrowthCfg.hbmGb);
+  const hostDramContentIndex = contentIndex(memGrowthCfg.hostDramGb);
+
   // --- cost model: dollars per input ---
   const costs = createCostModel(costAssumptions, { months, blockKeyFor: getBlockKeyForMonth, defaults: COST_ASSUMPTIONS_BASE });
   const lastPriceIndex = {};
@@ -1381,6 +1392,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     for (const id of INFRASTRUCTURE_NODES) {
       if (monthIntensity[id] !== undefined) monthIntensity[id] *= (req.kwIndex || 1);
     }
+    // Memory per accelerator grows: host DRAM directly, HBM through bigger
+    // stacks (the stack count per accelerator is unchanged; hbm_gb is the GB
+    // per accelerator, used for HBM pricing and the DRAM wafer ceiling).
+    if (monthIntensity.dram_server !== undefined) monthIntensity.dram_server *= hostDramContentIndex[month];
+    const gbPerHbmStackNow = (memPool.gbPerHbmStack ?? 36) * hbmContentIndex[month];
+    monthIntensity.hbm_gb = (monthIntensity.hbm_stacks || 0) * gbPerHbmStackNow;
 
     // Retirements: each energized cohort retires when it reaches the compute
     // life (Excel funding model: 6 years; the same input drives depreciation).
@@ -1485,7 +1502,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     poolBound.advanced_wafers = leScale < 1;
     // Memory pool: HBM (wafer-area-weighted) + AI host DRAM ≤ max AI share of DRAM capacity
     const aiMemCeiling = dramGbPerMonth * (memPool.aiMaxShare ?? 0.6);
-    const hbmGbEq = (monthEffCap.hbm_stacks || 0) * (memPool.gbPerHbmStack ?? 36) * (memPool.hbmWaferAreaMultiplier ?? 3);
+    const hbmGbEq = (monthEffCap.hbm_stacks || 0) * gbPerHbmStackNow * (memPool.hbmWaferAreaMultiplier ?? 3);
     const memUse = hbmGbEq + (monthEffCap.dram_server || 0);
     const memScale = memUse > aiMemCeiling ? aiMemCeiling / memUse : 1;
     if (monthEffCap.hbm_stacks !== undefined) monthEffCap.hbm_stacks *= memScale;
