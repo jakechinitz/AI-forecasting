@@ -265,7 +265,7 @@ const NODES_BASE = [
     inputIntensity: 0.5,
     parentNodeIds: ['gpu_datacenter', 'gpu_inference'],
 
-    startingCapacity: 2500000,
+    startingCapacity: 1000000,  // AI-available server CPUs (EPYC sold out; Intel filling ~40% of orders in 2026)
     committedExpansions: [],
     leadTimeDebottleneck: 3,
     leadTimeNewBuild: 12,
@@ -289,10 +289,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 2500000,
-      confidence: 'high',
-      source: 'Intel/AMD server TAM shipments',
-      historicalRange: [2000000, 3200000]
+      value: 1000000,
+      confidence: 'medium',
+      source: 'AI-available share of Intel/AMD/Arm server CPU output (~2.5M/month total); 2026 shortage: EPYC sold out, Intel filling ~40% of orders',
+      historicalRange: [800000, 1500000]
     }
   },
 
@@ -485,7 +485,7 @@ const NODES_BASE = [
     // Intensity per accelerator: engine-derived from TRANSLATION_INTENSITIES (gpuToComponents.cowosWaferEquivPerGpu)
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 95000,  // Industry CoWoS-class capacity ~95k wafers/month at end-2025 (TSMC ~75k + OSAT ~20k) → ~160k end-2026, ~270k end-2027 (TrendForce, UBS)
+    startingCapacity: 95000,  // Industry CoWoS-class capacity ~95k wafers/month at end-2025 (TSMC ~75k + OSAT ~20k) → ~130k end-2026, ~170k 2027, ~260k end-2028 (TrendForce Sep-2026)
     committedExpansions: [],
     leadTimeDebottleneck: 30,
     leadTimeNewBuild: 30,
@@ -513,7 +513,7 @@ const NODES_BASE = [
     baseRate: {
       value: 95000,
       confidence: 'high',
-      source: 'Industry CoWoS-class capacity ~95k wafers/month at end-2025 (TSMC ~75k + OSAT ~20k) → ~160k end-2026, ~270k end-2027 (TrendForce, UBS)',
+      source: 'Industry CoWoS-class capacity ~95k wafers/month at end-2025 (TSMC ~75k + OSAT ~20k) → ~130k end-2026, ~170k 2027, ~260k end-2028 (TrendForce Sep-2026)',
       historicalRange: [76000, 180000]
     }
   },
@@ -745,7 +745,7 @@ const NODES_BASE = [
     baseRate: {
       value: 4.8,
       confidence: 'high',
-      source: 'ASML ~65 low-NA EUV tools shipped in 2026 (48 in 2025); ~385 installed end-2026. Limits wafer-capacity growth, not a per-accelerator gate',
+      source: 'ASML ~65 low-NA EUV tools shipped in 2026 (44 in 2025); ~385 installed end-2026. Limits wafer-capacity growth, not a per-accelerator gate',
       historicalRange: [3, 7]
     }
   },
@@ -806,7 +806,7 @@ const NODES_BASE = [
     inputIntensity: 1,
     parentNodeIds: ['gpu_datacenter'],
 
-    startingCapacity: 7500000,  // includes expansions completed by the model start
+    startingCapacity: 2200000,  // accelerator-sets/month: ~63M 800G+ modules in 2026 (TrendForce) at 2-3 per accelerator
     committedExpansions: [],
     leadTimeDebottleneck: 6,
     leadTimeNewBuild: 18,
@@ -830,10 +830,10 @@ const NODES_BASE = [
     exportControlSensitivity: 'low',
 
     baseRate: {
-      value: 7500000,
+      value: 2200000,
       confidence: 'medium',
-      source: 'Optical module industry output estimates',
-      historicalRange: [3000000, 7000000]
+      source: 'TrendForce: ~63M 800G+ modules in 2026 (2.6x y/y), 2-3 per accelerator; EML laser shortfall ~30%',
+      historicalRange: [1500000, 3000000]
     }
   },
 
@@ -920,7 +920,7 @@ const NODES_BASE = [
       value: 750000,
       confidence: 'high',
       source: 'ODM quarterly reports',
-      historicalRange: [400000, 700000]
+      historicalRange: [400000, 800000]
     }
   },
 
