@@ -49,7 +49,7 @@ const SCALAR_BOUNDS = {
   variableCostPctOfRevenue: [0, 1], idlePowerShare: [0, 1],
   computeLifeYears: [1, 50], facilityLifeYears: [1, 100],
   scarcityElasticity: [0, Infinity], maxScarcityPremium: [1, Infinity],
-  electricityPricePerKwh: [0, Infinity], otherOpexPerGwYr: [0, Infinity]
+  electricityPricePerKwh: [0, Infinity], electricityPriceGrowth: [-0.5, 1], otherOpexPerGwYr: [0, Infinity]
 };
 
 /**
@@ -166,6 +166,9 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
   const tierRows = Object.fromEntries(tiers.map((t) => [t.id, []]));
   let current = null;
 
+  // Nominal $/kWh in a calendar year
+  const electricityPriceIn = (year) => scalars.electricityPricePerKwh * Math.pow(1 + (scalars.electricityPriceGrowth || 0), Math.max(0, year - firstModelYear));
+
   function unitEconomics(year, ctx) {
     const util = pathValue('utilization', year);
     // New-build capex per GW IT and its compute share, from the cost model
@@ -183,7 +186,7 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
     const jensenRevPerGw = ctx.frontierTokPerKwhM * 1e6 * KWH_PER_GW_YEAR * effPrice / 1e15 * 0.95;
     const realizedRevPerGw = theoreticalRevPerGw * util * inferenceShare * servedFraction + scalars.otherRevenuePerGwYr;
 
-    const energyPerGw = KWH_PER_GW_YEAR * pue * (scalars.idlePowerShare + (1 - scalars.idlePowerShare) * util) * scalars.electricityPricePerKwh / 1e9;
+    const energyPerGw = KWH_PER_GW_YEAR * pue * (scalars.idlePowerShare + (1 - scalars.idlePowerShare) * util) * electricityPriceIn(year) / 1e9;
     const variablePerGw = realizedRevPerGw * scalars.variableCostPctOfRevenue;
     const ebitdaPerGw = realizedRevPerGw - variablePerGw - energyPerGw - scalars.otherOpexPerGwYr;
     const daPerGw = capexPerGw * computeShare / scalars.computeLifeYears
@@ -452,7 +455,7 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
   // This year's fundable capex ($B), Infinity when the constraint is off
   const fundableThisYear = () => (current && applyConstraint ? current.fundableCapex : Infinity);
 
-  return { scalars, pathValue, startYear, allowance, fundableThisYear, recordMonth, closeYear, finalize };
+  return { scalars, pathValue, startYear, allowance, fundableThisYear, recordMonth, closeYear, finalize, electricityPriceIn };
 }
 
 /** Scarcity price premium: 1 + elasticity × unmet-demand ratio, capped */

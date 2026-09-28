@@ -640,6 +640,13 @@ export const TRANSLATION_INTENSITIES = {
     memoryContentGrowth: {
       hbmGb: { year1: 0.10, year2: 0.20, year3: 0.20, year4: 0.15, year5: 0.15, years6_10: 0.10, years11_15: 0.07, years16_20: 0.05 },
       hostDramGb: { year1: 0.10, year2: 0.35, year3: 0.20, year4: 0.10, year5: 0.10, years6_10: 0.06, years11_15: 0.04, years16_20: 0.03 },
+      // Host CPUs per accelerator: 1 per 2 GPUs (Grace/Vera) rising toward
+      // ~1:1 by 2028 as agentic AI adds CPU servers (TrendForce; AMD doubled
+      // its server-CPU TAM to $120B)
+      cpuPerGpu: { year1: 0.10, year2: 0.30, year3: 0.35, year4: 0.05, year5: 0.05, years6_10: 0, years11_15: 0, years16_20: 0 },
+      // Flash per accelerator: KV-cache offload and checkpoints (Vera Rubin
+      // NVL72 racks ship with ~$1M of NAND); ~2 TB → ~6 TB by 2030
+      ssdTb: { year1: 0.10, year2: 0.60, year3: 0.40, year4: 0.20, year5: 0.10, years6_10: 0.05, years11_15: 0.03, years16_20: 0.02 },
       source: 'HBM per accelerator: B300/Rubin 288 GB, MI455X 432 GB, TPU v7 192 GB; Rubin Ultra planned 1 TB but mainline SKU may drop to 192 GB on HBM supply (TrendForce, Aug 2026). Host memory: Vera 1.5 TB per CPU (~750 GB per GPU) vs Grace ~240 GB; CSPs adding RDIMM for agentic AI'
     }
   },
@@ -651,7 +658,7 @@ export const TRANSLATION_INTENSITIES = {
     kwPerGpu: { value: FLEET_ANCHOR.kwPerAccelerator, confidence: 'medium', source: 'Fleet blend: HGX H100 ~1.3 kW, GB200 NVL72 ~1.7 kW per GPU incl. CPU/network; TPU/Trainium lower' },
     pue: { value: 1.3, confidence: 'high', source: 'Hyperscaler PUE' },
     workerMonthsPerMw: { value: 100, confidence: 'medium', source: '~80-150k worker-months per GW IT (Abilene ~6.4k workers, 1.2 GW facility, ~2 yrs; ~12k MEP field hours/MW)' },
-    ftesPerMw: { value: 1.0, confidence: 'medium', source: 'Permanent ops staff: Meta Hyperion ~500 operational jobs for 2+ GW; large AI campuses ~0.25-1.5 per MW' },
+    ftesPerMw: { value: 0.3, confidence: 'medium', source: 'Permanent ops staff: Meta Hyperion ~500 operational jobs for 2+ GW (~0.25/MW); large AI campuses ~0.2-0.5 per MW' },
   },
 
   powerChain: {
@@ -707,13 +714,13 @@ export const SHARED_SUPPLY_POOLS = {
     waferStartsPerToolMonth: 2000,  // N3 ≈ 5-6 tools per 10k wafers/month; N2 ≈ 6-7
     toolProductivityGrowth: 0.05,   // per-tool throughput upgrades, ~5-10%/yr
     aiMaxShare: 0.8,                // AI took ~60% of N3 in 2026, ~86% planned 2027
-    source: 'ASML shipments (48 in 2025, ~65 in 2026); TSMC N3/N2 capacity (TrendForce); SemiAnalysis AI share of N3'
+    source: 'ASML shipments (44 in 2025, ~65 in 2026); TSMC N3/N2 capacity (TrendForce); SemiAnalysis AI share of N3'
   },
   memory: {
     dramGbPerMonthStart: 3.1e9,     // ~37 EB/yr run-rate end-2025 (~40 EB in 2026, TrendForce)
     growthSchedule: [
       { until: 2026, growth: 0.20 },  // Micron ~20% bit growth 2026
-      { until: 2027, growth: 0.18 },
+      { until: 2027, growth: 0.24 },  // TrendForce: 2027 DRAM bit growth ~24%
       { until: 2030, growth: 0.20 },  // new fabs: SK hynix Yongin/M15X 2027, Micron ID1 2027, ID2 2028, Samsung P5 ~2028, Micron NY ~2030
       { until: 2045, growth: 0.15 }   // Micron: long-term DRAM bit growth mid-teens CAGR
     ],
@@ -725,6 +732,9 @@ export const SHARED_SUPPLY_POOLS = {
     // supply beyond 2030.
     fabLeadMonths: 30,
     maxBitGrowth: 0.30,
+    // A burst is possible near term; sustained growth reverts toward the
+    // long-run ~20%/yr (Micron: mid-teens)
+    maxBitGrowthSchedule: [{ until: 2030, growth: 0.30 }, { until: 2035, growth: 0.20 }, { until: 2045, growth: 0.15 }],
     gbPerHbmStack: 36,
     hbmWaferAreaMultiplier: 3,
     aiMaxShare: 0.6,                // AI ≈ 32-36% of DRAM wafer-equivalents in 2026
@@ -748,6 +758,8 @@ export const SHARED_SUPPLY_POOLS = {
       conversion: 1,
       leadMonths: 48,                 // substations, transmission, generation: 3-5 years
       maxGrowth: 0.15,                // utility capex +17%/yr; China grew capacity 16% in 2025 (543 GW)
+      // Bursts fade: US electricity sustained ~7%/yr for two decades (1950-73)
+      maxGrowthSchedule: [{ until: 2032, growth: 0.15 }, { until: 2038, growth: 0.10 }, { until: 2045, growth: 0.07 }],
       source: 'FERC, Grid Strategies, utility capex +17%/yr (EEI); 2-4 yr transmission/transformer lead times'
     },
     off_grid_power: {
@@ -758,6 +770,7 @@ export const SHARED_SUPPLY_POOLS = {
       conversion: 0.7,                // ~1.4 MW nameplate per MW of firm load (N+1 redundancy)
       leadMonths: 36,                 // new casting/hot-section capacity takes 3-5 years to qualify
       maxGrowth: 0.25,                // OEMs lifting output 25-35%/yr from 2026; BNEF +50% by 2030
+      maxGrowthSchedule: [{ until: 2030, growth: 0.25 }, { until: 2035, growth: 0.12 }, { until: 2045, growth: 0.07 }],
       source: 'GE Vernova 20→30 GW/yr by 2030; Siemens ~15-16 GW, sold out to FY2028; MHI doubling; BNEF ~102 GW/yr by 2030; Caterpillar 3x recips'
     },
     transformers_lpt: {
@@ -768,6 +781,7 @@ export const SHARED_SUPPLY_POOLS = {
       conversion: 1,
       leadMonths: 36,                 // new plants ~2-3 years (Siemens Charlotte 2027, Hitachi South Boston 2028)
       maxGrowth: 0.20,                // Hitachi doubling capacity 2024-27; ~$2B committed industry-wide
+      maxGrowthSchedule: [{ until: 2030, growth: 0.20 }, { until: 2045, growth: 0.10 }],
       source: 'DOE LPT report; Wood Mackenzie 30% deficit; Hitachi/Siemens plant expansions 2027-28'
     },
     dc_construction: {
@@ -778,6 +792,7 @@ export const SHARED_SUPPLY_POOLS = {
       conversion: 1,
       leadMonths: 48,                 // apprenticeships: 8,000 hours over 4-5 years
       maxGrowth: 0.08,                // headcount ~+2-3%/yr (applications +70% 2022-24) plus modular productivity
+      maxGrowthSchedule: [{ until: 2032, growth: 0.08 }, { until: 2045, growth: 0.05 }],
       source: 'BLS: 819k US electricians, +1%/yr; ~12k MEP field hours/MW; modular builds cut field hours 2-3x'
     }
   }
@@ -818,7 +833,7 @@ const FACILITY_PIPELINE = {
   // gap is closed over several months rather than all at once.
   permitLagMonths: 6,
   startSmoothingMonths: 12,
-  openingStartsMWPerMonth: 2700,    // starts already decided for the first permitLagMonths (~2025 start pace)
+  openingStartsMWPerMonth: 3000,    // starts already decided for the first permitLagMonths (~2025 start pace)
   // Builders size new starts to the budget they expect next year: at least
   // this growth over this year's fundable capex (or last year's realized
   // growth if higher). 2027 consensus: Big-4 capex +30% (Bloomberg avg ~$950B),
@@ -906,18 +921,18 @@ export const COST_ASSUMPTIONS_BASE = {
     {
       id: 'hbm', label: 'HBM memory', group: 'compute', basis: 'perUnit', node: 'hbm_stacks', qtyKey: 'hbm_gb',
       unit: '$ per GB', price: 12, passThrough: 0,
-      change: pc(0.25, 0.50, 0, -0.15, -0.10, -0.08, -0.06, -0.05),
-      source: 'Passed through at market price. HBM3E ~$11-13/GB early 2026 with ~20% 2026 contract increases; HBM4 ~$550 per 36 GB stack (~$15/GB); Seoul Economic Daily (Jul 2026): HBM4 prices could roughly double in 2027; Nvidia buys below market'
+      change: pc(0.40, 0.90, -0.05, -0.25, -0.20, -0.10, -0.07, -0.05),
+      source: 'Passed through at market price. HBM3E ~$11-13/GB early 2026 with ~20% 2026 contract increases; HBM4 ~$550 per 36 GB stack (~$15/GB). 2027: SK hynix HBM4 reportedly presold at ~$32/GB (Nvidia) to ~$40/GB (AMD); UBS +79%; Nvidia raising server prices ~15% for memory. Here 2027 averages ~$24/GB (blend with HBM3E), ~$32 by year-end, easing once new fabs ramp (2028+)'
     },
-    { id: 'host_cpu', label: 'Host CPUs', group: 'compute', basis: 'perUnit', node: 'cpu_server', unit: '$ per CPU', price: 3000, passThrough: 0.1, change: pc(0, -0.03, -0.05, -0.05, -0.05, -0.05, -0.04, -0.03), source: 'Grace ~$3k; x86 server CPUs $3-8k; blended per AI server CPU' },
-    { id: 'host_dram', label: 'Server DRAM', group: 'compute', basis: 'perUnit', node: 'dram_server', unit: '$ per GB', price: 11, passThrough: 0, change: pc(1.00, 0.15, -0.10, -0.25, -0.15, -0.10, -0.08, -0.06), source: '64 GB DDR5 RDIMM contract ~$255 (Q3-25) → ~$873 (Q1-26) → >$1,000 (Q2-26); Citi ~$1,590 by Q4-26 (~$25/GB); TrendForce lifts 4Q26 outlook; SemiAnalysis: double-digit ASP rise again in 2027; Deloitte: crunch may not ease until 2029' },
-    { id: 'ssd', label: 'Datacenter SSDs', group: 'compute', basis: 'perUnit', node: 'ssd_datacenter', unit: '$ per TB', price: 120, passThrough: 0, change: pc(1.00, 0, -0.25, -0.20, -0.12, -0.12, -0.10, -0.08), source: 'TrendForce: enterprise SSD contract +53-58% Q1-26, +48-53% Q2, NAND +10-15% Q3 and rising into 4Q26; no new fab supply before 2027' },
+    { id: 'host_cpu', label: 'Host CPUs', group: 'compute', basis: 'perUnit', node: 'cpu_server', unit: '$ per CPU', price: 3000, passThrough: 0.1, change: pc(0.15, 0.05, -0.02, -0.03, -0.03, -0.03, -0.03, -0.02), source: 'Grace ~$3k; x86 server CPUs $3-8k; blended per AI server CPU. 2026: Intel list +~10%, open-market server CPUs +~20% since March, EPYC sold out (Tom\'s Hardware, BuySellRam)' },
+    { id: 'host_dram', label: 'Server DRAM', group: 'compute', basis: 'perUnit', node: 'dram_server', unit: '$ per GB', price: 14, passThrough: 0, change: pc(0.80, 0.15, -0.20, -0.40, -0.30, -0.12, -0.10, -0.08), source: '64 GB DDR5 RDIMM contract ~$255 (Q3-25) → ~$873 (Q1-26, ~$14/GB) → +58-63% Q2 → +13-18% Q3 (~$25/GB); TrendForce: server DRAM +~270% in 2026; SemiAnalysis: double-digit ASP rise again in 2027; new fab output from 2028 (pre-shortage ~$4/GB)' },
+    { id: 'ssd', label: 'Datacenter SSDs', group: 'compute', basis: 'perUnit', node: 'ssd_datacenter', unit: '$ per TB', price: 180, passThrough: 0, change: pc(1.50, 0, -0.30, -0.25, -0.15, -0.10, -0.08, -0.06), source: 'TrendForce: enterprise SSD contract +53-58% Q1-26, +48-53% Q2, +~235% for 2026; enterprise NVMe now ~$300-1,100/TB (30 TB drive ~$22.6k); no new fab supply before 2027' },
     { id: 'nics', label: 'NICs / DPUs', group: 'network', basis: 'perUnit', node: 'dpu_nic', unit: '$ per NIC', price: 1500, passThrough: 0.1, change: pc(0, -0.05, -0.05, -0.05, -0.05, -0.05, -0.04, -0.03), source: 'ConnectX-8 SuperNIC / BlueField ~$1.5-3k; one per accelerator' },
     { id: 'server_assembly', label: 'Server assembly (ODM)', group: 'compute', basis: 'perUnit', node: 'server_assembly', unit: '$ per 8-accelerator server', price: 15000, passThrough: 0.2, change: pc(0, 0, -0.02, -0.02, -0.02, -0.02, -0.02, -0.02), source: 'ODM value-add (boards, chassis, power supplies, integration, margin) ~$30B on ~2M server-equivalents' },
     { id: 'racks', label: 'Racks, PDUs & in-rack power', group: 'compute', basis: 'perUnit', node: 'rack_pdu', unit: '$ per rack', price: 40000, passThrough: 0.2, change: pc(0.05, 0.03, 0, 0, 0, -0.01, -0.01, -0.01), source: 'Rack, busbar, power shelves and PDUs for 40 accelerators' },
     // --- Networking ---
     { id: 'switches', label: 'Switch systems (scale-up & scale-out)', group: 'network', basis: 'perUnit', node: 'switch_asics', unit: '$ per switch ASIC', price: 22000, passThrough: 0.1, change: pc(0, -0.03, -0.05, -0.05, -0.05, -0.05, -0.04, -0.03), source: 'Nvidia networking ~$60B CY26 run-rate + Arista/Celestica/whitebox; NVLink and Ethernet/InfiniBand switch systems' },
-    { id: 'optics', label: 'Optical transceivers', group: 'network', basis: 'perUnit', node: 'optical_transceivers', unit: '$ per accelerator-set', price: 1500, passThrough: 0.2, change: pc(0, -0.05, -0.08, -0.08, -0.08, -0.08, -0.06, -0.05), source: "Dell'Oro: AI cluster optics ~$26B in 2026; ~$0.5/Gbps (AOI): 800G ~$400-900, 1.6T ~$700-1,300; 2-3 modules per accelerator" },
+    { id: 'optics', label: 'Optical transceivers', group: 'network', basis: 'perUnit', node: 'optical_transceivers', unit: '$ per accelerator-set', price: 1500, passThrough: 0.2, change: pc(0, 0, 0, -0.03, -0.05, -0.05, -0.04, -0.03), source: "Dell'Oro: AI cluster optics ~$26B in 2026; ~$0.5/Gbps (AOI): 800G ~$400-900, 1.6T ~$700-1,300; 2-3 modules per accelerator" },
     { id: 'cables', label: 'Copper cables & AECs', group: 'network', basis: 'perUnit', node: 'infiniband_cables', unit: '$ per cable', price: 100, passThrough: 0.1, change: pc(0, -0.03, -0.05, -0.05, -0.05, -0.05, -0.04, -0.03), source: 'DAC/AEC per link' },
     // --- Facility (paid over construction) ---
     { id: 'shell_mep', label: 'Shell, MEP & fit-out (incl. field labor)', group: 'facility', basis: 'perMwFacility', node: 'dc_construction', unit: '$ per MW facility', price: 8.5e6, passThrough: 0.2, change: pc(0.06, 0.05, 0.04, 0.03, 0.03, 0.02, 0.02, 0.02), source: 'JLL 2026: shell & core $11.3M/MW (+6%); Cushman & Wakefield 2026: $17.6M/MW fully equipped (+21% since Q4-24); here per MW facility, excluding items priced separately below' },
@@ -933,7 +948,7 @@ export const COST_ASSUMPTIONS_BASE = {
     { id: 'emb_substrate', label: 'ABF substrates', group: 'embedded', basis: 'perUnit', node: 'abf_substrate', unit: '$ per sqm', price: 15000, passThrough: 0, change: pc(0.05, 0, -0.03, -0.03, -0.03, -0.03, -0.02, -0.02), source: '~$300 of substrate per large accelerator package' },
     { id: 'emb_test', label: 'Final test & assembly (OSAT)', group: 'embedded', basis: 'perUnit', node: 'osat_test', unit: '$ per accelerator', price: 150, passThrough: 0, change: pc(0, 0, -0.02, -0.02, -0.02, -0.02, -0.02, -0.02), source: 'OSAT test/burn-in per accelerator' },
     // --- Operating spend (not capex) ---
-    { id: 'electricity', label: 'Datacenter electricity', group: 'opex', basis: 'electricity', unit: '$ per kWh', price: null, passThrough: 0, change: pc(0, 0, 0, 0, 0, 0, 0, 0), source: 'Uses FINANCING_ASSUMPTIONS.scalars.electricityPricePerKwh and average power draw (idle + utilization)' },
+    { id: 'electricity', label: 'Datacenter electricity', group: 'opex', basis: 'electricity', unit: '$ per kWh', price: null, passThrough: 0, change: pc(0, 0, 0, 0, 0, 0, 0, 0), source: 'Uses FINANCING_ASSUMPTIONS.scalars.electricityPricePerKwh growing at electricityPriceGrowth, and average power draw (idle + utilization)' },
     { id: 'ops_staff', label: 'Datacenter operations staff', group: 'opex', basis: 'staff', unit: '$ per FTE-year', price: 180000, passThrough: 0.1, change: pc(0.04, 0.04, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03), source: 'Loaded cost of DC technicians and engineers; ~1 FTE per MW (serverToInfra.ftesPerMw)' }
   ],
   source: 'See each input. Accelerator prices are blended across Nvidia, AMD and custom ASICs; facility prices are global ex-China averages.'
@@ -1004,7 +1019,8 @@ export const FINANCING_ASSUMPTIONS_BASE = {
     cashTaxRate: 0.20,
     variableCostPctOfRevenue: 0.30, // lab margin / pass-through, model R&D, SG&A
     otherOpexPerGwYr: 1.2,         // $B per GW-yr: staff, maintenance, network, software
-    electricityPricePerKwh: 0.085,
+    electricityPricePerKwh: 0.09,   // US industrial ~8.9¢ (EIA, YTD Jun-26); PJM wholesale +76% in Q1-26
+    electricityPriceGrowth: 0.025,  // nominal $/kWh growth per year (grid capex, load growth)
     idlePowerShare: 0.50,          // power draw at zero utilization, share of peak
     scarcityElasticity: 0.50,      // price premium per unit of unmet-demand ratio (prior year)
     maxScarcityPremium: 2.0,
@@ -1020,7 +1036,9 @@ export const FINANCING_ASSUMPTIONS_BASE = {
     // token at TOKEN_PRICE_PASS_THROUGH (≈ −20%/yr in the early 2030s,
     // −16% late 2030s, −11% in the 2040s).
     priceChange: buildPath(
-      { 2026: -0.40, 2027: -0.30, 2028: -0.25, 2029: -0.20, 2030: -0.20 },
+      // 2026: effective token cost down only ~6-20% YTD (YipitData, OpenRouter,
+      // frontier index) with H100 rental up; 2027 steeper as supply eases
+      { 2026: -0.20, 2027: -0.25, 2028: -0.25, 2029: -0.20, 2030: -0.20 },
       (year) => +(Math.pow(inferenceCostGainForYear(year), -TOKEN_PRICE_PASS_THROUGH) - 1).toFixed(3)
     ),
     // Effective utilization of the ENERGIZED fleet (MFU, idle, hoarded

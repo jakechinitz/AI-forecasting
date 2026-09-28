@@ -1142,6 +1142,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   };
   const hbmContentIndex = contentIndex(memGrowthCfg.hbmGb);
   const hostDramContentIndex = contentIndex(memGrowthCfg.hostDramGb);
+  // When the memory ceiling can't meet buyers' memory needs, vendors ship
+  // less memory per accelerator than planned (e.g. a 192 GB mainline Rubin
+  // Ultra SKU on HBM shortage): content growth slows, fully stopping when
+  // supply covers ≤70% of need. memContentLag holds the growth withheld.
+  const memContentLag = { hbm: 1, dram: 1 };
+  const hbmIdx = (k) => hbmContentIndex[Math.min(Math.max(k, 0), months - 1)] * memContentLag.hbm;
+  const dramIdx = (k) => hostDramContentIndex[Math.min(Math.max(k, 0), months - 1)] * memContentLag.dram;
+  const cpuContentIndex = contentIndex(memGrowthCfg.cpuPerGpu);
+  const ssdContentIndex = contentIndex(memGrowthCfg.ssdTb);
 
   // --- cost model: dollars per input ---
   const costs = createCostModel(costAssumptions, { months, rateAt: blendBlockValue, defaults: COST_ASSUMPTIONS_BASE });
@@ -1446,8 +1455,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Memory per accelerator grows: host DRAM directly, HBM through bigger
     // stacks (the stack count per accelerator is unchanged; hbm_gb is the GB
     // per accelerator, used for HBM pricing and the DRAM wafer ceiling).
-    if (monthIntensity.dram_server !== undefined) monthIntensity.dram_server *= hostDramContentIndex[month];
-    const gbPerHbmStackNow = (memPool.gbPerHbmStack ?? 36) * hbmContentIndex[month];
+    if (monthIntensity.dram_server !== undefined) monthIntensity.dram_server *= dramIdx(month);
+    // Host CPUs and flash per accelerator also rise (agentic CPU servers,
+    // KV-cache offload)
+    if (monthIntensity.cpu_server !== undefined) monthIntensity.cpu_server *= cpuContentIndex[month];
+    if (monthIntensity.ssd_datacenter !== undefined) monthIntensity.ssd_datacenter *= ssdContentIndex[month];
+    const gbPerHbmStackNow = (memPool.gbPerHbmStack ?? 36) * hbmIdx(month);
     monthIntensity.hbm_gb = (monthIntensity.hbm_stacks || 0) * gbPerHbmStackNow;
 
     // Retirements: each energized cohort retires when it reaches the compute
@@ -1562,9 +1575,18 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const hbmGbEq = (monthEffCap.hbm_stacks || 0) * hbmEqPerStack;
     const memUse = hbmGbEq + (monthEffCap.dram_server || 0);
     const memScale = memUse > aiMemCeiling ? aiMemCeiling / memUse : 1;
+    const hbmNeed = memNeedPrev.units * (monthIntensity.hbm_stacks || 0) * hbmEqPerStack;
+    const dramNeed = memNeedPrev.units * (monthIntensity.dram_server || 0) + memNeedPrev.edgeDram;
+    {
+      // Content growth this month, scaled down when supply falls short of need
+      const coverage = hbmNeed + dramNeed > EPSILON ? aiMemCeiling / (hbmNeed + dramNeed) : 1;
+      const withheld = 1 - clamp((coverage - 0.7) / 0.3, 0, 1);
+      if (withheld > 0 && month + 1 < months) {
+        memContentLag.hbm *= Math.pow(hbmContentIndex[month] / hbmContentIndex[month + 1], withheld);
+        memContentLag.dram *= Math.pow(hostDramContentIndex[month] / hostDramContentIndex[month + 1], withheld);
+      }
+    }
     if (memScale < 1) {
-      const hbmNeed = memNeedPrev.units * (monthIntensity.hbm_stacks || 0) * hbmEqPerStack;
-      const dramNeed = memNeedPrev.units * (monthIntensity.dram_server || 0) + memNeedPrev.edgeDram;
       const hbmShare = hbmNeed + dramNeed > EPSILON ? hbmNeed / (hbmNeed + dramNeed) : hbmGbEq / memUse;
       let hbmAlloc = Math.min(hbmGbEq, hbmShare * aiMemCeiling);
       const dramAlloc = Math.min(monthEffCap.dram_server || 0, aiMemCeiling - hbmAlloc);
@@ -1704,8 +1726,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // month k: ceiling (current DRAM capacity grown on its schedule) × the
       // datacenter share of memory demand ÷ memory per accelerator × kW per
       // accelerator
-      const memPerUnitAt = (k) => (nodeIntensityMap.hbm_stacks || 0) * (memPool.gbPerHbmStack ?? 36) * hbmContentIndex[k] * (memPool.hbmWaferAreaMultiplier ?? 3)
-        + (nodeIntensityMap.dram_server || 0) * hostDramContentIndex[k];
+      const memPerUnitAt = (k) => (nodeIntensityMap.hbm_stacks || 0) * (memPool.gbPerHbmStack ?? 36) * hbmIdx(k) * (memPool.hbmWaferAreaMultiplier ?? 3)
+        + (nodeIntensityMap.dram_server || 0) * dramIdx(k);
       const dcMemNeed = memNeedPrev.units * memPerUnitAt(month);
       const dcMemShare = dcMemNeed + memNeedPrev.edgeDram > EPSILON ? dcMemNeed / (dcMemNeed + memNeedPrev.edgeDram) : 1;
       const memChipKW = [];
@@ -1859,7 +1881,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         const contentGrowth = (hbmContentIndex[Math.min(at, months - 1)] / hbmContentIndex[month] + hostDramContentIndex[Math.min(at, months - 1)] / hostDramContentIndex[month]) / 2;
         const aiMemFuture = (desiredUnits * memUnitNow + (edgeDemand.dram_server || 0)) * getDemandGrowthRatio(memFabLead) * contentGrowth;
         const neededTotal = aiMemFuture / Math.max(memPool.aiMaxShare ?? 0.6, EPSILON);
-        const cap12 = dramPlan[Math.max(0, at - 12)] * (1 + memMaxGrowth);
+        const cap12 = dramPlan[Math.max(0, at - 12)] * (1 + scheduleValue(memPool.maxBitGrowthSchedule, at, 'growth', memMaxGrowth));
         const target = Math.min(neededTotal, cap12);
         if (target > dramPlan[at]) {
           const lift = target / dramPlan[at];
@@ -2108,7 +2130,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         if (at < ip.plan.length) {
           const aiShareOfOutput = (cfg.conversion ?? 1) * (cfg.aiMaxShare ?? 1);
           const needed = (effectiveDemand * getDemandGrowthRatio(ip.lead, isInfra)) / Math.max(aiShareOfOutput, EPSILON);
-          const target = Math.min(needed, ip.plan[Math.max(0, at - 12)] * (1 + ip.maxGrowth));
+          const maxGrowth = scheduleValue(cfg.maxGrowthSchedule, at, 'growth', ip.maxGrowth);
+          const target = Math.min(needed, ip.plan[Math.max(0, at - 12)] * (1 + maxGrowth));
           if (target > ip.plan[at]) {
             const lift = target / ip.plan[at];
             for (let k = at; k < ip.plan.length; k++) ip.plan[k] *= lift;
@@ -2309,7 +2332,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
     // Operating spend: datacenter electricity and operations staff
     const kwhThisMonth = dcPowerGW * 1e6 * (8760 / 12);
-    const electricityPrice = financing.scalars.electricityPricePerKwh;
+    const electricityPrice = financing.electricityPriceIn(GLOBAL_PARAMS.startYear + month / 12);
     costs.bookDirect(month, 'electricity', kwhThisMonth * electricityPrice, kwhThisMonth, electricityPrice);
     const fteNow = ((fleetKW * pue) / 1000) * ftesPerMw;
     const staffPrice = costs.priceAt('ops_staff', month, priceIndexOf('dc_ops_staff'));
