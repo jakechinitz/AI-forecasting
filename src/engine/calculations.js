@@ -187,6 +187,10 @@ const NON_GATING_NODES = new Set(['hybrid_bonding', 'euv_tools']);
  *  - datacenter_mw is the construction pipeline's shells; dc_construction is
  *    the crews that build them.
  */
+// Per-accelerator content that scales with accelerator size (kW)
+const SIZE_SCALED_NODES = new Set([
+  'server_assembly', 'rack_pdu', 'dpu_nic', 'switch_asics', 'optical_transceivers', 'infiniband_cables'
+]);
 const CHIP_SIDE_NODES = new Set([
   'hbm_stacks', 'dram_server', 'ssd_datacenter', 'cowos_capacity', 'abf_substrate',
   'osat_test', 'advanced_wafers', 'cpu_server', 'dpu_nic', 'switch_asics',
@@ -1431,6 +1435,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // new accelerator (intensities were built at the opening fleet's kW).
     const monthIntensity = { ...nodeIntensityMap };
     for (const id of INFRASTRUCTURE_NODES) {
+      if (monthIntensity[id] !== undefined) monthIntensity[id] *= (req.kwIndex || 1);
+    }
+    // Server, rack and network content per accelerator also grows with its
+    // size: bigger systems, more in-rack power, and network bandwidth per
+    // accelerator (400G → 800G → 1.6T NICs, more switch and optics ports)
+    for (const id of SIZE_SCALED_NODES) {
       if (monthIntensity[id] !== undefined) monthIntensity[id] *= (req.kwIndex || 1);
     }
     // Memory per accelerator grows: host DRAM directly, HBM through bigger
