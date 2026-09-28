@@ -30,10 +30,10 @@ const SCARCITY_MULT_MAX = 1.5;
 /**
  * @param costCfg   COST_ASSUMPTIONS ({ inputs: [...] })
  * @param opts.months         simulation length
- * @param opts.blockKeyFor    (month) → time-block key ('year1', ...)
+ * @param opts.rateAt         (month, pick(blockKey) → rate) → rate, blended across block edges
  * @param opts.defaults       COST_ASSUMPTIONS_BASE (fallback for bad inputs)
  */
-export function createCostModel(costCfg, { months, blockKeyFor, defaults }) {
+export function createCostModel(costCfg, { months, rateAt, defaults }) {
   const baseById = new Map((defaults?.inputs || []).map((i) => [i.id, i]));
   const inputs = (costCfg?.inputs || defaults?.inputs || []).map((raw) => {
     const def = baseById.get(raw.id) || {};
@@ -56,7 +56,7 @@ export function createCostModel(costCfg, { months, blockKeyFor, defaults }) {
     const arr = new Float64Array(months);
     arr[0] = 1;
     for (let m = 1; m < months; m++) {
-      const g = input.change[blockKeyFor(m)] ?? 0;
+      const g = rateAt(m, (key) => input.change[key] ?? 0);
       arr[m] = arr[m - 1] * Math.pow(1 + g, 1 / 12);
     }
     trend[input.id] = arr;

@@ -724,7 +724,9 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
           <h1 className="tab-title">Assumptions</h1>
           <p className="tab-description">
             Adjust demand growth, token efficiency, and supply expansion assumptions in one view.
-            Years 1-5 are editable individually, with rolling 5-year blocks beyond that.
+            Years 1-5 are editable individually, with rolling 5-year blocks beyond that. Values ramp
+            across the edge into each 5-year block (±6-12 months) instead of stepping overnight; block
+            averages are unchanged.
           </p>
         </div>
         <button

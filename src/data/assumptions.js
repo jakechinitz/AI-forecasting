@@ -705,8 +705,7 @@ export const SHARED_SUPPLY_POOLS = {
       { until: 2026, growth: 0.20 },  // Micron ~20% bit growth 2026
       { until: 2027, growth: 0.18 },
       { until: 2030, growth: 0.20 },  // new fabs: SK hynix Yongin/M15X 2027, Micron ID1 2027, ID2 2028, Samsung P5 ~2028, Micron NY ~2030
-      { until: 2032, growth: 0.15 },
-      { until: 2045, growth: 0.10 }
+      { until: 2045, growth: 0.15 }   // Micron: long-term DRAM bit growth mid-teens CAGR
     ],
     gbPerHbmStack: 36,
     hbmWaferAreaMultiplier: 3,
@@ -793,6 +792,18 @@ const FACILITY_PIPELINE = {
   permitLagMonths: 6,
   startSmoothingMonths: 12,
   openingStartsMWPerMonth: 2700,    // starts already decided for the first permitLagMonths (~2025 start pace)
+  // Builders size new starts to the budget they expect next year: at least
+  // this growth over this year's fundable capex (or last year's realized
+  // growth if higher). 2027 consensus: Big-4 capex +30% (Bloomberg avg ~$950B),
+  // Street ~$1.1T incl. Oracle, Goldman $1.2T (+50%); AWS and Microsoft plan
+  // to roughly double capacity by 2027-28. 0.15 keeps committed construction
+  // in step with the funding model; 0.25 over-commits and starves chip buying
+  // in 2029-30 without adding 2027-28 spend (energization is power-bound).
+  plannedBudgetGrowth: 0.15,
+  // Builders never plan more shells than chips can fill (chip supply capacity
+  // at its trailing rate and growth); this is the empty-shell slack they
+  // accept on top, in months of chip supply.
+  maxVacancyMonths: 6,
   source: 'Goldman Sachs (on-time rates, 18-24 mo builds); Jefferies/Alphaville satellite count (US 16-18 GW gross energizable in 2026, low twenties in 2027); SemiAnalysis (22 GW US under vertical construction)'
 };
 
@@ -855,7 +866,10 @@ export const COST_ASSUMPTIONS_BASE = {
     {
       id: 'accelerators', label: 'Accelerators ex-HBM (logic, packaging, vendor margin)', group: 'compute', basis: 'perKw',
       unit: '$ per kW', price: 15800, node: 'gpu_datacenter', passThrough: 0.15,
-      change: pc(0, 0, -0.03, -0.05, -0.05, -0.06, -0.06, -0.05),
+      // 2027: Rubin racks (~$5-7M, ~190-230 kW) price ~10-15% more per kW than
+      // GB300 (~$3.7-4M at ~137 kW); Nvidia guides +70% for FY28 on
+      // supply-constrained volume, i.e. higher prices per unit and per kW.
+      change: pc(0, 0.12, 0.03, -0.03, -0.05, -0.06, -0.06, -0.05),
       source: 'Nvidia DC compute ~$300B CY26 + AMD ~$15B + custom ASICs ~$50-65B over ~15.5M ex-China units (JPM 16.3M global) ≈ $25-27k/unit ≈ $18k per kW including HBM; less ~$2.2k/kW of HBM at January prices. $/kW roughly flat per generation (Rubin prices rise with power)'
     },
     {
@@ -968,12 +982,14 @@ export const FINANCING_ASSUMPTIONS_BASE = {
     {
       // Calibrated to Q2-2026 guidance: 2026 capex ~$730B (AMZN ~$220B, GOOGL
       // $195-205B, MSFT ~$175B CY26, META $130-145B), ~90% AI; operating cash
-      // flow ~$640B; buybacks + dividends ~$150B; ~1/3 of capex funded
-      // externally (bonds, SPVs, Alphabet's 2026 equity raise).
+      // flow ~$640B growing ~12-15%/yr on cloud; buybacks + dividends ~$150B.
+      // ~1/3 of 2026 capex funded externally (bonds, SPVs, Alphabet's equity
+      // raise); 2027 consensus ($950B Bloomberg avg, $1.1T Street incl. Oracle,
+      // Goldman $1.2T) implies ~40-45%, so the ceiling is 50%.
       id: 'A', name: 'Big-4 hyperscalers', note: 'MSFT, GOOGL, AMZN, META',
-      share: 0.72, legacyOcf: 520, legacyOcfGrowth: 0.07, shareholderReturns: 150,
-      cash: 380, minCash: 150, debt: 260, legacyEbitda: 700, legacyEbitdaGrowth: 0.07,
-      maxExternalShareOfCapex: 0.40, costOfDebt: 0.05, maxDebtToEbitda: 1.5
+      share: 0.72, legacyOcf: 520, legacyOcfGrowth: 0.12, shareholderReturns: 150,
+      cash: 380, minCash: 150, debt: 260, legacyEbitda: 700, legacyEbitdaGrowth: 0.12,
+      maxExternalShareOfCapex: 0.50, costOfDebt: 0.05, maxDebtToEbitda: 1.5
     },
     {
       // Oracle (~$50B), CoreWeave (~$30-35B), xAI (~$30B), other neoclouds and
@@ -1193,6 +1209,49 @@ export function getBlockForMonth(month) {
 export function getBlockKeyForMonth(month) {
   const segment = ASSUMPTION_SEGMENTS[getBlockForMonth(month)];
   return segment?.key || ASSUMPTION_SEGMENTS[ASSUMPTION_SEGMENTS.length - 1].key;
+}
+
+/**
+ * Blend weights across block edges: [{ key, w }] summing to 1.
+ *
+ * Multi-year blocks (years 6-10, 11-15, 16-20) hold one value for five years,
+ * so their edges would step demand growth, efficiency and edge-offload shares
+ * overnight, and builders planning two years ahead would react to the cliff.
+ * Values ramp linearly across each edge into a multi-year block, over ±halfW
+ * months (12, or half the shorter neighbor). The ramp is symmetric, so each
+ * block's average and the cumulative growth are unchanged. Annual blocks
+ * (years 1-5) keep their exact values.
+ */
+export function getBlockWeightsForMonth(month) {
+  const segs = ASSUMPTION_SEGMENTS;
+  const i = getBlockForMonth(month);
+  const len = (s) => s.endMonth - s.startMonth + 1;
+  const halfW = (a, b) => Math.min(12, len(a) / 2, len(b) / 2);
+  const seg = segs[i];
+  if (i > 0 && len(seg) > 12) {
+    const prev = segs[i - 1];
+    const W = halfW(prev, seg);
+    const d = month - seg.startMonth;
+    if (d < W) {
+      const w = (d + W) / (2 * W);
+      return [{ key: prev.key, w: 1 - w }, { key: seg.key, w }];
+    }
+  }
+  const next = segs[i + 1];
+  if (next && len(next) > 12) {
+    const W = halfW(seg, next);
+    const d = next.startMonth - month;
+    if (d <= W) {
+      const w = (W - d) / (2 * W);
+      return [{ key: seg.key, w: 1 - w }, { key: next.key, w }];
+    }
+  }
+  return [{ key: seg.key, w: 1 }];
+}
+
+/** Weighted value across block edges: pick(blockKey) → number */
+export function blendBlockValue(month, pick) {
+  return getBlockWeightsForMonth(month).reduce((s, { key, w }) => s + w * pick(key), 0);
 }
 
 // Yield models
