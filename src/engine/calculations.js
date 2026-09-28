@@ -2083,14 +2083,19 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         planDemand = desiredUnits * intensity + edgeNeed;
         actualConsumption = purchases * intensity + edgeNeed * edgeServedFrac;
       } else if (node.id === 'euv_tools') {
-        // Tools that must be delivered each month so the EUV-supported wafer
-        // ceiling stays ahead of AI wafer demand one lead time out (logic tools
-        // grossed up to all EUV tools). Zero when the ceiling has headroom.
+        // EUV tools AI needs per month: its wafer growth over one lead time
+        // converted to tools, plus any shortfall of the installed base vs that
+        // need (logic tools grossed up to all EUV tools). The rest of ASML's
+        // output goes to other logic and DRAM; every tool shipped is installed.
         const leadTime = node.leadTimeDebottleneck || 18;
         const waferIntensity = monthIntensity.advanced_wafers || 0;
         const toolsFor = (units, edge) => {
-          const wafers = units * waferIntensity * getDemandGrowthRatio(leadTime) + edge;
-          return Math.max(0, wafers / Math.max(wafersPerLogicTool, EPSILON) - euvLogicInstalled) / leadTime / logicShareOfEuv;
+          const wafersNow = units * waferIntensity + edge;
+          const wafersAhead = units * waferIntensity * getDemandGrowthRatio(leadTime) + edge;
+          const perTool = Math.max(wafersPerLogicTool, EPSILON);
+          const growthTools = Math.max(0, wafersAhead - wafersNow) / perTool;
+          const shortfallTools = Math.max(0, wafersAhead / perTool - euvLogicInstalled);
+          return (growthTools + shortfallTools) / leadTime / logicShareOfEuv;
         };
         planDemand = toolsFor(desiredUnits, edgeDemand.advanced_wafers || 0);
         actualConsumption = toolsFor(purchases, (edgeDemand.advanced_wafers || 0) * edgeServedFrac);
@@ -2145,6 +2150,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       // Same pool-limited effective capacity used in gating; shells are the
       // pipeline's completions this month
       const isShells = node.id === 'datacenter_mw';
+      // Sold-out capital goods (EUV): every unit made ships and is installed
+      const shipsFullOutput = !!node.growsAtPhysicalMax;
       const effCap = isShells ? completedMW : monthEffCap[node.id];
 
       const inventoryIn = isShells ? readyShellsMW : state.inventory;
@@ -2158,6 +2165,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       if (isShells) {
         production = completedMW;
         delivered = actualConsumption;
+      } else if (shipsFullOutput) {
+        production = effCap;
+        delivered = effCap;
+        state.inventory = 0;
       } else if (state.type === 'STOCK') {
         const inventoryCeiling = effectiveDemand * INVENTORY_CEILING_MONTHS;
         const bufferGap = Math.max(0, inventoryCeiling - inventoryIn);
@@ -2237,8 +2248,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
       // Shortage / glut flags
       const isShort = tightness > 1.05 || (!isShells && state.backlog > 0);
-      const isGlut = tightness < glutThresholds.soft && (isShells || state.backlog <= 0);
-      const isHardGlut = tightness < glutThresholds.hard && (isShells || state.backlog <= 0);
+      // AI taking less than a sold-out producer's output is not a glut
+      const isGlut = !shipsFullOutput && tightness < glutThresholds.soft && (isShells || state.backlog <= 0);
+      const isHardGlut = !shipsFullOutput && tightness < glutThresholds.hard && (isShells || state.backlog <= 0);
 
       if (nodeRes) {
         nodeRes.demand.push(planDemand);
