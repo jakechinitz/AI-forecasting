@@ -1216,13 +1216,16 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // Last month's memory need (accelerators ordered, edge DRAM) for the
   // memory pool's wafer split
   const memNeedPrev = { units: 0, edgeDram: 0 };
-  // Chip supply capacity as builders see it (kW per month, last two years)
+  // Chip supply capacity and power hookups as builders see them (kW per
+  // month, last two years)
   const chipCapKWHistory = [];
+  const hookupKWHistory = [];
   // Expected growth of that capacity: year-over-year growth averaged over
   // CHIP_GROWTH_SMOOTHING months, so lumpy fab/component additions do not
   // swing construction plans
   const CHIP_GROWTH_SMOOTHING = 24;
   let chipGrowthExpected = 0.2;   // starting view: ~20%/yr accelerator supply growth 2026-28
+  let powerGrowthExpected = 0.2;  // and ~20%/yr growth in power hookups for AI
   // Empty-shell slack builders accept, in months of chip supply
   const maxVacancyMonths = Math.max(0, numOr(pipeCfg.maxVacancyMonths, 6));
   const fundingRatioTrailing = () => (fundingHistory.length ? fundingHistory.reduce((a, b) => a + b, 0) / fundingHistory.length : 1);
@@ -1289,12 +1292,35 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const waferStartsPerToolMonth = lePool.waferStartsPerToolMonth ?? 2000;
   const leAiMaxShare = lePool.aiMaxShare ?? 0.8;
   let euvLogicInstalled = (lePool.euvInstalledStart ?? 320) * logicShareOfEuv;
-  let dramGbPerMonth = memPool.dramGbPerMonthStart ?? 3.0e9;
+  // DRAM capacity path (GB/month). The growth schedule is the floor (fabs
+  // already announced); on top, memory makers commit new fabs when forecast
+  // AI memory demand outruns planned capacity. A decision takes
+  // fabLeadMonths to reach output, and total bit growth over any 12 months
+  // is capped at maxBitGrowth (fab construction, tools, density scaling).
+  const memFabLead = Math.max(1, Math.round(numOr(memPool.fabLeadMonths, 30)));
+  const memMaxGrowth = Math.max(0, numOr(memPool.maxBitGrowth, 0.30));
+  const dramPlan = new Float64Array(months + memFabLead + 1);
+  dramPlan[0] = memPool.dramGbPerMonthStart ?? 3.0e9;
+  for (let m = 1; m < dramPlan.length; m++) {
+    dramPlan[m] = dramPlan[m - 1] * Math.pow(1 + scheduleValue(memPool.growthSchedule, m - 1, 'growth', 0.15), 1 / 12);
+  }
+  let dramGbPerMonth = dramPlan[0];
   results.pools = { aiWaferCeiling: [], aiMemoryCeilingGb: [], leadingEdgeScale: [], memoryScale: [], euvLogicInstalled: [], industry: {} };
   const industryPools = poolsCfg.industry || {};
+  // Industry output paths (power, transformers, trades): the growth schedule
+  // is the floor; when AI demand one lead time out outruns AI's share of the
+  // planned output, the industry adds capacity (factories, utility build-out,
+  // training), arriving after leadMonths, with output growth over any 12
+  // months capped at maxGrowth. Same rule as the DRAM fab plan.
   const industryCap = {};
+  const industryPlan = {};
   for (const [id, cfg] of Object.entries(industryPools)) {
-    industryCap[id] = cfg.industryStart || 0;
+    const lead = Math.max(1, Math.round(numOr(cfg.leadMonths, 36)));
+    const plan = new Float64Array(months + lead + 1);
+    plan[0] = cfg.industryStart || 0;
+    for (let m = 1; m < plan.length; m++) plan[m] = plan[m - 1] * Math.pow(1 + scheduleValue(cfg.growthSchedule, m - 1, 'growth', 0.05), 1 / 12);
+    industryPlan[id] = { plan, lead, maxGrowth: Math.max(0, numOr(cfg.maxGrowth, 0)) };
+    industryCap[id] = plan[0];
     results.pools.industry[id] = { ceiling: [], aiShare: [], binding: [] };
   }
 
@@ -1554,7 +1580,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       rec.ceiling.push(ceiling);
       rec.aiShare.push(industryCap[id] > 0 ? monthEffCap[id] / (industryCap[id] * (cfg.conversion ?? 1)) : 0);
       rec.binding.push(bound);
-      industryCap[id] *= Math.pow(1 + scheduleValue(cfg.growthSchedule, month, 'growth', 0.05), 1 / 12);
+      const ip = industryPlan[id];
+      industryCap[id] = ip.plan[Math.min(month + 1, ip.plan.length - 1)];
     }
 
     for (const node of NODES) {
@@ -1566,7 +1593,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // Pools evolve: EUV deliveries this month join the installed base (logic share);
     // DRAM fab capacity follows its construction schedule.
     euvLogicInstalled += (monthEffCap.euv_tools || 0) * logicShareOfEuv;
-    dramGbPerMonth *= Math.pow(1 + scheduleValue(memPool.growthSchedule, month, 'growth', 0.15), 1 / 12);
+    dramGbPerMonth = dramPlan[Math.min(month + 1, dramPlan.length - 1)];
 
     // Edge devices claim shared wafer/DRAM supply before datacenters, up to
     // EDGE_MAX_SUPPLY_SHARE of each node's potential (phone and PC makers hold
@@ -1599,6 +1626,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const totalPowerPotential = gridPotential + offGridPotential;
     const gridShare = totalPowerPotential > EPSILON ? gridPotential / totalPowerPotential : 1.0;
     lastGridShare = gridShare;
+    // Power hookups available this month (kW IT), incl. those freed by retirements
+    const hookupPerKwNow = perKw('grid_interconnect');
+    const hookupKWNow = hookupPerKwNow > 0 ? (gridPotential + offGridPotential) / hookupPerKwNow + retiredKW : Infinity;
 
     // =======================================================
     // STEP 2: CONSTRUCTION PIPELINE (labor-paced; funding applied below)
@@ -1610,7 +1640,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // startSmoothingMonths (anchoring and adjustment; the committed side
     // includes projects still in permitting, so the lag does not overshoot).
     {
-      const horizon = Math.min(month + Tc + Math.round(slipMean * (1 - onTimeShareAt(month + Tc))), months - 1);
+      // Completion horizon; past the model's last month the need is
+      // extrapolated at its recent growth (else starts collapse at the end)
+      const horizonTrue = month + Tc + Math.round(slipMean * (1 - onTimeShareAt(month + Tc)));
+      const horizon = Math.min(horizonTrue, months - 1);
       const neededMWAt = (h) => {
         const fut = computeRequiredGpus(h, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed);
         let remainKW = 0, remainEff = 0;
@@ -1622,19 +1655,22 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         }
         const kwPerEffFuture = (kw0 * (fut.kwIndex || 1)) / Math.max(fut.hwIndex || 1, EPSILON);
         const demandMW = ((remainKW + Math.max(0, fut.requiredTotal - remainEff) * kwPerEffFuture) * pue) / 1000;
-        // Builders never plan more shells than chips can fill: the fleet still
-        // running at h, chips in stock, and chip supply each month until h,
-        // plus maxVacancyMonths of slack. Supply is chip capacity (fabs and
+        // Builders never plan more shells than can be filled and energized:
+        // the fleet still running at h, plus the lesser of the chips
+        // available by h (stock and supply) and the power hookups available
+        // by h, plus maxVacancyMonths of slack. Chip supply is capacity (fabs and
         // components, not purchases, so the cap does not follow the shells)
         // at its trailing rate and growth, but no more than the memory
-        // makers' announced capacity can support (memory per accelerator
-        // rises on vendor roadmaps; the DRAM schedule is public).
+        // makers' committed capacity supports; hookups likewise at their
+        // trailing rate and growth.
         if (!chipOutlookReady) return demandMW;
-        const supplyAt = (k) => Math.min(supplyKWpm * Math.pow(1 + supplyGrowth, k / 12), memChipKWAt(month + k));
-        let chipKW = remainKW + stockKWNow;
-        for (let k = 1; k <= h - month; k++) chipKW += supplyAt(k);
-        chipKW += maxVacancyMonths * supplyAt(h - month);
-        const fillableMW = (chipKW * pue) / 1000;
+        const chipAt = (k) => Math.min(supplyKWpm * Math.pow(1 + supplyGrowth, k / 12), memChipKWAt(month + k));
+        const powerAt = (k) => powerKWpm * Math.pow(1 + powerGrowthExpected, k / 12);
+        let chipsKW = stockKWNow;
+        let hookupsKW = 0;
+        for (let k = 1; k <= h - month; k++) { chipsKW += chipAt(k); hookupsKW += powerAt(k); }
+        const slackKW = maxVacancyMonths * Math.min(chipAt(h - month), powerAt(h - month));
+        const fillableMW = ((remainKW + Math.min(chipsKW, hookupsKW) + slackKW) * pue) / 1000;
         return Math.min(demandMW, fillableMW);
       };
       // Chip supply outlook from the last two years of capacity: trailing
@@ -1647,6 +1683,12 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         chipGrowthExpected += (clamp(lastYear / priorYear - 1, 0, 0.3) - chipGrowthExpected) / CHIP_GROWTH_SMOOTHING;
       }
       const supplyGrowth = chipGrowthExpected;
+      const powerYear = hookupKWHistory.slice(-12).reduce((a, b) => a + b, 0);
+      const powerPriorYear = hookupKWHistory.slice(-24, -12).reduce((a, b) => a + b, 0);
+      const powerKWpm = powerYear / 12;
+      if (chipOutlookReady && powerPriorYear > EPSILON) {
+        powerGrowthExpected += (clamp(powerYear / powerPriorYear - 1, 0, 0.3) - powerGrowthExpected) / CHIP_GROWTH_SMOOTHING;
+      }
       const stockKWNow = strandedTotals().kw;
       // Accelerator kW per month the AI memory ceiling supports at future
       // month k: ceiling (current DRAM capacity grown on its schedule) × the
@@ -1658,16 +1700,25 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const dcMemShare = dcMemNeed + memNeedPrev.edgeDram > EPSILON ? dcMemNeed / (dcMemNeed + memNeedPrev.edgeDram) : 1;
       const memChipKW = [];
       {
-        let ceiling = dramGbPerMonth * (memPool.aiMaxShare ?? 0.6);
         for (let k = month + 1; k <= horizon; k++) {
+          const ceiling = dramPlan[Math.min(k, dramPlan.length - 1)] * (memPool.aiMaxShare ?? 0.6);
           const kwPerUnit = kw0 * (getEfficiencyMultipliers(k, efficiencyAssumptions, effCache, results.warnings, warnedSet).KW || 1);
           memChipKW[k] = (ceiling * dcMemShare) / Math.max(memPerUnitAt(k), EPSILON) * kwPerUnit;
-          ceiling *= Math.pow(1 + scheduleValue(memPool.growthSchedule, k, 'growth', 0.15), 1 / 12);
         }
       }
       const memChipKWAt = (k) => memChipKW[Math.min(k, horizon)] ?? Infinity;
-      const neededMW = neededMWAt(horizon);
-      const paceMW = Math.max(0, neededMW - neededMWAt(Math.max(month, horizon - 1)));
+      const neededAtHorizon = neededMWAt(horizon);
+      // Pace: the need's compound monthly growth over the last year before
+      // the horizon, applied to the need at the horizon (a single month would
+      // pass lumpy retirements straight into starts; a compound rate keeps
+      // exponential growth at full pace)
+      const paceSpan = Math.min(12, horizon - month);
+      const needEarlier = paceSpan > 0 ? neededMWAt(horizon - paceSpan) : neededAtHorizon;
+      const needGrowth = paceSpan > 0 && needEarlier > EPSILON && neededAtHorizon > needEarlier
+        ? Math.pow(neededAtHorizon / needEarlier, 1 / paceSpan)
+        : 1;
+      const neededMW = neededAtHorizon * Math.pow(needGrowth, horizonTrue - horizon);
+      const paceMW = neededMW * (1 - 1 / needGrowth);
       const pipelineMW = buckets.reduce((s, b) => s + b.mw, 0);
       const occupiedMW = ((gpuState.installedKW + infState.installedKW) * pue) / 1000;
       let decidedMW = 0;
@@ -1739,7 +1790,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const planKW = planEff * (kwNew / hwIdx);
     const expectedKW = Math.min(schedKW, planKW);
     const emptyShellKW = (readyShellsMW * 1000) / pue;
-    const targetStockKW = Math.min(emptyShellKW, planKW * CATCHUP_MONTHS) + hoardMonths * expectedKW;
+    // Chips for empty shells only as fast as power hookups can energize them
+    const targetStockKW = Math.min(emptyShellKW, planKW * CATCHUP_MONTHS, hookupKWNow * CATCHUP_MONTHS) + hoardMonths * expectedKW;
     const desiredKW = Math.max(0, expectedKW + (targetStockKW - stockNow.kw) / invAdjustMonths);
     const desiredUnits = desiredKW / Math.max(kwNew, EPSILON);
 
@@ -1784,8 +1836,27 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     chipSpendHistory.push(chipSpend);
     chipCapKWHistory.push(Math.min(gpuAvailable, chipLimit) * kwNew);
     if (chipCapKWHistory.length > 24) chipCapKWHistory.shift();
+    hookupKWHistory.push(Number.isFinite(hookupKWNow) ? hookupKWNow : 0);
+    if (hookupKWHistory.length > 24) hookupKWHistory.shift();
     memNeedPrev.units = desiredUnits;
     memNeedPrev.edgeDram = (edgeDemand.dram_server || 0) * edgeServedFrac;
+    // Memory makers: forecast AI memory demand one fab lead time out (units
+    // growth × memory per unit growth) and commit fabs if the plan falls short
+    {
+      const at = month + memFabLead;
+      if (at < dramPlan.length) {
+        const memUnitNow = (monthIntensity.hbm_stacks || 0) * gbPerHbmStackNow * (memPool.hbmWaferAreaMultiplier ?? 3) + (monthIntensity.dram_server || 0);
+        const contentGrowth = (hbmContentIndex[Math.min(at, months - 1)] / hbmContentIndex[month] + hostDramContentIndex[Math.min(at, months - 1)] / hostDramContentIndex[month]) / 2;
+        const aiMemFuture = (desiredUnits * memUnitNow + (edgeDemand.dram_server || 0)) * getDemandGrowthRatio(memFabLead) * contentGrowth;
+        const neededTotal = aiMemFuture / Math.max(memPool.aiMaxShare ?? 0.6, EPSILON);
+        const cap12 = dramPlan[Math.max(0, at - 12)] * (1 + memMaxGrowth);
+        const target = Math.min(neededTotal, cap12);
+        if (target > dramPlan[at]) {
+          const lift = target / dramPlan[at];
+          for (let k = at; k < dramPlan.length; k++) dramPlan[k] *= lift;
+        }
+      }
+    }
     if (chipSpendHistory.length > 3) chipSpendHistory.shift();
 
     // Construction progresses at the labor pace × funding ratio; payments and
@@ -1822,8 +1893,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     const gateLabel = {};
     const addGate = (label, kw) => { gateKW[label] = kw; };
     addGate('DC shells', (readyShellsMW * 1000) / pue);
-    const hookupPerKw = perKw('grid_interconnect'); // MW per kW IT
-    addGate(POWER_HOOKUP_LABEL, hookupPerKw > 0 ? (gridPotential + offGridPotential) / hookupPerKw + retiredKW : Infinity);
+    addGate(POWER_HOOKUP_LABEL, hookupKWNow);
     for (const id of ENERGIZE_SIDE_NODES) {
       if (id === 'grid_interconnect' || id === 'off_grid_power' || potentials[id] === undefined) continue;
       let intensityKw = perKw(id);
@@ -2019,6 +2089,22 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const effectiveDemand = actualConsumption > EPSILON
         ? Math.min(planDemand, actualConsumption * CONSUMPTION_HEADROOM)
         : planDemand;
+
+      // Industry pools respond to AI demand one lead time out (see industryPlan)
+      if (industryPlan[node.id]) {
+        const ip = industryPlan[node.id];
+        const cfg = industryPools[node.id];
+        const at = month + ip.lead;
+        if (at < ip.plan.length) {
+          const aiShareOfOutput = (cfg.conversion ?? 1) * (cfg.aiMaxShare ?? 1);
+          const needed = (effectiveDemand * getDemandGrowthRatio(ip.lead, isInfra)) / Math.max(aiShareOfOutput, EPSILON);
+          const target = Math.min(needed, ip.plan[Math.max(0, at - 12)] * (1 + ip.maxGrowth));
+          if (target > ip.plan[at]) {
+            const lift = target / ip.plan[at];
+            for (let k = at; k < ip.plan.length; k++) ip.plan[k] *= lift;
+          }
+        }
+      }
 
       const sMult = runningSupplyMult[node.id] || 1;
       const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);

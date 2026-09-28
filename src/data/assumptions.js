@@ -351,12 +351,21 @@ const buildDemandBlocks = () => {
   blocks.year5.edgeOffload.enterprise.value = 0.15;
   blocks.year5.edgeOffload.agentic.value = 0.05;
 
+  // Years 6-20: demand keeps responding to cheaper compute as it did in
+  // 2027-30. There, each 1% fall in cost per token (software × hardware
+  // efficiency) came with ~1.75% more tokens; each 1% fall in training cost
+  // with ~1.46% more frontier and ~1.33% more mid-tier training. Holding
+  // those elasticities, demand growth slows only as fast as efficiency gains
+  // slow: token growth ≈ 2.2x/yr (Y6-10), 1.85x (Y11-15), 1.5x (Y16-20).
+  // Segment rates below are the earlier "maturing" rates scaled by one
+  // factor per block (1.21, 1.19, 1.06), which keeps the segment mix; the
+  // "Demand matures" scenario keeps the earlier rates.
   // Years 6-10
-  blocks.years6_10.inferenceGrowth.consumer.value = 0.20;
-  blocks.years6_10.inferenceGrowth.enterprise.value = 0.30;
-  blocks.years6_10.inferenceGrowth.agentic.value = 0.50;
-  blocks.years6_10.trainingGrowth.frontier.value = 0.25;
-  blocks.years6_10.trainingGrowth.midtier.value = 0.3;
+  blocks.years6_10.inferenceGrowth.consumer.value = 0.45;
+  blocks.years6_10.inferenceGrowth.enterprise.value = 0.57;
+  blocks.years6_10.inferenceGrowth.agentic.value = 0.81;
+  blocks.years6_10.trainingGrowth.frontier.value = 0.62;
+  blocks.years6_10.trainingGrowth.midtier.value = 0.55;
   blocks.years6_10.intensityGrowth.value = 0.25;
   // Edge offload Years 6-10: mature ecosystem, on-device becomes default for simple inference
   blocks.years6_10.edgeOffload.consumer.value = 0.5;
@@ -364,11 +373,11 @@ const buildDemandBlocks = () => {
   blocks.years6_10.edgeOffload.agentic.value = 0.1;
 
   // Years 11-15
-  blocks.years11_15.inferenceGrowth.consumer.value = 0.12;
-  blocks.years11_15.inferenceGrowth.enterprise.value = 0.18;
-  blocks.years11_15.inferenceGrowth.agentic.value = 0.25;
-  blocks.years11_15.trainingGrowth.frontier.value = 0.15;
-  blocks.years11_15.trainingGrowth.midtier.value = 0.2;
+  blocks.years11_15.inferenceGrowth.consumer.value = 0.33;
+  blocks.years11_15.inferenceGrowth.enterprise.value = 0.40;
+  blocks.years11_15.inferenceGrowth.agentic.value = 0.48;
+  blocks.years11_15.trainingGrowth.frontier.value = 0.385;
+  blocks.years11_15.trainingGrowth.midtier.value = 0.345;
   blocks.years11_15.intensityGrowth.value = 0.26;
   // Edge offload Years 11-15: edge AI pervasive; cloud reserved for frontier/long-context
   blocks.years11_15.edgeOffload.consumer.value = 0.6;
@@ -376,11 +385,11 @@ const buildDemandBlocks = () => {
   blocks.years11_15.edgeOffload.agentic.value = 0.15;
 
   // Years 16-20
-  blocks.years16_20.inferenceGrowth.consumer.value = 0.08;
-  blocks.years16_20.inferenceGrowth.enterprise.value = 0.10;
-  blocks.years16_20.inferenceGrowth.agentic.value = 0.15;
-  blocks.years16_20.trainingGrowth.frontier.value = 0.1;
-  blocks.years16_20.trainingGrowth.midtier.value = 0.12;
+  blocks.years16_20.inferenceGrowth.consumer.value = 0.14;
+  blocks.years16_20.inferenceGrowth.enterprise.value = 0.16;
+  blocks.years16_20.inferenceGrowth.agentic.value = 0.21;
+  blocks.years16_20.trainingGrowth.frontier.value = 0.26;
+  blocks.years16_20.trainingGrowth.midtier.value = 0.23;
   blocks.years16_20.intensityGrowth.value = 0.26;
   // Edge offload Years 16-20: steady state — cloud for frontier, edge for everything else
   blocks.years16_20.edgeOffload.consumer.value = 0.65;
@@ -687,8 +696,9 @@ export const TRANSLATION_INTENSITIES = {
  *  - Leading-edge logic: EUV installed base × wafer starts per tool. ASML
  *    deliveries (euv_tools node, ASML's capacity plan) add to the base.
  *    AI may take up to aiMaxShare; phones/PCs/other keep the rest.
- *  - Memory: total DRAM capacity follows the fab construction schedule. HBM
- *    uses ~3x the wafer area per bit of standard DRAM.
+ *  - Memory: total DRAM capacity follows the announced fab schedule as a
+ *    floor, plus fabs committed when AI memory demand outruns it (fab lead
+ *    time, max bit growth). HBM uses ~3x the wafer area per bit of DRAM.
  */
 export const SHARED_SUPPLY_POOLS = {
   leadingEdge: {
@@ -707,6 +717,14 @@ export const SHARED_SUPPLY_POOLS = {
       { until: 2030, growth: 0.20 },  // new fabs: SK hynix Yongin/M15X 2027, Micron ID1 2027, ID2 2028, Samsung P5 ~2028, Micron NY ~2030
       { until: 2045, growth: 0.15 }   // Micron: long-term DRAM bit growth mid-teens CAGR
     ],
+    // Demand response: fabs committed when forecast AI memory demand
+    // outruns the schedule above (the floor). New fabs take 3-5 years from
+    // decision to volume (18+ months to build, then ramp); bit growth over
+    // any 12 months is capped (history: >70%/yr in the 1990s, ~50% in
+    // 2010-11; slower density scaling now). SK hynix sees demand above
+    // supply beyond 2030.
+    fabLeadMonths: 30,
+    maxBitGrowth: 0.30,
     gbPerHbmStack: 36,
     hbmWaferAreaMultiplier: 3,
     aiMaxShare: 0.6,                // AI ≈ 32-36% of DRAM wafer-equivalents in 2026
@@ -715,10 +733,11 @@ export const SHARED_SUPPLY_POOLS = {
 
   /**
    * Industry pools for power and construction. Each is the WHOLE industry's
-   * output (in the AI node's units per month, after `conversion`), growing on
-   * its own physical schedule. AI's node grows with demand and can claim up to
-   * aiMaxShare of it, so when capital frees up AI can bid for a bigger slice
-   * of existing industry output instead of growing from its own small base.
+   * output (in the AI node's units per month, after `conversion`). The growth
+   * schedule is a floor; when AI demand outruns AI's share, the industry adds
+   * capacity that arrives after leadMonths, with output growth over any 12
+   * months capped at maxGrowth (factory, utility and training limits). AI's
+   * node grows with demand and can claim up to aiMaxShare of the output.
    */
   industry: {
     grid_interconnect: {
@@ -727,6 +746,8 @@ export const SHARED_SUPPLY_POOLS = {
       growthSchedule: [{ until: 2032, growth: 0.12 }, { until: 2045, growth: 0.07 }],
       aiMaxShare: 0.7,                // DCs ≈ 55% of forecast US load growth (Grid Strategies)
       conversion: 1,
+      leadMonths: 48,                 // substations, transmission, generation: 3-5 years
+      maxGrowth: 0.15,                // utility capex +17%/yr; China grew capacity 16% in 2025 (543 GW)
       source: 'FERC, Grid Strategies, utility capex +17%/yr (EEI); 2-4 yr transmission/transformer lead times'
     },
     off_grid_power: {
@@ -735,6 +756,8 @@ export const SHARED_SUPPLY_POOLS = {
       growthSchedule: [{ until: 2030, growth: 0.10 }, { until: 2045, growth: 0.05 }],
       aiMaxShare: 0.4,                // DCs compete with utilities and industry for slots
       conversion: 0.7,                // ~1.4 MW nameplate per MW of firm load (N+1 redundancy)
+      leadMonths: 36,                 // new casting/hot-section capacity takes 3-5 years to qualify
+      maxGrowth: 0.25,                // OEMs lifting output 25-35%/yr from 2026; BNEF +50% by 2030
       source: 'GE Vernova 20→30 GW/yr by 2030; Siemens ~15-16 GW, sold out to FY2028; MHI doubling; BNEF ~102 GW/yr by 2030; Caterpillar 3x recips'
     },
     transformers_lpt: {
@@ -743,6 +766,8 @@ export const SHARED_SUPPLY_POOLS = {
       growthSchedule: [{ until: 2030, growth: 0.10 }, { until: 2045, growth: 0.06 }],
       aiMaxShare: 0.4,                // utilities and other industry need most transformers
       conversion: 1,
+      leadMonths: 36,                 // new plants ~2-3 years (Siemens Charlotte 2027, Hitachi South Boston 2028)
+      maxGrowth: 0.20,                // Hitachi doubling capacity 2024-27; ~$2B committed industry-wide
       source: 'DOE LPT report; Wood Mackenzie 30% deficit; Hitachi/Siemens plant expansions 2027-28'
     },
     dc_construction: {
@@ -751,6 +776,8 @@ export const SHARED_SUPPLY_POOLS = {
       growthSchedule: [{ until: 2032, growth: 0.07 }, { until: 2045, growth: 0.04 }],  // headcount +1-2%/yr plus modular productivity
       aiMaxShare: 0.3,                // ~30% of electricians is the practical limit (SemiAnalysis/BLS arithmetic)
       conversion: 1,
+      leadMonths: 48,                 // apprenticeships: 8,000 hours over 4-5 years
+      maxGrowth: 0.08,                // headcount ~+2-3%/yr (applications +70% 2022-24) plus modular productivity
       source: 'BLS: 819k US electricians, +1%/yr; ~12k MEP field hours/MW; modular builds cut field hours 2-3x'
     }
   }
@@ -869,7 +896,11 @@ export const COST_ASSUMPTIONS_BASE = {
       // 2027: Rubin racks (~$5-7M, ~190-230 kW) price ~10-15% more per kW than
       // GB300 (~$3.7-4M at ~137 kW); Nvidia guides +70% for FY28 on
       // supply-constrained volume, i.e. higher prices per unit and per kW.
-      change: pc(0, 0.12, 0.03, -0.03, -0.05, -0.06, -0.06, -0.05),
+      // Later years: $ per kW has held at ~$30-40k for flagship parts since
+      // 2017 (V100 → A100 → H100 → B200 → GB300/Rubin racks): each generation
+      // prices 20-30% higher per GPU as power per GPU rises about as fast.
+      // Small declines allow for custom-ASIC competition and margin pressure.
+      change: pc(0, 0.12, 0.03, -0.03, -0.02, -0.01, -0.01, 0),
       source: 'Nvidia DC compute ~$300B CY26 + AMD ~$15B + custom ASICs ~$50-65B over ~15.5M ex-China units (JPM 16.3M global) ≈ $25-27k/unit ≈ $18k per kW including HBM; less ~$2.2k/kW of HBM at January prices. $/kW roughly flat per generation (Rubin prices rise with power)'
     },
     {
@@ -925,6 +956,26 @@ export const COST_ASSUMPTIONS_BASE = {
  * update the explicit years to match.
  */
 const FIN_YEARS = Array.from({ length: GLOBAL_PARAMS.horizonYears }, (_, i) => MODEL_START_YEAR + i);
+// Cost per inference token falls by this factor over a calendar year (base
+// efficiency: software × new-vintage hardware, blended across block edges)
+const inferenceCostGainForYear = (year) => {
+  const v = (x) => (x && typeof x === 'object' && 'value' in x ? x.value : (x ?? 0));
+  const E = EFFICIENCY_ASSUMPTIONS_BASE;
+  let gain = 1;
+  for (let k = 0; k < 12; k++) {
+    const m = Math.max(1, (year - GLOBAL_PARAMS.startYear) * 12 + k);
+    const r = (pick) => blendBlockValue(m, (key) => v(pick(E[key])));
+    const hw = (1 + r((b) => b.hardwareEfficiency.h)) * (1 + r((b) => b.hardwareEfficiency.h_memory)) / (1 + r((b) => b.hardwareEfficiency.kw_growth));
+    const sw = (1 / (1 - r((b) => b.modelEfficiency.m_inference))) * (1 + r((b) => b.systemsEfficiency.s_inference));
+    gain *= Math.pow(sw * hw, 1 / 12);
+  }
+  return gain;
+};
+// Token prices pass through half of each fall in cost per token (in log
+// terms), as in 2027-30 (−30/−25/−20/−20% against costs −49/−43/−38/−36%).
+// Revenue per GW then holds roughly flat, like GPU rental rates per kW.
+const TOKEN_PRICE_PASS_THROUGH = 0.5;
+
 const buildPath = (explicit, extend) => {
   const out = {};
   let prev = null;
@@ -964,10 +1015,13 @@ export const FINANCING_ASSUMPTIONS_BASE = {
   marketCapacityMultiplier: { debt: 1.0, equity: 1.0 },
 
   paths: {
-    // Blended $/M token price change (base path, before scarcity premium)
+    // Blended $/M token price change (base path, before scarcity premium).
+    // 2026-30 from observed/forecast pricing; after that, tied to cost per
+    // token at TOKEN_PRICE_PASS_THROUGH (≈ −20%/yr in the early 2030s,
+    // −16% late 2030s, −11% in the 2040s).
     priceChange: buildPath(
-      { 2026: -0.40, 2027: -0.30, 2028: -0.25, 2029: -0.20, 2030: -0.20, 2031: -0.15, 2032: -0.15 },
-      (year) => (year <= 2035 ? -0.12 : -0.10)
+      { 2026: -0.40, 2027: -0.30, 2028: -0.25, 2029: -0.20, 2030: -0.20 },
+      (year) => +(Math.pow(inferenceCostGainForYear(year), -TOKEN_PRICE_PASS_THROUGH) - 1).toFixed(3)
     ),
     // Effective utilization of the ENERGIZED fleet (MFU, idle, hoarded
     // capacity). Chips bought but not yet energized are tracked separately.
@@ -1069,7 +1123,7 @@ export const SCENARIOS = {
   base: {
     id: 'base',
     name: 'Base Case',
-    description: 'Research-based token growth (~3.6x in Year 1, decelerating) with software efficiency ~1.7x in Year 1, sourced physical pools, and the Excel funding model.',
+    description: 'Research-based token growth (~3.6x in Year 1, decelerating); after 2030 demand keeps responding to cheaper compute as in 2027-30. Software efficiency ~1.7x in Year 1, sourced physical pools, and the Excel funding model.',
     summary: { demand: 'Base', efficiency: 'Base', supply: 'Base' },
     overrides: {}
   },
@@ -1102,6 +1156,20 @@ export const SCENARIOS = {
         trainingGrowth: { factor: 1.15, blocks: FIRST_FIVE_YEAR_KEYS },
         softwareEfficiency: { factor: 1.5 },
         hardwareEfficiency: { factor: 1.15 }
+      }
+    }
+  },
+
+  demandMatures: {
+    id: 'demandMatures',
+    name: 'Demand Matures After 2030',
+    description: 'Same as base through 2030, then demand responds less to cheaper compute: token growth slows to ~1.8x/yr (2031-35), ~1.55x (2036-40), ~1.45x (2041-45), and training compute grows slower than training efficiency.',
+    summary: { demand: 'Base to 2030; slower after (elasticity ~1.3)', efficiency: 'Base', supply: 'Base' },
+    overrides: {
+      demand: {
+        years6_10: { inferenceGrowth: { consumer: 0.20, enterprise: 0.30, agentic: 0.50 }, trainingGrowth: { frontier: 0.25, midtier: 0.30 } },
+        years11_15: { inferenceGrowth: { consumer: 0.12, enterprise: 0.18, agentic: 0.25 }, trainingGrowth: { frontier: 0.15, midtier: 0.20 } },
+        years16_20: { inferenceGrowth: { consumer: 0.08, enterprise: 0.10, agentic: 0.15 }, trainingGrowth: { frontier: 0.10, midtier: 0.12 } }
       }
     }
   },
