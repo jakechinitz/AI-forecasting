@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { formatMonth, formatNumber, softEfficiencyCap } from '../engine/calculations.js';
-import { GLOBAL_PARAMS, ASSUMPTION_SEGMENTS, TRANSLATION_INTENSITIES, getBlockKeyForMonth } from '../data/assumptions.js';
+import { GLOBAL_PARAMS, ASSUMPTION_SEGMENTS, TRANSLATION_INTENSITIES, blendBlockValue } from '../data/assumptions.js';
 
 const BRAIN = GLOBAL_PARAMS.brainEquivalency;
 const KW_PER_GPU = (TRANSLATION_INTENSITIES?.serverToInfra?.kwPerGpu?.value ?? 1.0);
@@ -25,15 +25,14 @@ function computeBrainEquivAtMonth(month, efficiencyAssumptions) {
   const kneeGain = BRAIN.startingWattsPerBrainEquiv / BRAIN.minWattsPerBrainEquiv;
 
   for (let m = 1; m <= month; m++) {
-    const blockKey = getBlockKeyForMonth(m);
-    const block = efficiencyAssumptions?.[blockKey];
-
-    const mInf = block?.modelEfficiency?.m_inference?.value ?? 0;
-    const sInf = block?.systemsEfficiency?.s_inference?.value ?? 0;
-    const h = block?.hardwareEfficiency?.h?.value ?? 0;
-    const hMem = block?.hardwareEfficiency?.h_memory?.value ?? 0;
-    const mTrn = block?.modelEfficiency?.m_training?.value ?? 0;
-    const sTrn = block?.systemsEfficiency?.s_training?.value ?? 0;
+    // Same edge-blended rates as the engine
+    const rate = (pick) => blendBlockValue(m, (key) => pick(efficiencyAssumptions?.[key]) ?? 0);
+    const mInf = rate((b) => b?.modelEfficiency?.m_inference?.value);
+    const sInf = rate((b) => b?.systemsEfficiency?.s_inference?.value);
+    const h = rate((b) => b?.hardwareEfficiency?.h?.value);
+    const hMem = rate((b) => b?.hardwareEfficiency?.h_memory?.value);
+    const mTrn = rate((b) => b?.modelEfficiency?.m_training?.value);
+    const sTrn = rate((b) => b?.systemsEfficiency?.s_training?.value);
 
     // Annual gains; one fleet hardware index (H × H_memory) serves all work
     const infFactor = (1 - mInf) / ((1 + sInf) * (1 + h) * (1 + hMem));
