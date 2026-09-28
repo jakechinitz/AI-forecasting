@@ -687,8 +687,9 @@ export const TRANSLATION_INTENSITIES = {
  *  - Leading-edge logic: EUV installed base × wafer starts per tool. ASML
  *    deliveries (euv_tools node, ASML's capacity plan) add to the base.
  *    AI may take up to aiMaxShare; phones/PCs/other keep the rest.
- *  - Memory: total DRAM capacity follows the fab construction schedule. HBM
- *    uses ~3x the wafer area per bit of standard DRAM.
+ *  - Memory: total DRAM capacity follows the announced fab schedule as a
+ *    floor, plus fabs committed when AI memory demand outruns it (fab lead
+ *    time, max bit growth). HBM uses ~3x the wafer area per bit of DRAM.
  */
 export const SHARED_SUPPLY_POOLS = {
   leadingEdge: {
@@ -707,6 +708,14 @@ export const SHARED_SUPPLY_POOLS = {
       { until: 2030, growth: 0.20 },  // new fabs: SK hynix Yongin/M15X 2027, Micron ID1 2027, ID2 2028, Samsung P5 ~2028, Micron NY ~2030
       { until: 2045, growth: 0.15 }   // Micron: long-term DRAM bit growth mid-teens CAGR
     ],
+    // Demand response: fabs committed when forecast AI memory demand
+    // outruns the schedule above (the floor). New fabs take 3-5 years from
+    // decision to volume (18+ months to build, then ramp); bit growth over
+    // any 12 months is capped (history: >70%/yr in the 1990s, ~50% in
+    // 2010-11; slower density scaling now). SK hynix sees demand above
+    // supply beyond 2030.
+    fabLeadMonths: 30,
+    maxBitGrowth: 0.30,
     gbPerHbmStack: 36,
     hbmWaferAreaMultiplier: 3,
     aiMaxShare: 0.6,                // AI ≈ 32-36% of DRAM wafer-equivalents in 2026
@@ -869,7 +878,11 @@ export const COST_ASSUMPTIONS_BASE = {
       // 2027: Rubin racks (~$5-7M, ~190-230 kW) price ~10-15% more per kW than
       // GB300 (~$3.7-4M at ~137 kW); Nvidia guides +70% for FY28 on
       // supply-constrained volume, i.e. higher prices per unit and per kW.
-      change: pc(0, 0.12, 0.03, -0.03, -0.05, -0.06, -0.06, -0.05),
+      // Later years: $ per kW has held at ~$30-40k for flagship parts since
+      // 2017 (V100 → A100 → H100 → B200 → GB300/Rubin racks): each generation
+      // prices 20-30% higher per GPU as power per GPU rises about as fast.
+      // Small declines allow for custom-ASIC competition and margin pressure.
+      change: pc(0, 0.12, 0.03, -0.03, -0.02, -0.01, -0.01, 0),
       source: 'Nvidia DC compute ~$300B CY26 + AMD ~$15B + custom ASICs ~$50-65B over ~15.5M ex-China units (JPM 16.3M global) ≈ $25-27k/unit ≈ $18k per kW including HBM; less ~$2.2k/kW of HBM at January prices. $/kW roughly flat per generation (Rubin prices rise with power)'
     },
     {
