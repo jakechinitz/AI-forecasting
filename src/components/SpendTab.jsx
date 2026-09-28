@@ -289,6 +289,7 @@ function SpendTab({ results, costs, onCostChange, onResetCosts, build, onBuildCh
                   <tr><td>Opening pipeline: already late (MW)</td><td><NumInput value={pipe.openingSlippedMW} kind="num" step={500} width={84} onChange={(v) => onBuildChange(['pipeline', 'openingSlippedMW'], v)} /></td></tr>
                   <tr><td>Permitting lag before starts (months)</td><td><NumInput value={pipe.permitLagMonths} kind="num" onChange={(v) => onBuildChange(['pipeline', 'permitLagMonths'], v)} /></td></tr>
                   <tr><td>Months to close the starts gap</td><td><NumInput value={pipe.startSmoothingMonths} kind="num" onChange={(v) => onBuildChange(['pipeline', 'startSmoothingMonths'], v)} /></td></tr>
+                  <tr><td>Budget growth builders plan on</td><td><NumInput value={pipe.plannedBudgetGrowth} kind="pct" onChange={(v) => onBuildChange(['pipeline', 'plannedBudgetGrowth'], v)} /></td></tr>
                   <tr><td>Starts already decided (MW/month, first months)</td><td><NumInput value={pipe.openingStartsMWPerMonth} kind="num" step={100} width={84} onChange={(v) => onBuildChange(['pipeline', 'openingStartsMWPerMonth'], v)} /></td></tr>
                 </tbody>
               </table>

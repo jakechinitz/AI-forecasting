@@ -793,6 +793,14 @@ const FACILITY_PIPELINE = {
   permitLagMonths: 6,
   startSmoothingMonths: 12,
   openingStartsMWPerMonth: 2700,    // starts already decided for the first permitLagMonths (~2025 start pace)
+  // Builders size new starts to the budget they expect next year: at least
+  // this growth over this year's fundable capex (or last year's realized
+  // growth if higher). 2027 consensus: Big-4 capex +30% (Bloomberg avg ~$950B),
+  // Street ~$1.1T incl. Oracle, Goldman $1.2T (+50%); AWS and Microsoft plan
+  // to roughly double capacity by 2027-28. 0.15 keeps committed construction
+  // in step with the funding model; 0.25 over-commits and starves chip buying
+  // in 2029-30 without adding 2027-28 spend (energization is power-bound).
+  plannedBudgetGrowth: 0.15,
   source: 'Goldman Sachs (on-time rates, 18-24 mo builds); Jefferies/Alphaville satellite count (US 16-18 GW gross energizable in 2026, low twenties in 2027); SemiAnalysis (22 GW US under vertical construction)'
 };
 
@@ -855,7 +863,10 @@ export const COST_ASSUMPTIONS_BASE = {
     {
       id: 'accelerators', label: 'Accelerators ex-HBM (logic, packaging, vendor margin)', group: 'compute', basis: 'perKw',
       unit: '$ per kW', price: 15800, node: 'gpu_datacenter', passThrough: 0.15,
-      change: pc(0, 0, -0.03, -0.05, -0.05, -0.06, -0.06, -0.05),
+      // 2027: Rubin racks (~$5-7M, ~190-230 kW) price ~10-15% more per kW than
+      // GB300 (~$3.7-4M at ~137 kW); Nvidia guides +70% for FY28 on
+      // supply-constrained volume, i.e. higher prices per unit and per kW.
+      change: pc(0, 0.12, 0.03, -0.03, -0.05, -0.06, -0.06, -0.05),
       source: 'Nvidia DC compute ~$300B CY26 + AMD ~$15B + custom ASICs ~$50-65B over ~15.5M ex-China units (JPM 16.3M global) ≈ $25-27k/unit ≈ $18k per kW including HBM; less ~$2.2k/kW of HBM at January prices. $/kW roughly flat per generation (Rubin prices rise with power)'
     },
     {
@@ -968,12 +979,14 @@ export const FINANCING_ASSUMPTIONS_BASE = {
     {
       // Calibrated to Q2-2026 guidance: 2026 capex ~$730B (AMZN ~$220B, GOOGL
       // $195-205B, MSFT ~$175B CY26, META $130-145B), ~90% AI; operating cash
-      // flow ~$640B; buybacks + dividends ~$150B; ~1/3 of capex funded
-      // externally (bonds, SPVs, Alphabet's 2026 equity raise).
+      // flow ~$640B growing ~12-15%/yr on cloud; buybacks + dividends ~$150B.
+      // ~1/3 of 2026 capex funded externally (bonds, SPVs, Alphabet's equity
+      // raise); 2027 consensus ($950B Bloomberg avg, $1.1T Street incl. Oracle,
+      // Goldman $1.2T) implies ~40-45%, so the ceiling is 50%.
       id: 'A', name: 'Big-4 hyperscalers', note: 'MSFT, GOOGL, AMZN, META',
-      share: 0.72, legacyOcf: 520, legacyOcfGrowth: 0.07, shareholderReturns: 150,
-      cash: 380, minCash: 150, debt: 260, legacyEbitda: 700, legacyEbitdaGrowth: 0.07,
-      maxExternalShareOfCapex: 0.40, costOfDebt: 0.05, maxDebtToEbitda: 1.5
+      share: 0.72, legacyOcf: 520, legacyOcfGrowth: 0.12, shareholderReturns: 150,
+      cash: 380, minCash: 150, debt: 260, legacyEbitda: 700, legacyEbitdaGrowth: 0.12,
+      maxExternalShareOfCapex: 0.50, costOfDebt: 0.05, maxDebtToEbitda: 1.5
     },
     {
       // Oracle (~$50B), CoreWeave (~$30-35B), xAI (~$30B), other neoclouds and

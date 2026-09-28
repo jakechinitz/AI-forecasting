@@ -1206,8 +1206,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   // Developers react to funding conditions over a year, not a single month
   const fundingHistory = [];
   const chipSpendHistory = [];
-  // Builders expect next year's budget to grow at last year's rate (10% before any history)
-  let fundableGrowthExpected = 0.10;
+  // Builders plan on next year's budget growing at least plannedBudgetGrowth
+  // (their own capex plans), or at last year's realized rate if higher
+  const plannedBudgetGrowth = clamp(numOr(pipeCfg.plannedBudgetGrowth, 0.15), 0, 0.5);
+  let fundableGrowthExpected = plannedBudgetGrowth;
   let lastYearFundable = null;
   const fundingRatioTrailing = () => (fundingHistory.length ? fundingHistory.reduce((a, b) => a + b, 0) / fundingHistory.length : 1);
 
@@ -1470,7 +1472,9 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         computeShareOfCapex: (chipPerGw + facilityPerGw) > 0 ? chipPerGw / (chipPerGw + facilityPerGw) : 0.65
       });
       const fundableNowB = financing.fundableThisYear();
-      if (Number.isFinite(fundableNowB) && lastYearFundable) fundableGrowthExpected = clamp(fundableNowB / lastYearFundable - 1, 0, 0.5);
+      if (Number.isFinite(fundableNowB) && lastYearFundable) {
+        fundableGrowthExpected = clamp(Math.max(fundableNowB / lastYearFundable - 1, plannedBudgetGrowth), 0, 0.5);
+      }
       if (Number.isFinite(fundableNowB)) lastYearFundable = fundableNowB;
       yearAccum = {
         requiredGWSum: 0, months: 0, tokens: 0, edgeEquivGW: 0, edgePowerGW: 0, dcPowerGW: 0, edgeShare: 0,
