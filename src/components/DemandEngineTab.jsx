@@ -15,7 +15,7 @@ const BLOCK_YEARS = [1, 1, 1, 1, 1, 5, 5, 5];
 /**
  * Watts per brain-equivalent at a given month: block-chained compounding of
  * the combined efficiency gain, with the same soft knee as the Assumptions
- * tab (60× brain efficiency = 0.5 W per brain-equiv; logarithmic diminishing
+ * tab (60× brain efficiency ≈ 0.33 W per brain-equiv; logarithmic diminishing
  * returns above it), floored at minWattsPerBrainEquiv.
  */
 function computeBrainEquivAtMonth(month, efficiencyAssumptions) {

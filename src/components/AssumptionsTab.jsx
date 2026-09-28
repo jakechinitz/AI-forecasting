@@ -91,7 +91,7 @@ const METRICS_COLUMNS = [
 /* Brain equivalency table columns */
 const BRAIN_COLUMNS = [
   { valueKey: 'cumulativeGain', label: 'Cumulative Eff. (x)', format: v => v < 1000 ? v.toFixed(1) + 'x' : (v / 1000).toFixed(1) + 'Kx' },
-  { valueKey: 'wattsPerBrainEquiv', label: 'W per Brain-Equiv', format: v => v >= 1000 ? (v / 1000).toFixed(1) + ' kW' : v.toFixed(0) + ' W' },
+  { valueKey: 'wattsPerBrainEquiv', label: 'W per Brain-Equiv', format: v => v >= 1000 ? (v / 1000).toFixed(1) + ' kW' : v >= 10 ? v.toFixed(0) + ' W' : v >= 1 ? v.toFixed(1) + ' W' : v.toFixed(2) + ' W' },
   { valueKey: 'brainEfficiencyPct', label: '% of Brain Eff.', format: v => v < 1 ? v.toFixed(2) + '%' : v < 100 ? v.toFixed(1) + '%' : v.toFixed(0) + '%', help: `Human brain = ${GLOBAL_PARAMS.brainEquivalency.humanBrainWatts}W` },
   { valueKey: 'atAsymptote', label: 'Returns', format: v => v ? 'DIMINISHING' : 'linear' }
 ];
@@ -399,7 +399,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     const brainWatts = BRAIN.humanBrainWatts;
 
     // Knee: gains above this level see logarithmic diminishing returns.
-    // maxCumulativeGain = 10000 W / 0.5 W = 20,000×. Beyond the knee, improvements
+    // maxCumulativeGain = starting W / knee W (500 / 0.33 ≈ 1,500×). Beyond the knee, improvements
     // continue but much slower — reflecting practical engineering limits.
     const minWatts = BRAIN.minWattsPerBrainEquiv;
     const maxCumulativeGain = startingWatts / minWatts;
@@ -464,7 +464,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
       const itGW = results.fleet?.installedGW?.[monthIdx];
       const totalPowerWatts = itGW != null ? itGW * 1e9 * PUE : totalInstalled * WATTS_PER_GPU;
 
-      // Use capped wattsPerBrainEquiv from brain equivalency, floored at minWattsPerBrainEquiv (0.5 W)
+      // Use capped wattsPerBrainEquiv from brain equivalency, floored at minWattsPerBrainEquiv
       const rawWpbe = brainEquivalency.perBlock[block.key]?.wattsPerBrainEquiv ?? BRAIN.startingWattsPerBrainEquiv;
       const wattsPerBrainEquiv = Math.max(rawWpbe, BRAIN.minWattsPerBrainEquiv);
       const atEfficiencyLimit = brainEquivalency.perBlock[block.key]?.atAsymptote || false;
@@ -817,9 +817,11 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                           <span className="assumptions-metric">
                             {row.wattsPerBrainEquiv >= 1000
                               ? (row.wattsPerBrainEquiv / 1000).toFixed(1) + ' kW'
-                              : row.wattsPerBrainEquiv < 10
-                                ? row.wattsPerBrainEquiv.toFixed(1) + ' W'
-                                : row.wattsPerBrainEquiv.toFixed(0) + ' W'}
+                              : row.wattsPerBrainEquiv < 1
+                                ? row.wattsPerBrainEquiv.toFixed(2) + ' W'
+                                : row.wattsPerBrainEquiv < 10
+                                  ? row.wattsPerBrainEquiv.toFixed(1) + ' W'
+                                  : row.wattsPerBrainEquiv.toFixed(0) + ' W'}
                           </span>
                         </td>
                         <td className="assumptions-input-cell">
@@ -969,7 +971,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
             <h4 className="section-title">Brain Power Equivalency</h4>
             <p className="section-description">
               Compares AI compute efficiency to the human brain ({BRAIN.humanBrainWatts}W).
-              Starting at {(BRAIN.startingWattsPerBrainEquiv / 1000).toFixed(0)}kW per brain-equivalent
+              Starting at {BRAIN.startingWattsPerBrainEquiv >= 1000 ? `${(BRAIN.startingWattsPerBrainEquiv / 1000).toFixed(1)} kW` : `${BRAIN.startingWattsPerBrainEquiv} W`} per brain-equivalent
               of cognitive work, efficiency improvements compound over time.
               Soft knee at {BRAIN.maxEfficiencyVsBrain}× brain efficiency
               ({BRAIN.minWattsPerBrainEquiv}W per brain-equiv) — beyond this,
