@@ -1307,9 +1307,20 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   let dramGbPerMonth = dramPlan[0];
   results.pools = { aiWaferCeiling: [], aiMemoryCeilingGb: [], leadingEdgeScale: [], memoryScale: [], euvLogicInstalled: [], industry: {} };
   const industryPools = poolsCfg.industry || {};
+  // Industry output paths (power, transformers, trades): the growth schedule
+  // is the floor; when AI demand one lead time out outruns AI's share of the
+  // planned output, the industry adds capacity (factories, utility build-out,
+  // training), arriving after leadMonths, with output growth over any 12
+  // months capped at maxGrowth. Same rule as the DRAM fab plan.
   const industryCap = {};
+  const industryPlan = {};
   for (const [id, cfg] of Object.entries(industryPools)) {
-    industryCap[id] = cfg.industryStart || 0;
+    const lead = Math.max(1, Math.round(numOr(cfg.leadMonths, 36)));
+    const plan = new Float64Array(months + lead + 1);
+    plan[0] = cfg.industryStart || 0;
+    for (let m = 1; m < plan.length; m++) plan[m] = plan[m - 1] * Math.pow(1 + scheduleValue(cfg.growthSchedule, m - 1, 'growth', 0.05), 1 / 12);
+    industryPlan[id] = { plan, lead, maxGrowth: Math.max(0, numOr(cfg.maxGrowth, 0)) };
+    industryCap[id] = plan[0];
     results.pools.industry[id] = { ceiling: [], aiShare: [], binding: [] };
   }
 
@@ -1569,7 +1580,8 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       rec.ceiling.push(ceiling);
       rec.aiShare.push(industryCap[id] > 0 ? monthEffCap[id] / (industryCap[id] * (cfg.conversion ?? 1)) : 0);
       rec.binding.push(bound);
-      industryCap[id] *= Math.pow(1 + scheduleValue(cfg.growthSchedule, month, 'growth', 0.05), 1 / 12);
+      const ip = industryPlan[id];
+      industryCap[id] = ip.plan[Math.min(month + 1, ip.plan.length - 1)];
     }
 
     for (const node of NODES) {
@@ -2077,6 +2089,22 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
       const effectiveDemand = actualConsumption > EPSILON
         ? Math.min(planDemand, actualConsumption * CONSUMPTION_HEADROOM)
         : planDemand;
+
+      // Industry pools respond to AI demand one lead time out (see industryPlan)
+      if (industryPlan[node.id]) {
+        const ip = industryPlan[node.id];
+        const cfg = industryPools[node.id];
+        const at = month + ip.lead;
+        if (at < ip.plan.length) {
+          const aiShareOfOutput = (cfg.conversion ?? 1) * (cfg.aiMaxShare ?? 1);
+          const needed = (effectiveDemand * getDemandGrowthRatio(ip.lead, isInfra)) / Math.max(aiShareOfOutput, EPSILON);
+          const target = Math.min(needed, ip.plan[Math.max(0, at - 12)] * (1 + ip.maxGrowth));
+          if (target > ip.plan[at]) {
+            const lift = target / ip.plan[at];
+            for (let k = at; k < ip.plan.length; k++) ip.plan[k] *= lift;
+          }
+        }
+      }
 
       const sMult = runningSupplyMult[node.id] || 1;
       const cap = calculateCapacity(node, month, scenarioOverrides, state.dynamicExpansions, sMult);

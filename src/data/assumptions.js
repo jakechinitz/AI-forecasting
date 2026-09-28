@@ -733,10 +733,11 @@ export const SHARED_SUPPLY_POOLS = {
 
   /**
    * Industry pools for power and construction. Each is the WHOLE industry's
-   * output (in the AI node's units per month, after `conversion`), growing on
-   * its own physical schedule. AI's node grows with demand and can claim up to
-   * aiMaxShare of it, so when capital frees up AI can bid for a bigger slice
-   * of existing industry output instead of growing from its own small base.
+   * output (in the AI node's units per month, after `conversion`). The growth
+   * schedule is a floor; when AI demand outruns AI's share, the industry adds
+   * capacity that arrives after leadMonths, with output growth over any 12
+   * months capped at maxGrowth (factory, utility and training limits). AI's
+   * node grows with demand and can claim up to aiMaxShare of the output.
    */
   industry: {
     grid_interconnect: {
@@ -745,6 +746,8 @@ export const SHARED_SUPPLY_POOLS = {
       growthSchedule: [{ until: 2032, growth: 0.12 }, { until: 2045, growth: 0.07 }],
       aiMaxShare: 0.7,                // DCs ≈ 55% of forecast US load growth (Grid Strategies)
       conversion: 1,
+      leadMonths: 48,                 // substations, transmission, generation: 3-5 years
+      maxGrowth: 0.15,                // utility capex +17%/yr; China grew capacity 16% in 2025 (543 GW)
       source: 'FERC, Grid Strategies, utility capex +17%/yr (EEI); 2-4 yr transmission/transformer lead times'
     },
     off_grid_power: {
@@ -753,6 +756,8 @@ export const SHARED_SUPPLY_POOLS = {
       growthSchedule: [{ until: 2030, growth: 0.10 }, { until: 2045, growth: 0.05 }],
       aiMaxShare: 0.4,                // DCs compete with utilities and industry for slots
       conversion: 0.7,                // ~1.4 MW nameplate per MW of firm load (N+1 redundancy)
+      leadMonths: 36,                 // new casting/hot-section capacity takes 3-5 years to qualify
+      maxGrowth: 0.25,                // OEMs lifting output 25-35%/yr from 2026; BNEF +50% by 2030
       source: 'GE Vernova 20→30 GW/yr by 2030; Siemens ~15-16 GW, sold out to FY2028; MHI doubling; BNEF ~102 GW/yr by 2030; Caterpillar 3x recips'
     },
     transformers_lpt: {
@@ -761,6 +766,8 @@ export const SHARED_SUPPLY_POOLS = {
       growthSchedule: [{ until: 2030, growth: 0.10 }, { until: 2045, growth: 0.06 }],
       aiMaxShare: 0.4,                // utilities and other industry need most transformers
       conversion: 1,
+      leadMonths: 36,                 // new plants ~2-3 years (Siemens Charlotte 2027, Hitachi South Boston 2028)
+      maxGrowth: 0.20,                // Hitachi doubling capacity 2024-27; ~$2B committed industry-wide
       source: 'DOE LPT report; Wood Mackenzie 30% deficit; Hitachi/Siemens plant expansions 2027-28'
     },
     dc_construction: {
@@ -769,6 +776,8 @@ export const SHARED_SUPPLY_POOLS = {
       growthSchedule: [{ until: 2032, growth: 0.07 }, { until: 2045, growth: 0.04 }],  // headcount +1-2%/yr plus modular productivity
       aiMaxShare: 0.3,                // ~30% of electricians is the practical limit (SemiAnalysis/BLS arithmetic)
       conversion: 1,
+      leadMonths: 48,                 // apprenticeships: 8,000 hours over 4-5 years
+      maxGrowth: 0.08,                // headcount ~+2-3%/yr (applications +70% 2022-24) plus modular productivity
       source: 'BLS: 819k US electricians, +1%/yr; ~12k MEP field hours/MW; modular builds cut field hours 2-3x'
     }
   }
