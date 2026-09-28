@@ -1628,7 +1628,10 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     // startSmoothingMonths (anchoring and adjustment; the committed side
     // includes projects still in permitting, so the lag does not overshoot).
     {
-      const horizon = Math.min(month + Tc + Math.round(slipMean * (1 - onTimeShareAt(month + Tc))), months - 1);
+      // Completion horizon; past the model's last month the need is
+      // extrapolated at its recent growth (else starts collapse at the end)
+      const horizonTrue = month + Tc + Math.round(slipMean * (1 - onTimeShareAt(month + Tc)));
+      const horizon = Math.min(horizonTrue, months - 1);
       const neededMWAt = (h) => {
         const fut = computeRequiredGpus(h, demandTrajectories, demandAssumptions, efficiencyAssumptions, effCache, results.warnings, warnedSet, scaleUsed);
         let remainKW = 0, remainEff = 0;
@@ -1641,23 +1644,21 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         const kwPerEffFuture = (kw0 * (fut.kwIndex || 1)) / Math.max(fut.hwIndex || 1, EPSILON);
         const demandMW = ((remainKW + Math.max(0, fut.requiredTotal - remainEff) * kwPerEffFuture) * pue) / 1000;
         // Builders never plan more shells than can be filled and energized:
-        // the fleet still running at h, chips in stock, and each month until
-        // h the lesser of chip supply and power hookups, plus
-        // maxVacancyMonths of slack. Chip supply is capacity (fabs and
+        // the fleet still running at h, plus the lesser of the chips
+        // available by h (stock and supply) and the power hookups available
+        // by h, plus maxVacancyMonths of slack. Chip supply is capacity (fabs and
         // components, not purchases, so the cap does not follow the shells)
         // at its trailing rate and growth, but no more than the memory
         // makers' committed capacity supports; hookups likewise at their
         // trailing rate and growth.
         if (!chipOutlookReady) return demandMW;
-        const supplyAt = (k) => Math.min(
-          supplyKWpm * Math.pow(1 + supplyGrowth, k / 12),
-          memChipKWAt(month + k),
-          powerKWpm * Math.pow(1 + powerGrowthExpected, k / 12)
-        );
-        let chipKW = remainKW + stockKWNow;
-        for (let k = 1; k <= h - month; k++) chipKW += supplyAt(k);
-        chipKW += maxVacancyMonths * supplyAt(h - month);
-        const fillableMW = (chipKW * pue) / 1000;
+        const chipAt = (k) => Math.min(supplyKWpm * Math.pow(1 + supplyGrowth, k / 12), memChipKWAt(month + k));
+        const powerAt = (k) => powerKWpm * Math.pow(1 + powerGrowthExpected, k / 12);
+        let chipsKW = stockKWNow;
+        let hookupsKW = 0;
+        for (let k = 1; k <= h - month; k++) { chipsKW += chipAt(k); hookupsKW += powerAt(k); }
+        const slackKW = maxVacancyMonths * Math.min(chipAt(h - month), powerAt(h - month));
+        const fillableMW = ((remainKW + Math.min(chipsKW, hookupsKW) + slackKW) * pue) / 1000;
         return Math.min(demandMW, fillableMW);
       };
       // Chip supply outlook from the last two years of capacity: trailing
@@ -1694,8 +1695,18 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
         }
       }
       const memChipKWAt = (k) => memChipKW[Math.min(k, horizon)] ?? Infinity;
-      const neededMW = neededMWAt(horizon);
-      const paceMW = Math.max(0, neededMW - neededMWAt(Math.max(month, horizon - 1)));
+      const neededAtHorizon = neededMWAt(horizon);
+      // Pace: the need's compound monthly growth over the last year before
+      // the horizon, applied to the need at the horizon (a single month would
+      // pass lumpy retirements straight into starts; a compound rate keeps
+      // exponential growth at full pace)
+      const paceSpan = Math.min(12, horizon - month);
+      const needEarlier = paceSpan > 0 ? neededMWAt(horizon - paceSpan) : neededAtHorizon;
+      const needGrowth = paceSpan > 0 && needEarlier > EPSILON && neededAtHorizon > needEarlier
+        ? Math.pow(neededAtHorizon / needEarlier, 1 / paceSpan)
+        : 1;
+      const neededMW = neededAtHorizon * Math.pow(needGrowth, horizonTrue - horizon);
+      const paceMW = neededMW * (1 - 1 / needGrowth);
       const pipelineMW = buckets.reduce((s, b) => s + b.mw, 0);
       const occupiedMW = ((gpuState.installedKW + infState.installedKW) * pue) / 1000;
       let decidedMW = 0;

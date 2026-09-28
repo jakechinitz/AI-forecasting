@@ -351,12 +351,21 @@ const buildDemandBlocks = () => {
   blocks.year5.edgeOffload.enterprise.value = 0.15;
   blocks.year5.edgeOffload.agentic.value = 0.05;
 
+  // Years 6-20: demand keeps responding to cheaper compute as it did in
+  // 2027-30. There, each 1% fall in cost per token (software × hardware
+  // efficiency) came with ~1.75% more tokens; each 1% fall in training cost
+  // with ~1.46% more frontier and ~1.33% more mid-tier training. Holding
+  // those elasticities, demand growth slows only as fast as efficiency gains
+  // slow: token growth ≈ 2.2x/yr (Y6-10), 1.85x (Y11-15), 1.5x (Y16-20).
+  // Segment rates below are the earlier "maturing" rates scaled by one
+  // factor per block (1.21, 1.19, 1.06), which keeps the segment mix; the
+  // "Demand matures" scenario keeps the earlier rates.
   // Years 6-10
-  blocks.years6_10.inferenceGrowth.consumer.value = 0.20;
-  blocks.years6_10.inferenceGrowth.enterprise.value = 0.30;
-  blocks.years6_10.inferenceGrowth.agentic.value = 0.50;
-  blocks.years6_10.trainingGrowth.frontier.value = 0.25;
-  blocks.years6_10.trainingGrowth.midtier.value = 0.3;
+  blocks.years6_10.inferenceGrowth.consumer.value = 0.45;
+  blocks.years6_10.inferenceGrowth.enterprise.value = 0.57;
+  blocks.years6_10.inferenceGrowth.agentic.value = 0.81;
+  blocks.years6_10.trainingGrowth.frontier.value = 0.62;
+  blocks.years6_10.trainingGrowth.midtier.value = 0.55;
   blocks.years6_10.intensityGrowth.value = 0.25;
   // Edge offload Years 6-10: mature ecosystem, on-device becomes default for simple inference
   blocks.years6_10.edgeOffload.consumer.value = 0.5;
@@ -364,11 +373,11 @@ const buildDemandBlocks = () => {
   blocks.years6_10.edgeOffload.agentic.value = 0.1;
 
   // Years 11-15
-  blocks.years11_15.inferenceGrowth.consumer.value = 0.12;
-  blocks.years11_15.inferenceGrowth.enterprise.value = 0.18;
-  blocks.years11_15.inferenceGrowth.agentic.value = 0.25;
-  blocks.years11_15.trainingGrowth.frontier.value = 0.15;
-  blocks.years11_15.trainingGrowth.midtier.value = 0.2;
+  blocks.years11_15.inferenceGrowth.consumer.value = 0.33;
+  blocks.years11_15.inferenceGrowth.enterprise.value = 0.40;
+  blocks.years11_15.inferenceGrowth.agentic.value = 0.48;
+  blocks.years11_15.trainingGrowth.frontier.value = 0.385;
+  blocks.years11_15.trainingGrowth.midtier.value = 0.345;
   blocks.years11_15.intensityGrowth.value = 0.26;
   // Edge offload Years 11-15: edge AI pervasive; cloud reserved for frontier/long-context
   blocks.years11_15.edgeOffload.consumer.value = 0.6;
@@ -376,11 +385,11 @@ const buildDemandBlocks = () => {
   blocks.years11_15.edgeOffload.agentic.value = 0.15;
 
   // Years 16-20
-  blocks.years16_20.inferenceGrowth.consumer.value = 0.08;
-  blocks.years16_20.inferenceGrowth.enterprise.value = 0.10;
-  blocks.years16_20.inferenceGrowth.agentic.value = 0.15;
-  blocks.years16_20.trainingGrowth.frontier.value = 0.1;
-  blocks.years16_20.trainingGrowth.midtier.value = 0.12;
+  blocks.years16_20.inferenceGrowth.consumer.value = 0.14;
+  blocks.years16_20.inferenceGrowth.enterprise.value = 0.16;
+  blocks.years16_20.inferenceGrowth.agentic.value = 0.21;
+  blocks.years16_20.trainingGrowth.frontier.value = 0.26;
+  blocks.years16_20.trainingGrowth.midtier.value = 0.23;
   blocks.years16_20.intensityGrowth.value = 0.26;
   // Edge offload Years 16-20: steady state — cloud for frontier, edge for everything else
   blocks.years16_20.edgeOffload.consumer.value = 0.65;
@@ -938,6 +947,26 @@ export const COST_ASSUMPTIONS_BASE = {
  * update the explicit years to match.
  */
 const FIN_YEARS = Array.from({ length: GLOBAL_PARAMS.horizonYears }, (_, i) => MODEL_START_YEAR + i);
+// Cost per inference token falls by this factor over a calendar year (base
+// efficiency: software × new-vintage hardware, blended across block edges)
+const inferenceCostGainForYear = (year) => {
+  const v = (x) => (x && typeof x === 'object' && 'value' in x ? x.value : (x ?? 0));
+  const E = EFFICIENCY_ASSUMPTIONS_BASE;
+  let gain = 1;
+  for (let k = 0; k < 12; k++) {
+    const m = Math.max(1, (year - GLOBAL_PARAMS.startYear) * 12 + k);
+    const r = (pick) => blendBlockValue(m, (key) => v(pick(E[key])));
+    const hw = (1 + r((b) => b.hardwareEfficiency.h)) * (1 + r((b) => b.hardwareEfficiency.h_memory)) / (1 + r((b) => b.hardwareEfficiency.kw_growth));
+    const sw = (1 / (1 - r((b) => b.modelEfficiency.m_inference))) * (1 + r((b) => b.systemsEfficiency.s_inference));
+    gain *= Math.pow(sw * hw, 1 / 12);
+  }
+  return gain;
+};
+// Token prices pass through half of each fall in cost per token (in log
+// terms), as in 2027-30 (−30/−25/−20/−20% against costs −49/−43/−38/−36%).
+// Revenue per GW then holds roughly flat, like GPU rental rates per kW.
+const TOKEN_PRICE_PASS_THROUGH = 0.5;
+
 const buildPath = (explicit, extend) => {
   const out = {};
   let prev = null;
@@ -977,10 +1006,13 @@ export const FINANCING_ASSUMPTIONS_BASE = {
   marketCapacityMultiplier: { debt: 1.0, equity: 1.0 },
 
   paths: {
-    // Blended $/M token price change (base path, before scarcity premium)
+    // Blended $/M token price change (base path, before scarcity premium).
+    // 2026-30 from observed/forecast pricing; after that, tied to cost per
+    // token at TOKEN_PRICE_PASS_THROUGH (≈ −20%/yr in the early 2030s,
+    // −16% late 2030s, −11% in the 2040s).
     priceChange: buildPath(
-      { 2026: -0.40, 2027: -0.30, 2028: -0.25, 2029: -0.20, 2030: -0.20, 2031: -0.15, 2032: -0.15 },
-      (year) => (year <= 2035 ? -0.12 : -0.10)
+      { 2026: -0.40, 2027: -0.30, 2028: -0.25, 2029: -0.20, 2030: -0.20 },
+      (year) => +(Math.pow(inferenceCostGainForYear(year), -TOKEN_PRICE_PASS_THROUGH) - 1).toFixed(3)
     ),
     // Effective utilization of the ENERGIZED fleet (MFU, idle, hoarded
     // capacity). Chips bought but not yet energized are tracked separately.
@@ -1082,7 +1114,7 @@ export const SCENARIOS = {
   base: {
     id: 'base',
     name: 'Base Case',
-    description: 'Research-based token growth (~3.6x in Year 1, decelerating) with software efficiency ~1.7x in Year 1, sourced physical pools, and the Excel funding model.',
+    description: 'Research-based token growth (~3.6x in Year 1, decelerating); after 2030 demand keeps responding to cheaper compute as in 2027-30. Software efficiency ~1.7x in Year 1, sourced physical pools, and the Excel funding model.',
     summary: { demand: 'Base', efficiency: 'Base', supply: 'Base' },
     overrides: {}
   },
@@ -1115,6 +1147,20 @@ export const SCENARIOS = {
         trainingGrowth: { factor: 1.15, blocks: FIRST_FIVE_YEAR_KEYS },
         softwareEfficiency: { factor: 1.5 },
         hardwareEfficiency: { factor: 1.15 }
+      }
+    }
+  },
+
+  demandMatures: {
+    id: 'demandMatures',
+    name: 'Demand Matures After 2030',
+    description: 'Same as base through 2030, then demand responds less to cheaper compute: token growth slows to ~1.8x/yr (2031-35), ~1.55x (2036-40), ~1.45x (2041-45), and training compute grows slower than training efficiency.',
+    summary: { demand: 'Base to 2030; slower after (elasticity ~1.3)', efficiency: 'Base', supply: 'Base' },
+    overrides: {
+      demand: {
+        years6_10: { inferenceGrowth: { consumer: 0.20, enterprise: 0.30, agentic: 0.50 }, trainingGrowth: { frontier: 0.25, midtier: 0.30 } },
+        years11_15: { inferenceGrowth: { consumer: 0.12, enterprise: 0.18, agentic: 0.25 }, trainingGrowth: { frontier: 0.15, midtier: 0.20 } },
+        years16_20: { inferenceGrowth: { consumer: 0.08, enterprise: 0.10, agentic: 0.15 }, trainingGrowth: { frontier: 0.10, midtier: 0.12 } }
       }
     }
   },
