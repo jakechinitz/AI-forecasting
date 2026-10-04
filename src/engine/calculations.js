@@ -227,11 +227,11 @@ function getNodeType(nodeId) {
 
 const EPSILON = 1e-10;
 
-// Efficiency ceiling (soft knee): gains below the knee are linear; above, logarithmic
-// diminishing returns. The knee is set by the ratio of current GPU power to a practical
-// floor of 0.5 W (= 60× more efficient than the 30 W human brain, see
-// GLOBAL_PARAMS.brainEquivalency). Beyond the knee, improvements continue but at a
-// dramatically slower pace — engineering diminishing returns, not a hard wall.
+// Hardware efficiency ceiling (soft knee) on throughput per WATT: gains below
+// the knee are linear; above, logarithmic diminishing returns (energy per
+// operation approaching physical limits). The knee is the ratio of current GPU
+// power to a practical floor of 0.5 W. Algorithmic (software) efficiency has
+// no physical floor and is not capped.
 export const CURRENT_GPU_WATTS = 700;
 export const THERMODYNAMIC_FLOOR_WATTS = 0.5;
 export const MAX_EFFICIENCY_GAIN = CURRENT_GPU_WATTS / THERMODYNAMIC_FLOOR_WATTS;  // 1400×
@@ -364,8 +364,8 @@ function resolveGrowthRate(raw, fallback) {
  * values, so scenarios stay relative to base when base changes.
  *   tokenGrowth / trainingGrowth: multiply each segment's annual growth
  *     MULTIPLE (1 + g) by factor, in the listed blocks (default: all).
- *   softwareEfficiency: multiply m_* and s_* rates by factor (all blocks).
- *   hardwareEfficiency: multiply h and h_memory rates by factor (all blocks).
+ *   softwareEfficiency: scale m_* and s_* annual gains by factor in log terms (all blocks).
+ *   hardwareEfficiency: scale h and h_memory annual gains by factor in log terms (all blocks).
  */
 function scaleBlockValues(blocks, spec, fields, transform) {
   if (!spec || !Number.isFinite(spec.factor)) return blocks;
@@ -392,7 +392,11 @@ function applyScenarioScaling(demand, efficiency, scaling) {
   const multiple = (g, f) => Math.max(-0.95, (1 + g) * f - 1);
   let d = scaleBlockValues(demand, scaling.tokenGrowth, [['inferenceGrowth', ['consumer', 'enterprise', 'agentic']]], multiple);
   d = scaleBlockValues(d, scaling.trainingGrowth, [['trainingGrowth', ['frontier', 'midtier']]], multiple);
-  const rate = (r, f, name) => (name.startsWith('m_') ? clamp(r * f, 0, 0.9) : Math.max(0, r * f));
+  // Efficiency factors scale the annual gain in log terms (factor 1.5 = gains
+  // compound 1.5× as fast), which stays meaningful for large rates
+  const rate = (r, f, name) => (name.startsWith('m_')
+    ? clamp(1 - Math.pow(1 - clamp(r, 0, 0.99), f), 0, 0.99)
+    : Math.max(0, Math.pow(1 + Math.max(r, 0), f) - 1));
   let e = scaleBlockValues(efficiency, scaling.softwareEfficiency,
     [['modelEfficiency', ['m_inference', 'm_training']], ['systemsEfficiency', ['s_inference', 's_training']]], rate);
   e = scaleBlockValues(e, scaling.hardwareEfficiency, [['hardwareEfficiency', ['h', 'h_memory']]], rate);
@@ -669,10 +673,10 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   // reduce required effective units. Hardware gains (H × H_memory) apply only
   // to accelerators installed after month 0; the engine credits each new GPU
   // with its install-month hardware index, so old vintages keep old throughput.
-  // The soft efficiency cap is applied to the total and charged to software.
-  const hwIndex = eff.H * eff.H_memory;
-  const rawEfficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference * hwIndex;
-  const efficiencyGain = softEfficiencyCap(rawEfficiencyGain, MAX_EFFICIENCY_GAIN) / Math.max(hwIndex, EPSILON);
+  // The soft efficiency cap applies to hardware throughput per watt only.
+  const kwIdx = Math.max(eff.KW, EPSILON);
+  const hwIndex = softEfficiencyCap((eff.H * eff.H_memory) / kwIdx, MAX_EFFICIENCY_GAIN) * kwIdx;
+  const efficiencyGain = (1 / Math.max(eff.M_inference, EPSILON)) * eff.S_inference;
 
   // Per-segment GPU demand (with demandScale applied to token volumes)
   const consumerTokensTotal = (inferenceDemand.consumer || 0) * demandScale;
@@ -736,14 +740,11 @@ function computeRequiredGpus(month, trajectories, demandAssumptions, efficiencyA
   const hoursPerMonth = PHYSICS_DEFAULTS.hoursPerMonth;
 
   const totalTrainingHours = (frontierRuns * hoursFrontier) + (midtierRuns * hoursMidtier);
-  // Soft cap training efficiency: compute raw gain = (S*H) / M, apply soft knee.
-  // Hardware is credited through the vintage-tracked fleet. There is one fleet
-  // index (H × H_memory) for all work, so training also gets memory-bandwidth
-  // gains (large-scale training is partly bandwidth-bound too). Only the
-  // software part reduces required effective units.
-  const rawTrainingGain = eff.S_training * hwIndex / Math.max(eff.M_training, EPSILON);
-  const cappedTrainingGain = softEfficiencyCap(rawTrainingGain, MAX_EFFICIENCY_GAIN) / Math.max(hwIndex, EPSILON);
-  const requiredTraining = totalTrainingHours / (hoursPerMonth * utilTrn * cappedTrainingGain);
+  // Hardware is credited through the vintage-tracked fleet (one fleet index,
+  // H × H_memory, for all work, capped per watt above). Only the software
+  // part reduces required effective units.
+  const trainingSoftwareGain = eff.S_training / Math.max(eff.M_training, EPSILON);
+  const requiredTraining = totalTrainingHours / (hoursPerMonth * utilTrn * trainingSoftwareGain);
 
   return {
     // All in effective units (month-0 frontier accelerators)
@@ -1265,7 +1266,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   results.fleet = {
     installedGW: [], requiredGW: [], deployedGW: [], retiredGW: [],
     binding: [], procurementBinding: [], installedAccelerators: [],
-    fleetTokPerKwhM: [], frontierTokPerKwhM: [], kwPerNewAccelerator: [], wattsPerBrainEquiv: [],
+    fleetTokPerKwhM: [], frontierTokPerKwhM: [], kwPerNewAccelerator: [], wattsPerBrainEquiv: [], hardwarePastKnee: [],
     trainingShare: [],
     // Build pipeline and procurement
     purchasedGW: [], strandedGW: [], readyShellsGW: [], underConstructionGW: [],
@@ -2298,16 +2299,16 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     {
       // Facility watts per brain-equivalent of cognitive work, fleet average:
       // the 2026 level improved by the fleet's own hardware tokens/kWh (vintage
-      // mix and kW per accelerator included) times software gains (blended
-      // inference/training), with diminishing returns past the knee
-      const brainCfg = GLOBAL_PARAMS.brainEquivalency || {};
-      const startW = brainCfg.startingWattsPerBrainEquiv ?? 500;
-      const minW = brainCfg.minWattsPerBrainEquiv ?? 0.33;
+      // mix and kW per accelerator included; diminishing returns past the
+      // hardware knee) times software gains (blended inference/training,
+      // uncapped: algorithms have no physical floor)
+      const startW = GLOBAL_PARAMS.brainEquivalency?.startingWattsPerBrainEquiv ?? 500;
       const e = getEfficiencyMultipliers(month, efficiencyAssumptions, effCache, results.warnings, warnedSet);
       const software = Math.sqrt((e.S_inference / Math.max(e.M_inference, EPSILON)) * (e.S_training / Math.max(e.M_training, EPSILON)));
       const fleetTok0 = results.fleet.fleetTokPerKwhM[0] || fleetTokNow;
-      const gain = softEfficiencyCap(software * (fleetTokNow / Math.max(fleetTok0, EPSILON)), startW / minW);
-      results.fleet.wattsPerBrainEquiv.push(Math.max(startW / Math.max(gain, EPSILON), minW));
+      const hwRatio = fleetTokNow / Math.max(fleetTok0, EPSILON);
+      results.fleet.wattsPerBrainEquiv.push(startW / Math.max(software * softEfficiencyCap(hwRatio, MAX_EFFICIENCY_GAIN), EPSILON));
+      results.fleet.hardwarePastKnee.push(hwRatio > MAX_EFFICIENCY_GAIN);
     }
     results.fleet.frontierTokPerKwhM.push(frontierTok0 * hwIdx / Math.max(req.kwIndex || 1, EPSILON));
     results.fleet.kwPerNewAccelerator.push(kwNew);
