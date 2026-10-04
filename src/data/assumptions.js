@@ -95,13 +95,9 @@ export const GLOBAL_PARAMS = {
     // fleet is turning over to Blackwell Ultra/Rubin. Output view: ~0.3 Wh per
     // 500-token response (Epoch) ≈ 2 J/token, i.e. ~20-200 W to match a
     // person's text output incl. reasoning tokens.
-    startingWattsPerBrainEquiv: 500,
-    // Soft knee at 60× brain efficiency: 20 W / 60 ≈ 0.33 W per
-    // brain-equivalent (a practical floor allowing for resilience and
-    // redundancy). Gains continue above the knee with logarithmic
-    // diminishing returns (softEfficiencyCap).
-    maxEfficiencyVsBrain: 60,
-    minWattsPerBrainEquiv: 0.33        // = humanBrainWatts / maxEfficiencyVsBrain
+    // Hardware gains per watt slow at the engine's physical knee
+    // (MAX_EFFICIENCY_GAIN); algorithmic gains have no physical floor.
+    startingWattsPerBrainEquiv: 500
   }
 };
 
@@ -246,13 +242,17 @@ const DEMAND_TEMPLATE_YEAR1 = {
   //   Revenue cross-check: Anthropic $9B → $65B run-rate (Dec-25 → Jul-26);
   //     OpenAI ~2x YoY to $40B (Aug-26). With blended $/token falling 30-50%/yr,
   //     revenue growth implies token growth of ~5-7x trailing, decelerating.
-  // Forward Year 1 blended ≈ 3.6x: consumer slowest, coding/agents fastest.
+  // Year 1 blended ≈ 7x, as measured (Google 480T → 3.2 quadrillion tokens a
+  // month, May-25 → May-26): consumer slowest, coding/agents fastest.
   // Net compute demand = token growth ÷ software efficiency (model + systems);
   // hardware gains apply only to newly installed accelerators (vintage-tracked).
+  // Token counts and efficiency are both far above older estimates; their
+  // ratio (net compute) is pinned by what is being built (GW, capex) and
+  // the persisting shortage, so both are set from evidence together.
   inferenceGrowth: {
-    consumer: { value: 1.50, confidence: 'medium', source: 'Google surfaces 7x YoY to May-26 but flat May→Jul; Gemini app 950M MAU; ChatGPT consumer growth slowing', historicalRange: [1.00, 4.00] },
-    enterprise: { value: 2.50, confidence: 'medium', source: 'Google API ~3.6x annualized (Q1→Q2-26); MSFT Foundry 1T-token customers 4x YoY', historicalRange: [1.50, 5.00] },
-    agentic: { value: 5.00, confidence: 'low', source: 'Coding agents: Anthropic run-rate 7x in 7 months; OpenRouter weekly tokens 5x in 6 months', historicalRange: [2.50, 10.00] }
+    consumer: { value: 4.50, confidence: 'medium', source: 'Google surfaces 7x YoY to May-26 (I/O 2026: 3.2 quadrillion tokens/month); Gemini app 950M MAU; cheap Flash-class models dominate volume', historicalRange: [2.00, 8.00] },
+    enterprise: { value: 6.70, confidence: 'medium', source: 'Google API ~19B tokens/min; MSFT Foundry 1T-token customers 4x YoY; enterprise agents ramping', historicalRange: [3.00, 10.00] },
+    agentic: { value: 12.2, confidence: 'low', source: 'Coding agents: Anthropic run-rate 7x in 7 months; OpenRouter weekly tokens ~146T (Sep-26), up many-fold in 2026', historicalRange: [5.00, 25.00] }
   },
 
   trainingGrowth: {
@@ -310,15 +310,18 @@ const buildDemandBlocks = () => {
   });
 
   // Targeted tweaks (only the values that should change by period)
-  // Blended token growth, calendar-year averages: 2027 3.1x, 2028 2.7x,
-  // 2029 2.6x, 2030 2.4x, 2031 2.0x. The blend runs above the segment rates
-  // because agentic work rises from 20% of tokens toward ~75% by Year 5.
+  // Blended token growth (Dec/Dec): 2026 ~7x, 2027 ~5x, 2028 ~4x, 2029
+  // ~3.3x, 2030 ~2.8x, decelerating from 50x (2024→25) and 7x (2025→26).
+  // Each year's software efficiency is raised by the same factor as tokens
+  // (2.2, 1.77, 1.5, 1.33, 1.2 vs earlier estimates), so net compute demand
+  // to 2030 stays where the build-out evidence puts it. The blend runs above
+  // the segment rates because agentic work rises toward ~75% of tokens.
   // Better models raise tokens per task (agents, reasoning), so volume keeps
   // compounding even as user growth saturates.
   // Year 2
-  blocks.year2.inferenceGrowth.consumer.value = 1.00;   // 2x
-  blocks.year2.inferenceGrowth.enterprise.value = 1.50;  // 2.5x
-  blocks.year2.inferenceGrowth.agentic.value = 3.00;     // 4x
+  blocks.year2.inferenceGrowth.consumer.value = 2.54;
+  blocks.year2.inferenceGrowth.enterprise.value = 3.43;
+  blocks.year2.inferenceGrowth.agentic.value = 6.08;
   blocks.year2.trainingGrowth.frontier.value = 1.50;
   blocks.year2.trainingGrowth.midtier.value = 1.20;
   // Edge offload Year 2: Apple Intelligence / Gemini Nano adoption growing
@@ -327,9 +330,9 @@ const buildDemandBlocks = () => {
   blocks.year2.edgeOffload.agentic.value = 0.0;
 
   // Year 3
-  blocks.year3.inferenceGrowth.consumer.value = 0.9;
-  blocks.year3.inferenceGrowth.enterprise.value = 1.3;
-  blocks.year3.inferenceGrowth.agentic.value = 2.3;
+  blocks.year3.inferenceGrowth.consumer.value = 1.85;
+  blocks.year3.inferenceGrowth.enterprise.value = 2.45;
+  blocks.year3.inferenceGrowth.agentic.value = 3.95;
   blocks.year3.trainingGrowth.frontier.value = 1.3;
   blocks.year3.trainingGrowth.midtier.value = 1.2;
   // Edge offload Year 3: distilled models becoming mainstream on flagships
@@ -338,9 +341,9 @@ const buildDemandBlocks = () => {
   blocks.year3.edgeOffload.agentic.value = 0.01;
 
   // Year 4
-  blocks.year4.inferenceGrowth.consumer.value = 0.7;
-  blocks.year4.inferenceGrowth.enterprise.value = 1.1;
-  blocks.year4.inferenceGrowth.agentic.value = 1.9;
+  blocks.year4.inferenceGrowth.consumer.value = 1.26;
+  blocks.year4.inferenceGrowth.enterprise.value = 1.79;
+  blocks.year4.inferenceGrowth.agentic.value = 2.86;
   blocks.year4.trainingGrowth.frontier.value = 1.0;
   blocks.year4.trainingGrowth.midtier.value = 0.9;
   // Edge offload Year 4: mid-range phones get capable NPUs; enterprise edge pilots
@@ -349,9 +352,9 @@ const buildDemandBlocks = () => {
   blocks.year4.edgeOffload.agentic.value = 0.02;
 
   // Year 5
-  blocks.year5.inferenceGrowth.consumer.value = 0.6;
-  blocks.year5.inferenceGrowth.enterprise.value = 1.0;
-  blocks.year5.inferenceGrowth.agentic.value = 1.6;
+  blocks.year5.inferenceGrowth.consumer.value = 0.92;
+  blocks.year5.inferenceGrowth.enterprise.value = 1.4;
+  blocks.year5.inferenceGrowth.agentic.value = 2.12;
   blocks.year5.trainingGrowth.frontier.value = 0.8;
   blocks.year5.trainingGrowth.midtier.value = 0.7;
   // Edge offload Year 5: most consumer queries handled locally for simple tasks
@@ -361,17 +364,16 @@ const buildDemandBlocks = () => {
 
   // Years 6-20: demand keeps responding to cheaper compute as it did in
   // 2027-30. There, each 1% fall in cost per token (software × hardware
-  // efficiency) came with ~1.75% more tokens; each 1% fall in training cost
+  // efficiency) came with ~1.45% more tokens; each 1% fall in training cost
   // with ~1.46% more frontier and ~1.33% more mid-tier training. Holding
-  // those elasticities, demand growth slows only as fast as efficiency gains
-  // slow: token growth ≈ 2.2x/yr (Y6-10), 1.85x (Y11-15), 1.5x (Y16-20).
-  // Segment rates below are the earlier "maturing" rates scaled by one
-  // factor per block (1.21, 1.19, 1.06), which keeps the segment mix; the
-  // "Demand matures" scenario keeps the earlier rates.
+  // those elasticities, with algorithmic efficiency staying strong (no
+  // physical floor), token growth ≈ 2.3x/yr (Y6-10), 2.0x (Y11-15), 1.8x
+  // (Y16-20) and net compute demand ≈ +30%, +24%, +20%/yr. Segment rates
+  // keep the segment mix; "Demand matures" uses a lower elasticity (~1.2).
   // Years 6-10
-  blocks.years6_10.inferenceGrowth.consumer.value = 0.45;
-  blocks.years6_10.inferenceGrowth.enterprise.value = 0.57;
-  blocks.years6_10.inferenceGrowth.agentic.value = 0.81;
+  blocks.years6_10.inferenceGrowth.consumer.value = 0.52;
+  blocks.years6_10.inferenceGrowth.enterprise.value = 0.65;
+  blocks.years6_10.inferenceGrowth.agentic.value = 0.9;
   blocks.years6_10.trainingGrowth.frontier.value = 0.62;
   blocks.years6_10.trainingGrowth.midtier.value = 0.55;
   blocks.years6_10.intensityGrowth.value = 0.25;
@@ -381,9 +383,9 @@ const buildDemandBlocks = () => {
   blocks.years6_10.edgeOffload.agentic.value = 0.1;
 
   // Years 11-15
-  blocks.years11_15.inferenceGrowth.consumer.value = 0.33;
-  blocks.years11_15.inferenceGrowth.enterprise.value = 0.40;
-  blocks.years11_15.inferenceGrowth.agentic.value = 0.48;
+  blocks.years11_15.inferenceGrowth.consumer.value = 0.45;
+  blocks.years11_15.inferenceGrowth.enterprise.value = 0.52;
+  blocks.years11_15.inferenceGrowth.agentic.value = 0.61;
   blocks.years11_15.trainingGrowth.frontier.value = 0.385;
   blocks.years11_15.trainingGrowth.midtier.value = 0.345;
   blocks.years11_15.intensityGrowth.value = 0.26;
@@ -393,9 +395,9 @@ const buildDemandBlocks = () => {
   blocks.years11_15.edgeOffload.agentic.value = 0.15;
 
   // Years 16-20
-  blocks.years16_20.inferenceGrowth.consumer.value = 0.14;
-  blocks.years16_20.inferenceGrowth.enterprise.value = 0.16;
-  blocks.years16_20.inferenceGrowth.agentic.value = 0.21;
+  blocks.years16_20.inferenceGrowth.consumer.value = 0.35;
+  blocks.years16_20.inferenceGrowth.enterprise.value = 0.37;
+  blocks.years16_20.inferenceGrowth.agentic.value = 0.43;
   blocks.years16_20.trainingGrowth.frontier.value = 0.26;
   blocks.years16_20.trainingGrowth.midtier.value = 0.23;
   blocks.years16_20.intensityGrowth.value = 0.26;
@@ -436,7 +438,7 @@ const EFFICIENCY_TEMPLATE_YEAR1 = {
   label: SEGMENT_LABELS.year1,
 
   modelEfficiency: {
-    m_inference: { value: 0.30, confidence: 'medium', source: 'Distillation, MoE, speculative decoding. Net of mix shift toward frontier/reasoning tokens, which use more compute per token', historicalRange: [0.15, 0.55] },
+    m_inference: { value: 0.68, confidence: 'medium', source: 'Compute per token of the served mix: distillation, MoE, FP4, speculative decoding, small Flash-class models taking volume. Epoch: price at constant capability falls ~10x/yr (5-10x for frontier); the served mix falls less as users move up to frontier/reasoning models', historicalRange: [0.40, 0.85] },
     m_training: { value: 0.25, confidence: 'low', source: 'Optimizer + architecture gains, partly reinvested in bigger runs', historicalRange: [0.10, 0.40] }
   },
 
@@ -460,10 +462,13 @@ const buildEfficiencyBlocks = () => {
 
   // Per-block gains (software = (1/(1-m))(1+s) on the whole fleet; new-vintage
   // tokens/kWh = (1+h)(1+h_memory)/(1+kw_growth)):
-  //   Y1 1.71x / 1.46x, Y2 1.40x / 1.40x, Y3 1.29x / 1.34x, Y4 1.23x / 1.31x,
-  //   Y5 1.19x / 1.32x, Y6-10 1.27x / 1.23x, Y11-15 1.23x / 1.16x, Y16-20 1.14x / 1.11x
+  //   Y1 3.76x / 1.46x, Y2 2.48x / 1.40x, Y3 1.94x / 1.34x, Y4 1.64x / 1.31x,
+  //   Y5 1.43x / 1.32x, Y6-10 1.45x / 1.23x, Y11-15 1.40x / 1.16x, Y16-20 1.35x / 1.11x
+  // Algorithmic (software) gains have no physical floor and stay strong after
+  // 2030; hardware gains per watt slow toward physical limits (the engine
+  // applies its efficiency knee to hardware only).
   // Year 2: still strong, decelerating
-  blocks.year2.modelEfficiency.m_inference.value = 0.2;
+  blocks.year2.modelEfficiency.m_inference.value = 0.548;
   blocks.year2.modelEfficiency.m_training.value = 0.22;
   blocks.year2.systemsEfficiency.s_inference.value = 0.12;
   blocks.year2.systemsEfficiency.s_training.value = 0.08;
@@ -472,7 +477,7 @@ const buildEfficiencyBlocks = () => {
   blocks.year2.hardwareEfficiency.kw_growth.value = 0.15;
 
   // Year 3
-  blocks.year3.modelEfficiency.m_inference.value = 0.15;
+  blocks.year3.modelEfficiency.m_inference.value = 0.433;
   blocks.year3.modelEfficiency.m_training.value = 0.15;
   blocks.year3.systemsEfficiency.s_inference.value = 0.1;
   blocks.year3.systemsEfficiency.s_training.value = 0.06;
@@ -481,7 +486,7 @@ const buildEfficiencyBlocks = () => {
   blocks.year3.hardwareEfficiency.kw_growth.value = 0.10;
 
   // Year 4: moderating
-  blocks.year4.modelEfficiency.m_inference.value = 0.12;
+  blocks.year4.modelEfficiency.m_inference.value = 0.338;
   blocks.year4.modelEfficiency.m_training.value = 0.12;
   blocks.year4.systemsEfficiency.s_inference.value = 0.08;
   blocks.year4.systemsEfficiency.s_training.value = 0.05;
@@ -490,7 +495,7 @@ const buildEfficiencyBlocks = () => {
   blocks.year4.hardwareEfficiency.kw_growth.value = 0.05;
 
   // Year 5: settling; kW per accelerator stops rising
-  blocks.year5.modelEfficiency.m_inference.value = 0.1;
+  blocks.year5.modelEfficiency.m_inference.value = 0.25;
   blocks.year5.modelEfficiency.m_training.value = 0.1;
   blocks.year5.systemsEfficiency.s_inference.value = 0.07;
   blocks.year5.systemsEfficiency.s_training.value = 0.05;
@@ -499,7 +504,7 @@ const buildEfficiencyBlocks = () => {
   blocks.year5.hardwareEfficiency.kw_growth.value = 0;
 
   // Years 6-10: diminishing hardware returns
-  blocks.years6_10.modelEfficiency.m_inference.value = 0.15;
+  blocks.years6_10.modelEfficiency.m_inference.value = 0.255;
   blocks.years6_10.modelEfficiency.m_training.value = 0.08;
   blocks.years6_10.systemsEfficiency.s_inference.value = 0.08;
   blocks.years6_10.systemsEfficiency.s_training.value = 0.04;
@@ -508,7 +513,7 @@ const buildEfficiencyBlocks = () => {
   blocks.years6_10.hardwareEfficiency.kw_growth.value = 0;
 
   // Years 11-15: mature
-  blocks.years11_15.modelEfficiency.m_inference.value = 0.12;
+  blocks.years11_15.modelEfficiency.m_inference.value = 0.228;
   blocks.years11_15.modelEfficiency.m_training.value = 0.05;
   blocks.years11_15.systemsEfficiency.s_inference.value = 0.08;
   blocks.years11_15.systemsEfficiency.s_training.value = 0.03;
@@ -517,7 +522,7 @@ const buildEfficiencyBlocks = () => {
   blocks.years11_15.hardwareEfficiency.kw_growth.value = 0;
 
   // Years 16-20: near-mature
-  blocks.years16_20.modelEfficiency.m_inference.value = 0.08;
+  blocks.years16_20.modelEfficiency.m_inference.value = 0.222;
   blocks.years16_20.modelEfficiency.m_training.value = 0.03;
   blocks.years16_20.systemsEfficiency.s_inference.value = 0.05;
   blocks.years16_20.systemsEfficiency.s_training.value = 0.02;
@@ -979,25 +984,24 @@ export const COST_ASSUMPTIONS_BASE = {
  * update the explicit years to match.
  */
 const FIN_YEARS = Array.from({ length: GLOBAL_PARAMS.horizonYears }, (_, i) => MODEL_START_YEAR + i);
-// Cost per inference token falls by this factor over a calendar year (base
-// efficiency: software × new-vintage hardware, blended across block edges)
-const inferenceCostGainForYear = (year) => {
+// Hardware throughput per watt rises by this factor over a calendar year
+// (new-vintage: (1+h)(1+h_memory)/(1+kw_growth), blended across block edges)
+const hardwareGainForYear = (year) => {
   const v = (x) => (x && typeof x === 'object' && 'value' in x ? x.value : (x ?? 0));
   const E = EFFICIENCY_ASSUMPTIONS_BASE;
   let gain = 1;
   for (let k = 0; k < 12; k++) {
     const m = Math.max(1, (year - GLOBAL_PARAMS.startYear) * 12 + k);
     const r = (pick) => blendBlockValue(m, (key) => v(pick(E[key])));
-    const hw = (1 + r((b) => b.hardwareEfficiency.h)) * (1 + r((b) => b.hardwareEfficiency.h_memory)) / (1 + r((b) => b.hardwareEfficiency.kw_growth));
-    const sw = (1 / (1 - r((b) => b.modelEfficiency.m_inference))) * (1 + r((b) => b.systemsEfficiency.s_inference));
-    gain *= Math.pow(sw * hw, 1 / 12);
+    gain *= Math.pow((1 + r((b) => b.hardwareEfficiency.h)) * (1 + r((b) => b.hardwareEfficiency.h_memory)) / (1 + r((b) => b.hardwareEfficiency.kw_growth)), 1 / 12);
   }
   return gain;
 };
-// Token prices pass through half of each fall in cost per token (in log
-// terms), as in 2027-30 (−30/−25/−20/−20% against costs −49/−43/−38/−36%).
-// Revenue per GW then holds roughly flat, like GPU rental rates per kW.
-const TOKEN_PRICE_PASS_THROUGH = 0.5;
+// The financing model counts tokens per kWh of hardware (software gains
+// show up as more demand served, not more revenue per GW). After 2030 the
+// price per such token falls with hardware cost per token, so revenue per GW
+// holds roughly flat, like GPU rental rates and capex per kW.
+const TOKEN_PRICE_PASS_THROUGH = 1.0;
 
 const buildPath = (explicit, extend) => {
   const out = {};
@@ -1040,14 +1044,14 @@ export const FINANCING_ASSUMPTIONS_BASE = {
 
   paths: {
     // Blended $/M token price change (base path, before scarcity premium).
-    // 2026-30 from observed/forecast pricing; after that, tied to cost per
-    // token at TOKEN_PRICE_PASS_THROUGH (≈ −20%/yr in the early 2030s,
-    // −16% late 2030s, −11% in the 2040s).
+    // 2026-30 from observed/forecast pricing; after that, tied to hardware
+    // cost per token at TOKEN_PRICE_PASS_THROUGH (≈ −19%/yr in the early
+    // 2030s, −14% late 2030s, −10% in the 2040s).
     priceChange: buildPath(
       // 2026: effective token cost down only ~6-20% YTD (YipitData, OpenRouter,
       // frontier index) with H100 rental up; 2027 steeper as supply eases
       { 2026: -0.20, 2027: -0.25, 2028: -0.25, 2029: -0.20, 2030: -0.20 },
-      (year) => +(Math.pow(inferenceCostGainForYear(year), -TOKEN_PRICE_PASS_THROUGH) - 1).toFixed(3)
+      (year) => +(Math.pow(hardwareGainForYear(year), -TOKEN_PRICE_PASS_THROUGH) - 1).toFixed(3)
     ),
     // Effective utilization of the ENERGIZED fleet (MFU, idle, hoarded
     // capacity). Chips bought but not yet energized are tracked separately.
@@ -1159,8 +1163,8 @@ export const SCENARIOS = {
   highDemandSlowEfficiency: {
     id: 'highDemandSlowEfficiency',
     name: 'High Demand / Slow Efficiency',
-    description: 'Token growth multiples 25% above base for five years; software efficiency gains 40% and hardware gains 20% below base.',
-    summary: { demand: 'Base × 1.25 per year (Years 1-5)', efficiency: 'Software × 0.6, hardware × 0.8', supply: 'Base' },
+    description: 'Token growth multiples 25% above base for five years; software efficiency compounds at 0.6× and hardware at 0.8× the base pace (log terms).',
+    summary: { demand: 'Base × 1.25 per year (Years 1-5)', efficiency: 'Software gains 0.6× as fast, hardware 0.8× (log terms)', supply: 'Base' },
     overrides: {
       scaling: {
         tokenGrowth: { factor: 1.25, blocks: FIRST_FIVE_YEAR_KEYS },
@@ -1173,9 +1177,9 @@ export const SCENARIOS = {
 
   highDemandFastEfficiency: {
     id: 'highDemandFastEfficiency',
-    name: 'High Demand / Fast Efficiency',
-    description: 'Token growth multiples 25% above base for five years, with software efficiency gains 50% and hardware gains 15% above base.',
-    summary: { demand: 'Base × 1.25 per year (Years 1-5)', efficiency: 'Software × 1.5, hardware × 1.15', supply: 'Base' },
+    name: 'Efficiency Outruns Demand',
+    description: 'Token growth multiples 25% above base for five years, but software efficiency compounds 1.5× and hardware 1.15× as fast as base, so cost per token falls faster than usage grows: compute demand shrinks and capacity overhangs. The bear case for the build-out.',
+    summary: { demand: 'Base × 1.25 per year (Years 1-5)', efficiency: 'Software gains 1.5× faster, hardware 1.15× (log terms)', supply: 'Base' },
     overrides: {
       scaling: {
         tokenGrowth: { factor: 1.25, blocks: FIRST_FIVE_YEAR_KEYS },
@@ -1189,13 +1193,13 @@ export const SCENARIOS = {
   demandMatures: {
     id: 'demandMatures',
     name: 'Demand Matures After 2030',
-    description: 'Same as base through 2030, then demand responds less to cheaper compute: token growth slows to ~1.8x/yr (2031-35), ~1.55x (2036-40), ~1.45x (2041-45), and training compute grows slower than training efficiency.',
-    summary: { demand: 'Base to 2030; slower after (elasticity ~1.3)', efficiency: 'Base', supply: 'Base' },
+    description: 'Same as base through 2030, then demand responds less to cheaper compute (elasticity ~1.2 instead of ~1.45): token growth ~2.0x/yr (2031-35), ~1.8x (2036-40), ~1.6x (2041-45), net compute demand ~+8-12%/yr, and training compute grows slower than training efficiency.',
+    summary: { demand: 'Base to 2030; slower after (elasticity ~1.2)', efficiency: 'Base', supply: 'Base' },
     overrides: {
       demand: {
-        years6_10: { inferenceGrowth: { consumer: 0.20, enterprise: 0.30, agentic: 0.50 }, trainingGrowth: { frontier: 0.25, midtier: 0.30 } },
-        years11_15: { inferenceGrowth: { consumer: 0.12, enterprise: 0.18, agentic: 0.25 }, trainingGrowth: { frontier: 0.15, midtier: 0.20 } },
-        years16_20: { inferenceGrowth: { consumer: 0.08, enterprise: 0.10, agentic: 0.15 }, trainingGrowth: { frontier: 0.10, midtier: 0.12 } }
+        years6_10: { inferenceGrowth: { consumer: 0.32, enterprise: 0.43, agentic: 0.65 }, trainingGrowth: { frontier: 0.25, midtier: 0.30 } },
+        years11_15: { inferenceGrowth: { consumer: 0.28, enterprise: 0.35, agentic: 0.43 }, trainingGrowth: { frontier: 0.15, midtier: 0.20 } },
+        years16_20: { inferenceGrowth: { consumer: 0.22, enterprise: 0.24, agentic: 0.30 }, trainingGrowth: { frontier: 0.10, midtier: 0.12 } }
       }
     }
   },

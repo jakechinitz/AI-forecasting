@@ -460,7 +460,7 @@ function DemandEngineTab({ results, assumptions }) {
               <li>M<sub>t</sub> = (1-m)<sup>t/12</sup> -- Model efficiency (compute/token) decreases</li>
               <li>S<sub>t</sub> = (1+s)<sup>t/12</sup> -- Systems throughput increases</li>
               <li>H<sub>t</sub> = (1+h)<sup>t/12</sup> -- Hardware throughput increases</li>
-              <li>Human brain = {BRAIN.humanBrainWatts}W, asymptote = {BRAIN.maxEfficiencyVsBrain}x brain efficiency</li>
+              <li>Human brain = {BRAIN.humanBrainWatts}W; hardware per watt slows at a physical knee, algorithmic gains are uncapped</li>
             </ul>
           </div>
         </div>

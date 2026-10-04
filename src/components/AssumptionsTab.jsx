@@ -91,9 +91,9 @@ const METRICS_COLUMNS = [
 /* Brain equivalency table columns */
 const BRAIN_COLUMNS = [
   { valueKey: 'cumulativeGain', label: 'Cumulative Eff. (x)', format: v => v < 1000 ? v.toFixed(1) + 'x' : (v / 1000).toFixed(1) + 'Kx' },
-  { valueKey: 'wattsPerBrainEquiv', label: 'W per Brain-Equiv', format: v => v >= 1000 ? (v / 1000).toFixed(1) + ' kW' : v >= 10 ? v.toFixed(0) + ' W' : v >= 1 ? v.toFixed(1) + ' W' : v.toFixed(2) + ' W' },
+  { valueKey: 'wattsPerBrainEquiv', label: 'W per Brain-Equiv', format: v => v >= 1000 ? (v / 1000).toFixed(1) + ' kW' : v >= 10 ? v.toFixed(0) + ' W' : v >= 1 ? v.toFixed(1) + ' W' : v >= 0.01 ? v.toFixed(2) + ' W' : (v * 1000).toFixed(1) + ' mW' },
   { valueKey: 'brainEfficiencyPct', label: '% of Brain Eff.', format: v => v < 1 ? v.toFixed(2) + '%' : v < 100 ? v.toFixed(1) + '%' : v.toFixed(0) + '%', help: `Human brain = ${GLOBAL_PARAMS.brainEquivalency.humanBrainWatts}W` },
-  { valueKey: 'atAsymptote', label: 'Returns', format: v => v ? 'DIMINISHING' : 'linear' }
+  { valueKey: 'atAsymptote', label: 'Hardware', format: v => v ? 'PAST KNEE' : 'below knee' }
 ];
 
 function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSimulating, results }) {
@@ -397,18 +397,18 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
   const brainEquivalency = useMemo(() => {
     // Fleet-average facility watts per brain-equivalent at each block's end,
     // from the engine (fleet hardware tokens/kWh incl. vintage mix and kW per
-    // accelerator, times software gains; diminishing returns past the knee)
+    // accelerator, past its physical knee with diminishing returns) times
+    // software gains, which have no physical floor
     const series = results?.fleet?.wattsPerBrainEquiv || [];
     const startingWatts = BRAIN.startingWattsPerBrainEquiv;
-    const minWatts = BRAIN.minWattsPerBrainEquiv;
     const perBlock = {};
     let firstKneeIdx = -1;
     let cum = 0;
     timeBlocks.forEach((block, idx) => {
       cum += (BLOCK_YEARS[idx] || 1) * 12;
       const w = series.length ? series[Math.min(cum - 1, series.length - 1)] : startingWatts;
-      const wattsPerBrainEquiv = Math.max(w, minWatts);
-      const atAsymptote = wattsPerBrainEquiv <= minWatts * 1.0001;
+      const wattsPerBrainEquiv = w;
+      const atAsymptote = !!results?.fleet?.hardwarePastKnee?.[Math.min(cum - 1, series.length - 1)];
       if (atAsymptote && firstKneeIdx < 0) firstKneeIdx = idx;
       perBlock[block.key] = {
         cumulativeGain: startingWatts / wattsPerBrainEquiv,
@@ -441,9 +441,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
       const itGW = results.fleet?.installedGW?.[monthIdx];
       const totalPowerWatts = itGW != null ? itGW * 1e9 * PUE : totalInstalled * WATTS_PER_GPU;
 
-      // Use capped wattsPerBrainEquiv from brain equivalency, floored at minWattsPerBrainEquiv
-      const rawWpbe = brainEquivalency.perBlock[block.key]?.wattsPerBrainEquiv ?? BRAIN.startingWattsPerBrainEquiv;
-      const wattsPerBrainEquiv = Math.max(rawWpbe, BRAIN.minWattsPerBrainEquiv);
+      const wattsPerBrainEquiv = brainEquivalency.perBlock[block.key]?.wattsPerBrainEquiv ?? BRAIN.startingWattsPerBrainEquiv;
       const atEfficiencyLimit = brainEquivalency.perBlock[block.key]?.atAsymptote || false;
       const brainEquivs = totalPowerWatts / wattsPerBrainEquiv;
       const aisPerHuman = brainEquivs / WORLD_POPULATION;
@@ -766,7 +764,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                       </th>
                       <th className="assumptions-header-cell">
                         <div className="assumptions-col-title">W/Brain-Equiv</div>
-                        <div className="assumptions-col-years">knee {BRAIN.minWattsPerBrainEquiv}W</div>
+                        <div className="assumptions-col-years">fleet, incl. cooling</div>
                       </th>
                       <th className="assumptions-header-cell">
                         <div className="assumptions-col-title">Brain Equivalents</div>
@@ -794,7 +792,9 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
                           <span className="assumptions-metric">
                             {row.wattsPerBrainEquiv >= 1000
                               ? (row.wattsPerBrainEquiv / 1000).toFixed(1) + ' kW'
-                              : row.wattsPerBrainEquiv < 1
+                              : row.wattsPerBrainEquiv < 0.01
+                                ? (row.wattsPerBrainEquiv * 1000).toFixed(1) + ' mW'
+                                : row.wattsPerBrainEquiv < 1
                                 ? row.wattsPerBrainEquiv.toFixed(2) + ' W'
                                 : row.wattsPerBrainEquiv < 10
                                   ? row.wattsPerBrainEquiv.toFixed(1) + ' W'
@@ -951,9 +951,8 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
               facility watts (incl. cooling): {BRAIN.startingWattsPerBrainEquiv >= 1000 ? `${(BRAIN.startingWattsPerBrainEquiv / 1000).toFixed(1)} kW` : `${BRAIN.startingWattsPerBrainEquiv} W`} per brain-equivalent
               of cognitive work in Jan 2026, improving with the fleet's own hardware efficiency (vintage mix,
               power per accelerator) and software gains. New hardware runs ~1.5-2× better than the fleet.
-              Soft knee at {BRAIN.maxEfficiencyVsBrain}× brain efficiency
-              ({BRAIN.minWattsPerBrainEquiv}W per brain-equiv) — beyond this,
-              gains continue but with logarithmic diminishing returns.
+              Hardware gains per watt slow at a physical knee (energy per operation); algorithmic
+              gains have no physical floor, so they keep compounding.
             </p>
             {renderBrainEquivalencyTable()}
           </div>
