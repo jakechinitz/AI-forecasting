@@ -110,7 +110,7 @@ function buildSheet(annual, tiers, tierMeta, gates, spend) {
         { label: 'Scarcity premium', unit: 'x', values: col('premium'), f: fmt.num2 },
         { label: 'Effective blended price', unit: '$/M tok', values: col('effPrice'), f: fmt.usd2 },
         { label: "'Jensen math' rev/GW (frontier, 95% util)", unit: '$B/GW', values: col('jensenRevPerGw'), f: fmt.usd1 },
-        { label: 'Share of fleet output sold (demand cap)', unit: '%', values: col('servedFraction'), f: fmt.pct },
+        { label: 'Share of fleet output sold (1 while demand exceeds capacity)', unit: '%', values: col('outputSoldShare'), f: fmt.pct },
         { label: 'REALIZED revenue/GW', unit: '$B/GW', values: col('realizedRevPerGw'), f: fmt.usd2, bold: true },
         { label: 'Realized as % of Jensen math', unit: '%', values: col('realizedPctOfJensen'), f: fmt.pct },
         { label: 'Energy cost/GW', unit: '$B/GW', values: col('energyPerGw'), f: fmt.usd2 },

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { formatMonth, formatNumber, softEfficiencyCap } from '../engine/calculations.js';
-import { GLOBAL_PARAMS, ASSUMPTION_SEGMENTS, TRANSLATION_INTENSITIES, blendBlockValue } from '../data/assumptions.js';
+import { formatMonth, formatNumber } from '../engine/calculations.js';
+import { GLOBAL_PARAMS, ASSUMPTION_SEGMENTS, TRANSLATION_INTENSITIES } from '../data/assumptions.js';
 
 const BRAIN = GLOBAL_PARAMS.brainEquivalency;
 const KW_PER_GPU = (TRANSLATION_INTENSITIES?.serverToInfra?.kwPerGpu?.value ?? 1.0);
@@ -9,42 +9,6 @@ const PUE = (TRANSLATION_INTENSITIES?.serverToInfra?.pue?.value ?? 1.3);
 const WATTS_PER_GPU = KW_PER_GPU * PUE * 1000; // Convert kW to watts, apply PUE
 const WORLD_POPULATION = 8.2e9; // ~8.2 billion humans (2026)
 
-/* Block durations in years (matches ASSUMPTION_SEGMENTS order) */
-const BLOCK_YEARS = [1, 1, 1, 1, 1, 5, 5, 5];
-
-/**
- * Watts per brain-equivalent at a given month: block-chained compounding of
- * the combined efficiency gain, with the same soft knee as the Assumptions
- * tab (60× brain efficiency ≈ 0.33 W per brain-equiv; logarithmic diminishing
- * returns above it), floored at minWattsPerBrainEquiv.
- */
-function computeBrainEquivAtMonth(month, efficiencyAssumptions) {
-  if (!efficiencyAssumptions) return BRAIN.startingWattsPerBrainEquiv;
-
-  let rawGain = 1.0;
-  const kneeGain = BRAIN.startingWattsPerBrainEquiv / BRAIN.minWattsPerBrainEquiv;
-
-  for (let m = 1; m <= month; m++) {
-    // Same edge-blended rates as the engine
-    const rate = (pick) => blendBlockValue(m, (key) => pick(efficiencyAssumptions?.[key]) ?? 0);
-    const mInf = rate((b) => b?.modelEfficiency?.m_inference?.value);
-    const sInf = rate((b) => b?.systemsEfficiency?.s_inference?.value);
-    const h = rate((b) => b?.hardwareEfficiency?.h?.value);
-    const hMem = rate((b) => b?.hardwareEfficiency?.h_memory?.value);
-    const mTrn = rate((b) => b?.modelEfficiency?.m_training?.value);
-    const sTrn = rate((b) => b?.systemsEfficiency?.s_training?.value);
-
-    // Annual gains; one fleet hardware index (H × H_memory) serves all work
-    const infFactor = (1 - mInf) / ((1 + sInf) * (1 + h) * (1 + hMem));
-    const trnFactor = (1 - mTrn) / ((1 + sTrn) * (1 + h) * (1 + hMem));
-    const totalAnnualGain = Math.sqrt((1 / infFactor) * (1 / trnFactor));
-
-    rawGain *= Math.pow(totalAnnualGain, 1 / 12);
-  }
-
-  const gain = softEfficiencyCap(rawGain, kneeGain);
-  return Math.max(BRAIN.startingWattsPerBrainEquiv / gain, BRAIN.minWattsPerBrainEquiv);
-}
 
 function DemandEngineTab({ results, assumptions }) {
   const [timeRange, setTimeRange] = useState('all');  // '5y', '10y', 'all'
@@ -82,7 +46,7 @@ function DemandEngineTab({ results, assumptions }) {
       const itGW = results.fleet?.installedGW?.[i];
       const totalPowerWatts = itGW != null ? itGW * 1e9 * PUE : totalInstalled * WATTS_PER_GPU;
       const totalPowerGW = totalPowerWatts / 1e9;
-      const wattsPerBrainEquiv = computeBrainEquivAtMonth(month, assumptions?.efficiency);
+      const wattsPerBrainEquiv = results.fleet?.wattsPerBrainEquiv?.[i] ?? BRAIN.startingWattsPerBrainEquiv;
       const brainEquivalents = totalPowerWatts / wattsPerBrainEquiv;
 
       const aisPerHuman = brainEquivalents / WORLD_POPULATION;

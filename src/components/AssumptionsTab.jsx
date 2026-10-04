@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import { ASSUMPTION_SEGMENTS, GLOBAL_PARAMS, TRANSLATION_INTENSITIES } from '../data/assumptions.js';
 import { ASSUMPTION_UPDATE_LOG } from '../data/nodes.js';
-import { formatNumber, softEfficiencyCap } from '../engine/calculations.js';
+import { formatNumber } from '../engine/calculations.js';
 
 /* ── Brain equivalency constants ── */
 const BRAIN = GLOBAL_PARAMS.brainEquivalency;
@@ -395,53 +395,30 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
   /* ── Brain power equivalency (cumulative efficiency → watts per brain equiv) ── */
 
   const brainEquivalency = useMemo(() => {
+    // Fleet-average facility watts per brain-equivalent at each block's end,
+    // from the engine (fleet hardware tokens/kWh incl. vintage mix and kW per
+    // accelerator, times software gains; diminishing returns past the knee)
+    const series = results?.fleet?.wattsPerBrainEquiv || [];
     const startingWatts = BRAIN.startingWattsPerBrainEquiv;
-    const brainWatts = BRAIN.humanBrainWatts;
-
-    // Knee: gains above this level see logarithmic diminishing returns.
-    // maxCumulativeGain = starting W / knee W (500 / 0.33 ≈ 1,500×). Beyond the knee, improvements
-    // continue but much slower — reflecting practical engineering limits.
     const minWatts = BRAIN.minWattsPerBrainEquiv;
-    const maxCumulativeGain = startingWatts / minWatts;
-
-    let rawCumulativeGain = 1.0;
-    let pastKnee = false;
+    const perBlock = {};
     let firstKneeIdx = -1;
-
-    const results = {};
-
+    let cum = 0;
     timeBlocks.forEach((block, idx) => {
-      const years = BLOCK_YEARS[idx] || 1;
-      const annualGain = efficiencySummary[block.key]?.totalGain || 1;
-
-      // Always compound — gains never stop, just slow down past the knee
-      const blockGain = Math.pow(annualGain, years);
-      rawCumulativeGain *= blockGain;
-
-      // Soft cap: below the knee linear, above logarithmic diminishing returns
-      const effectiveGain = softEfficiencyCap(rawCumulativeGain, maxCumulativeGain);
-
-      if (!pastKnee && rawCumulativeGain >= maxCumulativeGain) {
-        pastKnee = true;
-        firstKneeIdx = idx;
-      }
-
-      const wattsPerBrainEquiv = Math.max(startingWatts / effectiveGain, minWatts);
-      const brainEfficiencyPct = (brainWatts / wattsPerBrainEquiv) * 100;
-
-      results[block.key] = {
-        cumulativeGain: effectiveGain,
+      cum += (BLOCK_YEARS[idx] || 1) * 12;
+      const w = series.length ? series[Math.min(cum - 1, series.length - 1)] : startingWatts;
+      const wattsPerBrainEquiv = Math.max(w, minWatts);
+      const atAsymptote = wattsPerBrainEquiv <= minWatts * 1.0001;
+      if (atAsymptote && firstKneeIdx < 0) firstKneeIdx = idx;
+      perBlock[block.key] = {
+        cumulativeGain: startingWatts / wattsPerBrainEquiv,
         wattsPerBrainEquiv,
-        brainEfficiencyPct,
-        atAsymptote: pastKnee
+        brainEfficiencyPct: (BRAIN.humanBrainWatts / wattsPerBrainEquiv) * 100,
+        atAsymptote
       };
     });
-
-    return {
-      perBlock: results,
-      firstAsymptoteIdx: firstKneeIdx
-    };
-  }, [efficiencySummary, timeBlocks]);
+    return { perBlock, firstAsymptoteIdx: firstKneeIdx };
+  }, [results, timeBlocks]);
 
   /* ── Implied human-equivalent AIs per time block (from simulation results) ── */
 
@@ -454,7 +431,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
     BLOCK_YEARS.forEach(y => { cum += y * 12; blockEndMonths.push(cum); });
 
     return timeBlocks.map((block, idx) => {
-      const endMonth = Math.min(blockEndMonths[idx], results.months.length - 1);
+      const endMonth = Math.min(blockEndMonths[idx] - 1, results.months.length - 1);
       const monthIdx = endMonth;
 
       const dcInstalled = results.nodes?.gpu_datacenter?.installedBase?.[monthIdx] || 0;
@@ -498,7 +475,7 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
       const blockYears = BLOCK_YEARS[idx] || 1;
       cumYears += blockYears;
 
-      const endMonth = Math.min(blockEndMonths[idx], results.months.length - 1);
+      const endMonth = Math.min(blockEndMonths[idx] - 1, results.months.length - 1);
 
       // Unconstrained demand: requiredBase is the GPU fleet size the demand model wants
       const dcRequired = results.nodes?.gpu_datacenter?.requiredBase?.[endMonth] || 0;
@@ -970,9 +947,10 @@ function AssumptionsTab({ assumptions, onAssumptionChange, onRunSimulation, isSi
           <div className="section">
             <h4 className="section-title">Brain Power Equivalency</h4>
             <p className="section-description">
-              Compares AI compute efficiency to the human brain ({BRAIN.humanBrainWatts}W).
-              Starting at {BRAIN.startingWattsPerBrainEquiv >= 1000 ? `${(BRAIN.startingWattsPerBrainEquiv / 1000).toFixed(1)} kW` : `${BRAIN.startingWattsPerBrainEquiv} W`} per brain-equivalent
-              of cognitive work, efficiency improvements compound over time.
+              Compares AI compute efficiency to the human brain ({BRAIN.humanBrainWatts}W). Fleet average,
+              facility watts (incl. cooling): {BRAIN.startingWattsPerBrainEquiv >= 1000 ? `${(BRAIN.startingWattsPerBrainEquiv / 1000).toFixed(1)} kW` : `${BRAIN.startingWattsPerBrainEquiv} W`} per brain-equivalent
+              of cognitive work in Jan 2026, improving with the fleet's own hardware efficiency (vintage mix,
+              power per accelerator) and software gains. New hardware runs ~1.5-2× better than the fleet.
               Soft knee at {BRAIN.maxEfficiencyVsBrain}× brain efficiency
               ({BRAIN.minWattsPerBrainEquiv}W per brain-equiv) — beyond this,
               gains continue but with logarithmic diminishing returns.

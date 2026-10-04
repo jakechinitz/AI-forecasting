@@ -1265,7 +1265,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   results.fleet = {
     installedGW: [], requiredGW: [], deployedGW: [], retiredGW: [],
     binding: [], procurementBinding: [], installedAccelerators: [],
-    fleetTokPerKwhM: [], frontierTokPerKwhM: [], kwPerNewAccelerator: [],
+    fleetTokPerKwhM: [], frontierTokPerKwhM: [], kwPerNewAccelerator: [], wattsPerBrainEquiv: [],
     trainingShare: [],
     // Build pipeline and procurement
     purchasedGW: [], strandedGW: [], readyShellsGW: [], underConstructionGW: [],
@@ -2293,7 +2293,22 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
     results.fleet.binding.push(binding);
     results.fleet.procurementBinding.push(procurementBinding);
     results.fleet.installedAccelerators.push(fleetPhys);
-    results.fleet.fleetTokPerKwhM.push(fleetKW > EPSILON ? frontierTok0 * kw0 * fleetEff / fleetKW : frontierTok0);
+    const fleetTokNow = fleetKW > EPSILON ? frontierTok0 * kw0 * fleetEff / fleetKW : frontierTok0;
+    results.fleet.fleetTokPerKwhM.push(fleetTokNow);
+    {
+      // Facility watts per brain-equivalent of cognitive work, fleet average:
+      // the 2026 level improved by the fleet's own hardware tokens/kWh (vintage
+      // mix and kW per accelerator included) times software gains (blended
+      // inference/training), with diminishing returns past the knee
+      const brainCfg = GLOBAL_PARAMS.brainEquivalency || {};
+      const startW = brainCfg.startingWattsPerBrainEquiv ?? 500;
+      const minW = brainCfg.minWattsPerBrainEquiv ?? 0.33;
+      const e = getEfficiencyMultipliers(month, efficiencyAssumptions, effCache, results.warnings, warnedSet);
+      const software = Math.sqrt((e.S_inference / Math.max(e.M_inference, EPSILON)) * (e.S_training / Math.max(e.M_training, EPSILON)));
+      const fleetTok0 = results.fleet.fleetTokPerKwhM[0] || fleetTokNow;
+      const gain = softEfficiencyCap(software * (fleetTokNow / Math.max(fleetTok0, EPSILON)), startW / minW);
+      results.fleet.wattsPerBrainEquiv.push(Math.max(startW / Math.max(gain, EPSILON), minW));
+    }
     results.fleet.frontierTokPerKwhM.push(frontierTok0 * hwIdx / Math.max(req.kwIndex || 1, EPSILON));
     results.fleet.kwPerNewAccelerator.push(kwNew);
     results.fleet.trainingShare.push(req.requiredTotal > EPSILON ? req.requiredTraining / req.requiredTotal : 0);

@@ -30,6 +30,10 @@
  */
 
 const KWH_PER_GW_YEAR = 8.76e9;
+// Self-funded tiers keep about a quarter of a year's operating cash flow
+// (at least minCash), and repay debt above ~1x EBITDA before buying back
+const CASH_CUSHION_SHARE_OF_OCF = 0.25;
+const TARGET_DEBT_TO_EBITDA = 1.0;
 
 const safeDiv = (a, b, fallback = 0) => (Math.abs(b) > 1e-12 ? a / b : fallback);
 const isPlainObject = (v) => v && typeof v === 'object' && !Array.isArray(v);
@@ -196,7 +200,8 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
     const ocfPerGw = ebitdaPerGw - taxPerGw;
 
     return {
-      util, capexPerGw, computeShare, basePrice, premium, effPrice, inferenceShare, servedFraction,
+      // Share of fleet output sold: 1 while demand exceeds capacity
+      util, capexPerGw, computeShare, basePrice, premium, effPrice, inferenceShare, outputSoldShare: servedFraction,
       theoreticalRevPerGw, jensenRevPerGw, realizedRevPerGw,
       realizedPctOfJensen: safeDiv(realizedRevPerGw, jensenRevPerGw),
       energyPerGw, variablePerGw, otherOpexPerGw: scalars.otherOpexPerGwYr,
@@ -344,6 +349,22 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
 
       ts.debt = openingDebt + debtRaised;
       ts.cash = openingCash - cashDrawdown - shortfall + surplus; // shortfall hits cash (fix #2)
+
+      // Excess cash: in a year funded from operating cash flow alone, cash
+      // above an operating cushion first pays debt down toward the target
+      // leverage, then goes to shareholders (buybacks). Base returns stay
+      // as calibrated through the build-out, when tiers rely on outside money.
+      let debtRepaid = 0;
+      let extraReturns = 0;
+      if (gap <= 0) {
+        const cushion = Math.max(t.minCash, CASH_CUSHION_SHARE_OF_OCF * Math.max(0, p.ocf));
+        let excess = Math.max(0, ts.cash - cushion);
+        debtRepaid = Math.min(excess, Math.max(0, ts.debt - TARGET_DEBT_TO_EBITDA * Math.max(0, p.ebitda)));
+        excess -= debtRepaid;
+        extraReturns = excess;
+        ts.debt -= debtRepaid;
+        ts.cash -= debtRepaid + extraReturns;
+      }
       ts.legacyOcf = p.legacyOcf;
       ts.legacyEbitda = p.legacyEbitda;
       ts.gw = openingTierGw[i] * (1 - retireFrac) + (C > 0 ? c.deployedGW * capex / C : c.deployedGW * t.share);
@@ -358,7 +379,7 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
         year: c.year, id: t.id, name: t.name,
         fleetShare: p.fleetShare, installedGW: ts.gw,
         legacyOcf: p.legacyOcf, aiOcf: p.aiOcf, interest: p.interest, ocf: p.ocf,
-        shareholderReturns: t.shareholderReturns, capex,
+        shareholderReturns: t.shareholderReturns + extraReturns, extraReturns, debtRepaid, capex,
         fundingGap: gap, cashDrawdown, debtRaised, equityRaised,
         shortfall, unfundedCapex, operatingDeficit,
         grossDebt: ts.debt, cash: ts.cash, ebitda: p.ebitda,
@@ -416,6 +437,7 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
       interest: sum('interest'),
       cashDrawdown: sum('cashDrawdown'),
       debtRaised: sum('debtRaised'),
+      debtRepaid: sum('debtRepaid'),
       equityRaised: sum('equityRaised'),
       shortfall: sum('shortfall'),
       unfundedCapex: sum('unfundedCapex'),
