@@ -87,13 +87,21 @@ export const GLOBAL_PARAMS = {
 
   // Brain power equivalency parameters
   brainEquivalency: {
-    humanBrainWatts: 30,               // Human brain power consumption in watts
-    startingWattsPerBrainEquiv: 10000, // Starting AI watts per brain-equivalent of cognitive work
-    // Soft knee at 60× brain efficiency: 30 W / 60 = 0.5 W per brain-equivalent
-    // (a practical floor allowing for resilience/redundancy). Gains continue
-    // above the knee with logarithmic diminishing returns (softEfficiencyCap).
+    humanBrainWatts: 20,               // ~20% of ~100 W resting metabolism
+    // AI watts (incl. servers, network, cooling) per brain-equivalent of
+    // cognitive work, 2026 fleet average. Compute view: brain ≈ 1e15 FLOP/s
+    // (Carlsmith); at ~35% inference utilization H100 ≈ 2 kW, B300 (15 PF
+    // FP4, 1.4 kW) ≈ 450 W, Rubin (50 PF FP4) ≈ 200 W per brain; the 2026
+    // fleet is turning over to Blackwell Ultra/Rubin. Output view: ~0.3 Wh per
+    // 500-token response (Epoch) ≈ 2 J/token, i.e. ~20-200 W to match a
+    // person's text output incl. reasoning tokens.
+    startingWattsPerBrainEquiv: 500,
+    // Soft knee at 60× brain efficiency: 20 W / 60 ≈ 0.33 W per
+    // brain-equivalent (a practical floor allowing for resilience and
+    // redundancy). Gains continue above the knee with logarithmic
+    // diminishing returns (softEfficiencyCap).
     maxEfficiencyVsBrain: 60,
-    minWattsPerBrainEquiv: 0.5         // = humanBrainWatts / maxEfficiencyVsBrain
+    minWattsPerBrainEquiv: 0.33        // = humanBrainWatts / maxEfficiencyVsBrain
   }
 };
 
