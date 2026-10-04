@@ -1137,23 +1137,11 @@ export const COST_ASSUMPTIONS = {
 // SCENARIOS
 // ============================================
 
-/**
- * Scenario helper:
- * - Accepts sparse overrides and deep-merges into defaults.
- * - Allows convenient numeric shorthand (normalized later).
- */
-const applyOverridesToYears = (overrides = {}) => {
-  return FIRST_FIVE_YEAR_KEYS.reduce((acc, key) => {
-    acc[key] = overrides;
-    return acc;
-  }, {});
-};
-
 export const SCENARIOS = {
   base: {
     id: 'base',
     name: 'Base Case',
-    description: 'Research-based token growth (~3.6x in Year 1, decelerating); after 2030 demand keeps responding to cheaper compute as in 2027-30. Software efficiency ~1.7x in Year 1, sourced physical pools, and the Excel funding model.',
+    description: 'Measured token growth (~7x in Year 1, decelerating) with matching software efficiency (~3.8x in Year 1); after 2030 demand keeps responding to cheaper compute as in 2027-30 and algorithmic gains stay strong. Sourced physical pools that respond to demand within physical limits, and the Excel funding model.',
     summary: { demand: 'Base', efficiency: 'Base', supply: 'Base' },
     overrides: {}
   },
@@ -1207,17 +1195,15 @@ export const SCENARIOS = {
   demandSlowdown: {
     id: 'demandSlowdown',
     name: 'Demand Slowdown (Capex Hangover)',
-    description: 'Adoption disappoints: token growth drops to 20-50%/yr for five years, then 10-25%/yr. The opening shortage is built out and overcapacity develops.',
-    summary: { demand: '20-50%/yr (Years 1-5), 10-25%/yr (6-10)', efficiency: 'Base', supply: 'Base' },
+    // Relative to base, so it stays meaningful as base token and efficiency
+    // rates change: absolute token rates set when efficiency improved ~2x/yr
+    // made compute demand collapse once efficiency was calibrated to ~5x/yr.
+    description: 'Adoption disappoints for five years: token growth multiples 25% below base (training 20% below), so compute demand grows ~+20%/yr instead of +40-55%. The opening shortage is mostly built out, capex falls ~30%/yr in 2027-28 (a telecom-2001-style hangover), then base growth resumes from the lower level.',
+    summary: { demand: 'Base × 0.75 per year (Years 1-5)', efficiency: 'Base', supply: 'Base' },
     overrides: {
-      demand: {
-        ...applyOverridesToYears({
-          inferenceGrowth: { consumer: 0.20, enterprise: 0.30, agentic: 0.50 },
-          trainingGrowth: { frontier: 0.10, midtier: 0.25 }
-        }),
-        years6_10: {
-          inferenceGrowth: { consumer: 0.10, enterprise: 0.15, agentic: 0.25 }
-        }
+      scaling: {
+        tokenGrowth: { factor: 0.75, blocks: FIRST_FIVE_YEAR_KEYS },
+        trainingGrowth: { factor: 0.8, blocks: FIRST_FIVE_YEAR_KEYS }
       }
     }
   },
