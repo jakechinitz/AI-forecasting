@@ -838,6 +838,61 @@ const NODES_BASE = [
   },
 
   {
+    id: 'optical_lasers',
+    name: 'InP Laser Chips',
+    group: 'F',
+    unit: 'accelerator-sets/month',
+    description: 'Indium phosphide EMLs and CW lasers inside optical transceivers (silicon photonics still needs an InP light source)',
+
+    demandDriverType: 'derived',
+    inputIntensity: 1,
+    parentNodeIds: ['gpu_datacenter'],
+
+    // Laser sets for the transceivers of one accelerator. Opens ~30% short of
+    // demand (Lumentum, May 2026: EML demand >30% above supply).
+    startingCapacity: 1020000,
+    // Lumentum +50% EML units by end-CY26 and a North Carolina fab from 2028;
+    // Coherent doubling 6-inch InP output in 2026 and again by end-2027
+    committedExpansions: [
+      { date: '2026-07', capacityAdd: 250000, type: 'committed' },
+      { date: '2027-01', capacityAdd: 300000, type: 'committed' },
+      { date: '2027-07', capacityAdd: 300000, type: 'committed' },
+      { date: '2028-06', capacityAdd: 400000, type: 'committed' }
+    ],
+    leadTimeDebottleneck: 12,
+    leadTimeNewBuild: 30,
+    rampProfile: 's-curve',
+
+    elasticityShort: 0.05,
+    elasticityMid: 0.25,
+    elasticityLong: 0.6,
+
+    substitutabilityScore: 0.2,
+    supplierConcentration: 4,
+
+    contractingRegime: 'LTAs',
+    inventoryBufferTarget: 2,
+    maxCapacityUtilization: 0.95,
+
+    yieldModel: 'simple',
+    yieldSimpleLoss: 0,
+
+    geoRiskFlag: false,
+    exportControlSensitivity: 'medium',
+
+    // Non-gating: a laser shortfall shows up as price, allocation and a shift
+    // to designs that use fewer lasers (CW + silicon photonics, copper for
+    // short links), not as fewer accelerators deployed.
+
+    baseRate: {
+      value: 1020000,
+      confidence: 'low',
+      source: 'Lumentum (May 2026): EML demand >30% above supply, sole 200G/lane EML supplier at volume, +50% EML units by end-CY26, NC fab from 2028; Coherent doubling 6-inch InP in 2026 and again by end-2027; Nvidia $2B each to Lumentum and Coherent (Mar 2026). Makers: Lumentum, Coherent, Broadcom, Mitsubishi Electric, Sumitomo',
+      historicalRange: [800000, 1400000]
+    }
+  },
+
+  {
     id: 'infiniband_cables',
     name: 'InfiniBand/Ethernet Cables',
     group: 'F',

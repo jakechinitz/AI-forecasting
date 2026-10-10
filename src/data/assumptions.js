@@ -907,7 +907,8 @@ const DEMAND_RESPONSE = {
  * pass little through.
  *
  * group: compute | network | facility | power (capex), embedded (value inside
- * accelerator prices; not added to totals), opex.
+ * accelerator prices, or inside the input named by `within`; not added to
+ * totals), opex.
  * basis: perKw (× kW per accelerator bought), perUnit (× node intensity per
  * accelerator bought), perMwFacility (× facility MW paid for during
  * construction), plus special quantity rules noted per input.
@@ -960,6 +961,8 @@ export const COST_ASSUMPTIONS_BASE = {
     { id: 'emb_cowos', label: 'CoWoS advanced packaging', group: 'embedded', basis: 'perUnit', node: 'cowos_capacity', unit: '$ per wafer-equivalent', price: 10000, passThrough: 0, change: pc(0.05, 0.03, 0, -0.03, -0.03, -0.03, -0.03, -0.02), source: 'TrendForce (Apr 2026): CoWoS wafer ASP nearing 7nm-class levels' },
     { id: 'emb_substrate', label: 'ABF substrates', group: 'embedded', basis: 'perUnit', node: 'abf_substrate', unit: '$ per sqm', price: 15000, passThrough: 0, change: pc(0.05, 0, -0.03, -0.03, -0.03, -0.03, -0.02, -0.02), source: '~$300 of substrate per large accelerator package' },
     { id: 'emb_test', label: 'Final test & assembly (OSAT)', group: 'embedded', basis: 'perUnit', node: 'osat_test', unit: '$ per accelerator', price: 150, passThrough: 0, change: pc(0, 0, -0.02, -0.02, -0.02, -0.02, -0.02, -0.02), source: 'OSAT test/burn-in per accelerator' },
+    // --- Supplier value inside the optical transceiver price (not added to totals) ---
+    { id: 'emb_lasers', label: 'InP laser chips (EML, CW)', group: 'embedded', within: 'optics', basis: 'perUnit', node: 'optical_lasers', unit: '$ per accelerator-set', price: 250, passThrough: 0.5, change: pc(0, 0, -0.03, -0.05, -0.05, -0.04, -0.03, -0.03), source: '~$10-40 per laser (100G/200G EML, CW for silicon photonics), 4-8 per module, 2-3 modules per accelerator: ~20% of transceiver value at pre-shortage prices. Scarcity passes through strongly (LTAs; double-digit 200G EML price rises in 2026)' },
     // --- Operating spend (not capex) ---
     { id: 'electricity', label: 'Datacenter electricity', group: 'opex', basis: 'electricity', unit: '$ per kWh', price: null, passThrough: 0, change: pc(0, 0, 0, 0, 0, 0, 0, 0), source: 'Uses FINANCING_ASSUMPTIONS.scalars.electricityPricePerKwh growing at electricityPriceGrowth, and average power draw (idle + utilization)' },
     { id: 'ops_staff', label: 'Datacenter operations staff', group: 'opex', basis: 'staff', unit: '$ per FTE-year', price: 180000, passThrough: 0.1, change: pc(0.04, 0.04, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03), source: 'Loaded cost of DC technicians and engineers; ~1 FTE per MW (serverToInfra.ftesPerMw)' }
