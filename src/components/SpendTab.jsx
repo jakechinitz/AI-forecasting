@@ -57,6 +57,18 @@ function SpendTab({ results, costs, onCostChange, onResetCosts, build, onBuildCh
     return allYears.map((_, y) => (acc?.spendB[y] || 0) - spend.totals.embedded.spendB[y]);
   }, [spend, allYears]);
 
+  // Supplier value nested inside another input (e.g. lasers inside optics), grouped by that input
+  const nestedGroups = useMemo(() => {
+    if (!spend) return [];
+    const parents = [...new Set(spend.inputs.filter((i) => i.group === 'embedded' && i.within).map((i) => i.within))];
+    return parents.map((pid) => {
+      const parent = spend.inputs.find((i) => i.id === pid);
+      const items = spend.inputs.filter((i) => i.group === 'embedded' && i.within === pid);
+      const residual = allYears.map((_, y) => (parent?.spendB[y] || 0) - items.reduce((a, i) => a + i.spendB[y], 0));
+      return { id: pid, label: parent?.label || pid, items, residual };
+    });
+  }, [spend, allYears]);
+
   const chartData = useMemo(() => years.map((year, y) => {
     const row = { year, growth: spend.totals.capex.growth[y] == null ? null : spend.totals.capex.growth[y] * 100 };
     CAPEX_GROUPS.forEach((g) => { row[g.id] = spend.totals[g.id].spendB[y]; });
@@ -205,13 +217,26 @@ function SpendTab({ results, costs, onCostChange, onResetCosts, build, onBuildCh
             {mode === 'spend' && totalRow('TOTAL AI CAPEX', spend.totals.capex)}
 
             {sectionRow('Supplier value inside the ex-HBM accelerator price', 'already counted above')}
-            {spend.inputs.filter((i) => i.group === 'embedded').map(inputRow)}
+            {spend.inputs.filter((i) => i.group === 'embedded' && !i.within).map(inputRow)}
             {mode === 'spend' && (
               <tr>
                 <td className="sheet-label">Accelerator vendor margin & other (ex-HBM price less the items above)</td>
                 {years.map((_, y) => <Cell key={y} value={vendorResidual[y]} growth={growthOf(vendorResidual)[y]} />)}
               </tr>
             )}
+
+            {nestedGroups.map((g) => (
+              <React.Fragment key={g.id}>
+                {sectionRow(`Supplier value inside ${g.label.toLowerCase()}`, 'already counted above')}
+                {g.items.map(inputRow)}
+                {mode === 'spend' && (
+                  <tr>
+                    <td className="sheet-label">Makers' margin & other in {g.label.toLowerCase()} (price less the items above)</td>
+                    {years.map((_, y) => <Cell key={y} value={g.residual[y]} growth={growthOf(g.residual)[y]} />)}
+                  </tr>
+                )}
+              </React.Fragment>
+            ))}
 
             {sectionRow('Operating spend', 'not capex')}
             {spend.inputs.filter((i) => i.group === 'opex').map(inputRow)}

@@ -77,7 +77,7 @@ const STOCK_NODES = new Set([
   'hbm_stacks', 'dram_server', 'ssd_datacenter',
   'advanced_wafers', 'abf_substrate',
   'cpu_server', 'dpu_nic', 'switch_asics',
-  'optical_transceivers', 'infiniband_cables',
+  'optical_transceivers', 'optical_lasers', 'infiniband_cables',
   'rack_pdu', 'transformers_lpt', 'backup_power',
   'datacenter_mw'
 ]);
@@ -131,6 +131,7 @@ const SUPPLY_CATEGORY_MAP = {
   dpu_nic: 'foundry',
   switch_asics: 'foundry',
   optical_transceivers: 'datacenter',
+  optical_lasers: 'foundry',
   infiniband_cables: 'datacenter'
 };
 
@@ -175,9 +176,14 @@ const INFRASTRUCTURE_NODES = new Set([
  *    consumable. The installed base sets the leading-edge wafer ceiling (see
  *    SHARED_SUPPLY_POOLS.leadingEdge), so EUV limits wafer supply, not each
  *    month's accelerator output directly.
+ *  - optical_lasers: a laser shortfall shows up as price, allocation and a
+ *    shift to designs that use fewer lasers (CW + silicon photonics, copper
+ *    for short links), not as fewer accelerators deployed.
  * They are also left out of the bottleneck ranking.
  */
-const NON_GATING_NODES = new Set(['hybrid_bonding', 'euv_tools']);
+const NON_GATING_NODES = new Set(['hybrid_bonding', 'euv_tools', 'optical_lasers']);
+// Non-gating nodes whose demand is per accelerator bought
+const NON_GATING_CHIP_NODES = new Set(['hybrid_bonding', 'optical_lasers']);
 
 /**
  * Where each node binds in the three-stage build:
@@ -189,7 +195,7 @@ const NON_GATING_NODES = new Set(['hybrid_bonding', 'euv_tools']);
  */
 // Per-accelerator content that scales with accelerator size (kW)
 const SIZE_SCALED_NODES = new Set([
-  'server_assembly', 'rack_pdu', 'dpu_nic', 'switch_asics', 'optical_transceivers', 'infiniband_cables'
+  'server_assembly', 'rack_pdu', 'dpu_nic', 'switch_asics', 'optical_transceivers', 'optical_lasers', 'infiniband_cables'
 ]);
 const CHIP_SIDE_NODES = new Set([
   'hbm_stacks', 'dram_server', 'ssd_datacenter', 'cowos_capacity', 'abf_substrate',
@@ -829,6 +835,7 @@ export function buildIntensityMap() {
   map['dpu_nic'] = resolveAssumptionValue(NODE_MAP.get('dpu_nic')?.inputIntensity, 1);
   map['switch_asics'] = resolveAssumptionValue(NODE_MAP.get('switch_asics')?.inputIntensity, 0.125);
   map['optical_transceivers'] = resolveAssumptionValue(NODE_MAP.get('optical_transceivers')?.inputIntensity, 1);
+  map['optical_lasers'] = resolveAssumptionValue(NODE_MAP.get('optical_lasers')?.inputIntensity, 1);
   map['infiniband_cables'] = resolveAssumptionValue(NODE_MAP.get('infiniband_cables')?.inputIntensity, 4);
 
   // EUV tools are capital equipment, not a per-accelerator input: their demand
@@ -2078,7 +2085,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
       let planDemand = 0;
       let actualConsumption = 0;
-      if (CHIP_SIDE_NODES.has(node.id) || node.id === 'hybrid_bonding') {
+      if (CHIP_SIDE_NODES.has(node.id) || NON_GATING_CHIP_NODES.has(node.id)) {
         const intensity = monthIntensity[node.id] || 0;
         const edgeNeed = edgeDemand[node.id] || 0;
         planDemand = desiredUnits * intensity + edgeNeed;

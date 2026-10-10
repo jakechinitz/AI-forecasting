@@ -147,7 +147,7 @@ function buildSheet(annual, tiers, tierMeta, gates, spend) {
         ]),
         { label: 'TOTAL CAPEX (all inputs)', unit: '$B', values: spend.totals.capex.spendB, f: fmt.usd, bold: true },
         { label: 'Capex growth', unit: '%', values: spend.totals.capex.growth, f: fmt.pct },
-        ...spend.inputs.filter((i) => i.group === 'embedded').map((i) => ({ label: `Inside accelerators: ${i.label}`, unit: '$B', values: i.spendB, f: fmt.usd })),
+        ...spend.inputs.filter((i) => i.group === 'embedded').map((i) => ({ label: `Inside ${i.within ? (spend.inputs.find((x) => x.id === i.within)?.label || i.within).toLowerCase() : 'accelerators'}: ${i.label}`, unit: '$B', values: i.spendB, f: fmt.usd })),
         ...spend.inputs.filter((i) => i.group === 'opex').map((i) => ({ label: `Opex: ${i.label}`, unit: '$B', values: i.spendB, f: fmt.usd }))
       ]
     }] : []),

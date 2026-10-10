@@ -8,8 +8,9 @@
  *           scarcity pass-through (1 + passThrough × (node price index − 1))
  *
  * Groups: compute, network (paid at purchase), facility, power (paid over
- * construction), embedded (supplier value inside accelerator prices — shown,
- * never added to totals), opex (operating spend, not capex).
+ * construction), embedded (supplier value inside accelerator prices, or inside
+ * another input's price when `within` names it — shown, never added to
+ * totals), opex (operating spend, not capex).
  */
 
 export const CAPEX_GROUPS = ['compute', 'network', 'facility', 'power'];
@@ -157,13 +158,14 @@ export function createCostModel(costCfg, { months, rateAt, defaults }) {
         p.push(vv > 0 ? ss / vv : null);
       }
       const growth = s.map((x, k) => (k === 0 || !(s[k - 1] > 0) ? null : x / s[k - 1] - 1));
-      return { id: i.id, label: i.label, group: i.group, unit: i.unit, source: i.source, spendB: s, volume: v, avgPrice: p, growth };
+      return { id: i.id, label: i.label, group: i.group, within: i.within || null, unit: i.unit, source: i.source, spendB: s, volume: v, avgPrice: p, growth };
     });
-    const sumGroup = (groups) => {
+    const sumRows = (sel) => {
       const out = [];
-      for (let y = 0; y < yearsCount; y++) out.push(rows.filter((r) => groups.includes(r.group)).reduce((a, r) => a + r.spendB[y], 0));
+      for (let y = 0; y < yearsCount; y++) out.push(sel.reduce((a, r) => a + r.spendB[y], 0));
       return out;
     };
+    const sumGroup = (groups) => sumRows(rows.filter((r) => groups.includes(r.group)));
     const withGrowth = (arr) => ({ spendB: arr, growth: arr.map((x, k) => (k === 0 || !(arr[k - 1] > 0) ? null : x / arr[k - 1] - 1)) });
     return {
       inputs: rows,
@@ -175,7 +177,8 @@ export function createCostModel(costCfg, { months, rateAt, defaults }) {
         chips: withGrowth(sumGroup(CHIP_GROUPS)),
         facilities: withGrowth(sumGroup(FACILITY_GROUPS)),
         capex: withGrowth(sumGroup(CAPEX_GROUPS)),
-        embedded: withGrowth(sumGroup(['embedded'])),
+        // Value inside the accelerator price only (items with `within` sit inside another input)
+        embedded: withGrowth(sumRows(rows.filter((r) => r.group === 'embedded' && !r.within))),
         opex: withGrowth(sumGroup(['opex']))
       }
     };

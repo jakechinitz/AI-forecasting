@@ -16,6 +16,7 @@ function growthLimitText(node) {
   if (industry) return `Demand-driven; capped at ${Math.round((industry.aiMaxShare ?? 1) * 100)}% of industry output (${industry.label}).`;
   if (node.maxAnnualExpansion != null) return `Demand-driven; physical ramp limit of ${Math.round(node.maxAnnualExpansion * 100)}%/yr.`;
   if (node.id === 'hybrid_bonding') return 'Demand-driven. Non-gating: short bonding capacity falls back to CoWoS-only packaging.';
+  if (node.id === 'optical_lasers') return 'Demand-driven. Non-gating: a laser shortfall shows up as price and allocation, and shifts designs to fewer lasers (CW + silicon photonics, copper).';
   return 'Demand-driven (shortage × elasticity and lead-time forecasts); no growth cap.';
 }
 
