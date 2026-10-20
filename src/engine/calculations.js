@@ -1133,6 +1133,7 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
   const financing = createFinancingModel(financingAssumptions, {
     startYear: GLOBAL_PARAMS.startYear,
     pue,
+    openingVintages: FLEET_ANCHOR.vintages || [],
     defaults: FINANCING_ASSUMPTIONS_BASE
   });
   // Same (sanitized) compute life drives retirements and depreciation

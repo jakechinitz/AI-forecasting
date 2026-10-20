@@ -27,6 +27,14 @@
  *     at the tier's cost of debt. The shortfall is split into unfunded capex
  *     (kept at zero by the funding gate) and an operating deficit (cash
  *     obligations above operating cash flow, which capex cannot fix).
+ *  3. Returns use the capex actually spent: D&A runs on each year's capex
+ *     (compute over computeLifeYears, facilities over facilityLifeYears, from
+ *     the year after it is spent), ROIC is NOPAT over opening net invested
+ *     capital (including construction in progress and chips not yet
+ *     energized), and each build year's GW gets its own lifetime cash flows
+ *     (vintages: IRR, average ROIC, payback). The Excel divided the fleet's
+ *     EBIT per GW by new-build capex per GW, mixing a fleet average with a
+ *     single year's build.
  */
 
 const KWH_PER_GW_YEAR = 8.76e9;
@@ -53,8 +61,12 @@ const SCALAR_BOUNDS = {
   variableCostPctOfRevenue: [0, 1], idlePowerShare: [0, 1],
   computeLifeYears: [1, 50], facilityLifeYears: [1, 100],
   scarcityElasticity: [0, Infinity], maxScarcityPremium: [1, Infinity],
-  electricityPricePerKwh: [0, Infinity], electricityPriceGrowth: [-0.5, 1], otherOpexPerGwYr: [0, Infinity]
+  electricityPricePerKwh: [0, Infinity], electricityPriceGrowth: [-0.5, 1], otherOpexPerGwYr: [0, Infinity],
+  legacyCapexPerGw: [0, Infinity]
 };
+
+// Compute share of capex for fleet built before the model starts
+const LEGACY_COMPUTE_SHARE = 0.65;
 
 /**
  * Coerce user/LLM-edited financing inputs into a well-formed structure, filling
@@ -126,7 +138,7 @@ export function sanitizeFinancing(fin = {}, defaults = {}) {
   };
 }
 
-export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, defaults }) {
+export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, defaults, openingVintages = [] }) {
   const fin = sanitizeFinancing(rawFin, defaults || rawFin);
   const scalars = fin.scalars;
   const tiers = fin.tiers;
@@ -166,6 +178,30 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
   // the first year takes the engine's opening ratio.
   let lastScarcityRatio = null;
 
+  // Capex layers for D&A and net invested capital: { from (first year
+  // depreciated), compute, facility }. The opening fleet is costed at
+  // legacyCapexPerGw by vintage year.
+  const computeLife = scalars.computeLifeYears;
+  const facilityLife = scalars.facilityLifeYears;
+  const capexLayers = [];
+  const legacyCapexPerGw = scalars.legacyCapexPerGw ?? 32;
+  openingVintages.forEach((v) => {
+    const cost = Math.max(0, v.gw || 0) * legacyCapexPerGw;
+    capexLayers.push({ from: v.year + 1, compute: cost * LEGACY_COMPUTE_SHARE, facility: cost * (1 - LEGACY_COMPUTE_SHARE) });
+  });
+  const depIn = (layer, year) => {
+    const k = year - layer.from;
+    if (k < 0) return 0;
+    return (k < computeLife ? layer.compute / computeLife : 0) + (k < facilityLife ? layer.facility / facilityLife : 0);
+  };
+  const daIn = (year) => capexLayers.reduce((s, l) => s + depIn(l, year), 0);
+  // Net invested capital at the start of the first model year
+  let nicOpen = capexLayers.reduce((s, l) => {
+    let dep = 0;
+    for (let y = l.from; y < firstModelYear; y++) dep += depIn(l, y);
+    return s + l.compute + l.facility - dep;
+  }, 0);
+
   const annual = [];
   const tierRows = Object.fromEntries(tiers.map((t) => [t.id, []]));
   let current = null;
@@ -173,7 +209,7 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
   // Nominal $/kWh in a calendar year
   const electricityPriceIn = (year) => scalars.electricityPricePerKwh * Math.pow(1 + (scalars.electricityPriceGrowth || 0), Math.max(0, year - firstModelYear));
 
-  function unitEconomics(year, ctx) {
+  function unitEconomics(year, ctx, fleetDA) {
     const util = pathValue('utilization', year);
     // New-build capex per GW IT and its compute share, from the cost model
     const capexPerGw = Math.max(0, ctx.capexPerGw || 0);
@@ -193,8 +229,8 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
     const energyPerGw = KWH_PER_GW_YEAR * pue * (scalars.idlePowerShare + (1 - scalars.idlePowerShare) * util) * electricityPriceIn(year) / 1e9;
     const variablePerGw = realizedRevPerGw * scalars.variableCostPctOfRevenue;
     const ebitdaPerGw = realizedRevPerGw - variablePerGw - energyPerGw - scalars.otherOpexPerGwYr;
-    const daPerGw = capexPerGw * computeShare / scalars.computeLifeYears
-      + capexPerGw * (1 - computeShare) / scalars.facilityLifeYears;
+    // D&A on the capex actually spent (by year), spread over the opening fleet
+    const daPerGw = safeDiv(fleetDA, ctx.openingGW);
     const ebitPerGw = ebitdaPerGw - daPerGw;
     const taxPerGw = Math.max(0, ebitPerGw) * scalars.cashTaxRate;
     const ocfPerGw = ebitdaPerGw - taxPerGw;
@@ -206,8 +242,8 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
       realizedPctOfJensen: safeDiv(realizedRevPerGw, jensenRevPerGw),
       energyPerGw, variablePerGw, otherOpexPerGw: scalars.otherOpexPerGwYr,
       ebitdaPerGw, daPerGw, ebitPerGw, taxPerGw, ocfPerGw,
-      paybackYears: ocfPerGw > 0 ? capexPerGw / ocfPerGw : null,
-      roic: safeDiv(ebitPerGw, capexPerGw),
+      // After-tax return on opening net invested capital
+      roic: safeDiv((ebitPerGw - taxPerGw) * ctx.openingGW, nicOpen, null),
       gStar: safeDiv(ocfPerGw, capexPerGw)
     };
   }
@@ -221,7 +257,8 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
       // Base-year fleet split by tier allocation shares
       tierState.forEach((ts, i) => { ts.gw = ctx.openingGW * tiers[i].share; });
     }
-    const econ = unitEconomics(year, ctx);
+    const fleetDA = daIn(year);
+    const econ = unitEconomics(year, ctx, fleetDA);
     const openingGW = ctx.openingGW;
     const totalTierGw = tierState.reduce((s, t) => s + t.gw, 0) || 1;
 
@@ -265,7 +302,7 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
     const fundableCapex = tierPlans.reduce((s, p) => s + p.maxFundable, 0);
 
     current = {
-      year, ctx, econ, openingGW, aiRevenue, aiEbitdaTotal, aiOcfTotal,
+      year, ctx, econ, openingGW, fleetDA, nicOpen, aiRevenue, aiEbitdaTotal, aiOcfTotal,
       debtCapacityTotal, equityCapacityTotal, tierPlans, fundableCapex,
       capexYTD: 0, computeCapex: 0, facilityCapex: 0,
       deployedGW: 0, replacementGW: 0, retiredGW: 0, purchasedGW: 0, deferredByFundingGW: 0,
@@ -323,6 +360,10 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
     } else {
       alloc = tiers.map((t) => t.share * C);
     }
+
+    // This year's capex starts depreciating next year
+    capexLayers.push({ from: c.year + 1, compute: c.computeCapex, facility: c.facilityCapex });
+    nicOpen = c.nicOpen + C - c.fleetDA;
 
     const openingTierGw = tierState.map((ts) => ts.gw);
     const openingTotalGw = openingTierGw.reduce((s, v) => s + v, 0) || 1;
@@ -423,6 +464,10 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
       aiRevenue: c.aiRevenue,
       aiEbitda: c.aiEbitdaTotal,
       aiOcf: c.aiOcfTotal,
+      fleetDA: c.fleetDA,
+      aiEbit: c.aiEbitdaTotal - c.fleetDA,
+      netInvestedCapitalOpening: c.nicOpen,
+      netInvestedCapitalYearEnd: nicOpen,
       buildGrowth: annual.length ? safeDiv(c.deployedGW, annual[annual.length - 1].deployedGW, 1) - 1 : null,
       purchasedGW: c.purchasedGW,
       // Capex
@@ -465,6 +510,7 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
     const sys = annual.find((r) => r.selfFunding && r.totalCapex > 0);
     selfFundingYear.system = sys ? sys.year : null;
     return {
+      vintages: vintageReturns(),
       applyConstraint,
       marketCapacityMultiplier: { debt: mult.debt ?? 1, equity: mult.equity ?? 1 },
       years: annual,
@@ -474,10 +520,69 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
     };
   }
 
+  /**
+   * Lifetime returns of each build year's GW. A GW energized in year v uses
+   * that year's frontier tokens/kWh and new-build capex per GW, earns in the
+   * opening fleets of v+1 … v+computeLife at each year's price, utilization,
+   * sold share and costs, and hands back its facilities at book value when the
+   * chips retire. Vintages whose life runs past the horizon are partial.
+   */
+  function vintageReturns() {
+    const byYear = new Map(annual.map((r) => [r.year, r]));
+    return annual.map((v) => {
+      const capex = v.capexPerGw;
+      const cs = v.computeShare;
+      const da = capex * cs / computeLife + capex * (1 - cs) / facilityLife;
+      const flows = [-capex];
+      let revenue = 0; let nopat = 0; let nicSum = 0; let firstRev = null; let payback = null; let cum = -capex;
+      let complete = true;
+      for (let k = 1; k <= computeLife; k++) {
+        const r = byYear.get(v.year + k);
+        if (!r) { complete = false; break; }
+        const rev = v.frontierTokPerKwhM * 1e6 * KWH_PER_GW_YEAR * r.effPrice / 1e15
+          * r.util * r.inferenceShare * r.outputSoldShare + scalars.otherRevenuePerGwYr;
+        const ebitda = rev * (1 - scalars.variableCostPctOfRevenue) - r.energyPerGw - r.otherOpexPerGw;
+        const ebit = ebitda - da;
+        const tax = Math.max(0, ebit) * scalars.cashTaxRate;
+        const residual = k === computeLife ? capex * (1 - cs) * (1 - computeLife / facilityLife) : 0;
+        if (firstRev == null) firstRev = rev;
+        revenue += rev;
+        nopat += ebit - tax;
+        nicSum += capex - da * (k - 1);
+        const before = cum;
+        cum += ebitda - tax;
+        if (payback == null && cum >= 0) payback = k - 1 + safeDiv(-before, ebitda - tax, 1);
+        flows.push(ebitda - tax + residual);
+      }
+      return {
+        year: v.year, gw: v.deployedGW, capexPerGw: capex, tokPerKwhM: v.frontierTokPerKwhM,
+        complete,
+        firstYearRevPerGw: firstRev,
+        lifetimeRevPerGw: complete ? revenue : null,
+        irr: complete ? irr(flows) : null,
+        avgRoic: complete ? safeDiv(nopat, nicSum, null) : null,
+        // Infinity: the life completes without paying back
+        paybackYears: complete ? (payback ?? Infinity) : null
+      };
+    });
+  }
+
   // This year's fundable capex ($B), Infinity when the constraint is off
   const fundableThisYear = () => (current && applyConstraint ? current.fundableCapex : Infinity);
 
   return { scalars, pathValue, startYear, allowance, fundableThisYear, recordMonth, closeYear, finalize, electricityPriceIn };
+}
+
+/** Internal rate of return of yearly cash flows (bisection); null if none in range */
+function irr(flows) {
+  const npv = (r) => flows.reduce((s, f, t) => s + f / Math.pow(1 + r, t), 0);
+  let lo = -0.99; let hi = 10;
+  if (npv(lo) * npv(hi) > 0) return null;
+  for (let i = 0; i < 200; i++) {
+    const mid = (lo + hi) / 2;
+    if (npv(lo) * npv(mid) <= 0) hi = mid; else lo = mid;
+  }
+  return (lo + hi) / 2;
 }
 
 /** Scarcity price premium: 1 + elasticity × unmet-demand ratio, capped */

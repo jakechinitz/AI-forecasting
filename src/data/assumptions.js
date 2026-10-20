@@ -1039,7 +1039,8 @@ export const FINANCING_ASSUMPTIONS_BASE = {
     idlePowerShare: 0.50,          // power draw at zero utilization, share of peak
     scarcityElasticity: 0.50,      // price premium per unit of unmet-demand ratio (prior year)
     maxScarcityPremium: 2.0,
-    otherRevenuePerGwYr: 0         // $B, GPU rental / fine-tuning not captured as tokens
+    otherRevenuePerGwYr: 0,        // $B, GPU rental / fine-tuning not captured as tokens
+    legacyCapexPerGw: 32           // $B per GW IT for the pre-2026 fleet (2023-25 AI capex ≈ $770B for ~24 GW; sets opening D&A and invested capital)
   },
 
   // Multipliers on all capital-markets channel capacity (scenario levers)
