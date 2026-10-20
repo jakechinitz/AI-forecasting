@@ -17,6 +17,7 @@ const fmt = {
   num1: (v) => (v == null ? '' : v.toFixed(1)),
   num2: (v) => (v == null ? '' : v.toFixed(2)),
   yrs: (v) => (v == null || !Number.isFinite(v) ? 'n/a' : v.toFixed(1)),
+  payback: (v) => (v == null ? '' : Number.isFinite(v) ? v.toFixed(1) : 'never'),
   text: (v) => (v == null ? '' : String(v)),
   flag: (v) => (v ? 'Yes' : 'No')
 };
@@ -37,8 +38,10 @@ const SPEND_GROUP_TITLES = {
   embedded: 'Supplier value inside the ex-HBM accelerator price (not added to totals)', opex: 'Operating spend (not capex)'
 };
 
-function buildSheet(annual, tiers, tierMeta, gates, spend) {
+function buildSheet(annual, tiers, tierMeta, gates, spend, vintages) {
   const col = (key) => annual.map((r) => r[key]);
+  const vintageByYear = new Map((vintages || []).map((v) => [v.year, v]));
+  const vcol = (key) => annual.map((r) => vintageByYear.get(r.year)?.[key] ?? null);
   const tierCol = (id, key) => (tiers[id] || []).map((r) => r[key]);
   const gateNames = Object.keys(gates || {}).sort((a, b) => {
     const ia = GATE_ORDER.indexOf(a); const ib = GATE_ORDER.indexOf(b);
@@ -117,16 +120,31 @@ function buildSheet(annual, tiers, tierMeta, gates, spend) {
         { label: 'Variable cash costs/GW', unit: '$B/GW', values: col('variablePerGw'), f: fmt.usd2 },
         { label: 'Other cash opex/GW', unit: '$B/GW', values: col('otherOpexPerGw'), f: fmt.usd2 },
         { label: 'EBITDA/GW', unit: '$B/GW', values: col('ebitdaPerGw'), f: fmt.usd2 },
-        { label: 'D&A/GW', unit: '$B/GW', values: col('daPerGw'), f: fmt.usd2 },
+        { label: 'D&A/GW (on capex actually spent, by year)', unit: '$B/GW', values: col('daPerGw'), f: fmt.usd2 },
         { label: 'EBIT/GW', unit: '$B/GW', values: col('ebitPerGw'), f: fmt.usd2 },
         { label: 'OCF/GW', unit: '$B/GW', values: col('ocfPerGw'), f: fmt.usd2, bold: true },
         { label: 'Capex per GW IT, new build (bottom-up, start of year)', unit: '$B/GW', values: col('capexPerGw'), f: fmt.usd1 },
-        { label: 'Payback on new GW', unit: 'years', values: col('paybackYears'), f: fmt.yrs },
-        { label: 'Unlevered pre-tax ROIC', unit: '%', values: col('roic'), f: fmt.pct1 },
         { label: 'Self-fundable growth g* (OCF/GW ÷ capex/GW)', unit: '%', values: col('gStar'), f: fmt.pct1 },
         { label: 'AI compute revenue', unit: '$B', values: col('aiRevenue'), f: fmt.usd, bold: true },
         { label: 'AI EBITDA', unit: '$B', values: col('aiEbitda'), f: fmt.usd },
-        { label: 'AI OCF', unit: '$B', values: col('aiOcf'), f: fmt.usd }
+        { label: 'AI OCF', unit: '$B', values: col('aiOcf'), f: fmt.usd },
+        { label: 'AI D&A (capex by year spent)', unit: '$B', values: col('fleetDA'), f: fmt.usd },
+        { label: 'AI EBIT', unit: '$B', values: col('aiEbit'), f: fmt.usd },
+        { label: 'Net invested capital, opening (incl. construction and chips not yet energized)', unit: '$B', values: col('netInvestedCapitalOpening'), f: fmt.usd },
+        { label: 'Fleet ROIC (after tax, on opening net invested capital)', unit: '%', values: col('roic'), f: fmt.pct1, bold: true }
+      ]
+    },
+    {
+      title: 'Returns by build year (GW energized that year, over its chip life; blank if the life runs past 2045)',
+      rows: [
+        { label: 'GW energized', unit: 'GW', values: vcol('gw'), f: fmt.gw },
+        { label: 'Capex per GW (new build)', unit: '$B/GW', values: vcol('capexPerGw'), f: fmt.usd1 },
+        { label: 'Tokens/kWh of this vintage', unit: 'M tok/kWh', values: vcol('tokPerKwhM'), f: fmt.num1 },
+        { label: 'Revenue/GW in its first full year', unit: '$B/GW', values: vcol('firstYearRevPerGw'), f: fmt.usd2 },
+        { label: 'Lifetime revenue/GW', unit: '$B/GW', values: vcol('lifetimeRevPerGw'), f: fmt.usd1 },
+        { label: 'IRR (after tax, facilities returned at book value)', unit: '%', values: vcol('irr'), f: fmt.pct1, bold: true },
+        { label: 'Average ROIC on net invested capital (after tax)', unit: '%', values: vcol('avgRoic'), f: fmt.pct1 },
+        { label: 'Payback on cash flow (excludes facility value left when the chips retire)', unit: 'years', values: vcol('paybackYears'), f: fmt.payback }
       ]
     },
     {
@@ -222,7 +240,7 @@ function OutputsTab({ results, scenario }) {
   const fin = results?.financing;
 
   const sections = useMemo(
-    () => (fin ? buildSheet(annual, fin.tiers, fin.tierMeta, results?.gates, results?.spend) : []),
+    () => (fin ? buildSheet(annual, fin.tiers, fin.tierMeta, results?.gates, results?.spend, fin.vintages) : []),
     [annual, fin, results]
   );
 

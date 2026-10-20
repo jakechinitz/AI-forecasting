@@ -23,7 +23,8 @@ const SCALAR_FIELDS = [
   { key: 'idlePowerShare', label: 'Power draw at zero utilization (% of peak)', kind: 'pct' },
   { key: 'scarcityElasticity', label: 'Scarcity price elasticity', kind: 'num', step: 0.05, help: 'Premium per unit of prior-year unmet-demand ratio' },
   { key: 'maxScarcityPremium', label: 'Max scarcity premium (x base price)', kind: 'num', step: 0.1 },
-  { key: 'otherRevenuePerGwYr', label: 'Non-token revenue per GW-yr ($B)', kind: 'num' }
+  { key: 'otherRevenuePerGwYr', label: 'Non-token revenue per GW-yr ($B)', kind: 'num' },
+  { key: 'legacyCapexPerGw', label: 'Cost of the pre-2026 fleet per GW ($B)', kind: 'num', help: 'Sets opening D&A and invested capital for fleet ROIC' }
 ];
 
 const TIER_FIELDS = [
