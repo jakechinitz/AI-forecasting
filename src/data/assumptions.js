@@ -215,15 +215,17 @@ const WORKLOAD_BASE_DEFAULT = {
     frontier: 3,          // frontier-class runs completing per month, ex-China labs
     midtier: 300          // post-training, RL, fine-tuning, research runs
   },
-  // Accelerator-hours per run (not tokens). Sized so training + research is
-  // ~38% of the fleet at the start, matching the Excel funding model (42% in
-  // 2025 → 38% in 2026). A 2026 frontier run is ~150K accelerators × 4-6 months.
-  // Calibration scales training and inference together, so this baseline sets
-  // the training share directly: 2.4e9 accelerator-hours/month vs 500T tokens
-  // at 30 tok/s ≈ 38% training at the start.
+  // Accelerator-hours per run (not tokens), covering training, research and
+  // labs' internal model use. Sized so this R&D block is ~50% of the fleet at
+  // the start. Anthropic's S-1 (Oct-26): R&D (model development, research,
+  // internal usage) was $9.7B vs $2.4B cost of revenue in H1-26, i.e. ~3/4 of
+  // its compute, up from ~60% in 2025; xAI and Meta are mostly training,
+  // Google and Microsoft mostly serving. Calibration scales training and
+  // inference together, so this baseline sets the share directly: ~3.9e9
+  // accelerator-hours/month vs 500T tokens at 30 tok/s ≈ 50% at the start.
   trainingComputePerRun: {
-    frontier: 550e6,
-    midtier: 2.5e6
+    frontier: 900e6,
+    midtier: 4.1e6
   }
 };
 
@@ -322,8 +324,12 @@ const buildDemandBlocks = () => {
   blocks.year2.inferenceGrowth.consumer.value = 2.54;
   blocks.year2.inferenceGrowth.enterprise.value = 3.43;
   blocks.year2.inferenceGrowth.agentic.value = 6.08;
-  blocks.year2.trainingGrowth.frontier.value = 1.50;
-  blocks.year2.trainingGrowth.midtier.value = 1.20;
+  // Training + R&D grow about as fast as net inference compute through 2030,
+  // holding ~half the fleet (S-1: Anthropic's R&D compute grew ~5x y/y in
+  // H1-26 and rose to ~3/4 of its compute; Epoch: frontier training compute
+  // ~4-5x/yr). After 2030 inference takes a growing share.
+  blocks.year2.trainingGrowth.frontier.value = 1.83;
+  blocks.year2.trainingGrowth.midtier.value = 1.49;
   // Edge offload Year 2: Apple Intelligence / Gemini Nano adoption growing
   blocks.year2.edgeOffload.consumer.value = 0.05;
   blocks.year2.edgeOffload.enterprise.value = 0.01;
@@ -333,8 +339,8 @@ const buildDemandBlocks = () => {
   blocks.year3.inferenceGrowth.consumer.value = 1.85;
   blocks.year3.inferenceGrowth.enterprise.value = 2.45;
   blocks.year3.inferenceGrowth.agentic.value = 3.95;
-  blocks.year3.trainingGrowth.frontier.value = 1.3;
-  blocks.year3.trainingGrowth.midtier.value = 1.2;
+  blocks.year3.trainingGrowth.frontier.value = 1.60;
+  blocks.year3.trainingGrowth.midtier.value = 1.49;
   // Edge offload Year 3: distilled models becoming mainstream on flagships
   blocks.year3.edgeOffload.consumer.value = 0.12;
   blocks.year3.edgeOffload.enterprise.value = 0.03;
@@ -344,8 +350,8 @@ const buildDemandBlocks = () => {
   blocks.year4.inferenceGrowth.consumer.value = 1.26;
   blocks.year4.inferenceGrowth.enterprise.value = 1.79;
   blocks.year4.inferenceGrowth.agentic.value = 2.86;
-  blocks.year4.trainingGrowth.frontier.value = 1.0;
-  blocks.year4.trainingGrowth.midtier.value = 0.9;
+  blocks.year4.trainingGrowth.frontier.value = 1.26;
+  blocks.year4.trainingGrowth.midtier.value = 1.15;
   // Edge offload Year 4: mid-range phones get capable NPUs; enterprise edge pilots
   blocks.year4.edgeOffload.consumer.value = 0.22;
   blocks.year4.edgeOffload.enterprise.value = 0.08;
@@ -355,8 +361,8 @@ const buildDemandBlocks = () => {
   blocks.year5.inferenceGrowth.consumer.value = 0.92;
   blocks.year5.inferenceGrowth.enterprise.value = 1.4;
   blocks.year5.inferenceGrowth.agentic.value = 2.12;
-  blocks.year5.trainingGrowth.frontier.value = 0.8;
-  blocks.year5.trainingGrowth.midtier.value = 0.7;
+  blocks.year5.trainingGrowth.frontier.value = 1.22;
+  blocks.year5.trainingGrowth.midtier.value = 1.10;
   // Edge offload Year 5: most consumer queries handled locally for simple tasks
   blocks.year5.edgeOffload.consumer.value = 0.35;
   blocks.year5.edgeOffload.enterprise.value = 0.15;
@@ -1005,6 +1011,12 @@ const hardwareGainForYear = (year) => {
 // price per such token falls with hardware cost per token, so revenue per GW
 // holds roughly flat, like GPU rental rates and capex per kW.
 const TOKEN_PRICE_PASS_THROUGH = 1.0;
+// Price per unit of compute holds up while demand outruns supply (Anthropic
+// S-1: revenue per $ of compute up ~3.7x y/y; cost per task cut 25-40% per
+// release "while preserving our margins"). Once supply catches up, the
+// premium over the cost-based path fades: an extra decline in these years
+// brings the price back to within ~20% of where cost alone would put it.
+const PRICE_NORMALIZATION = { fromYear: 2031, toYear: 2033, extraChange: -0.12 };
 
 const buildPath = (explicit, extend) => {
   const out = {};
@@ -1022,7 +1034,10 @@ export const FINANCING_ASSUMPTIONS_BASE = {
 
   // Base year (end of FLEET_ANCHOR year) anchors
   baseYear: {
-    blendedPricePerMTokens: 0.55   // $/M tokens, back-solved from ~$65B 2025 AI compute revenue
+    // $/M tokens. Re-anchored Oct-26 so 2026 AI revenue is ~$200B with ~half of
+    // compute on training and R&D (Anthropic S-1: ~$55B of 2026 revenue,
+    // roughly a quarter to a third of the total)
+    blendedPricePerMTokens: 0.68
   },
 
   // Capex is built bottom-up from COST_ASSUMPTIONS: chips are paid when
@@ -1048,14 +1063,23 @@ export const FINANCING_ASSUMPTIONS_BASE = {
 
   paths: {
     // Blended $/M token price change (base path, before scarcity premium).
-    // 2026-30 from observed/forecast pricing; after that, tied to hardware
-    // cost per token at TOKEN_PRICE_PASS_THROUGH (≈ −19%/yr in the early
-    // 2030s, −14% late 2030s, −10% in the 2040s).
+    // 2026-30 from observed pricing and the S-1 (price per unit of compute
+    // falls slowly while capacity is short); after that, tied to hardware cost
+    // per token at TOKEN_PRICE_PASS_THROUGH (≈ −19%/yr in the early 2030s,
+    // −14% late 2030s, −10% in the 2040s), plus PRICE_NORMALIZATION in
+    // 2031-33 as the shortage premium fades.
     priceChange: buildPath(
       // 2026: effective token cost down only ~6-20% YTD (YipitData, OpenRouter,
-      // frontier index) with H100 rental up; 2027 steeper as supply eases
-      { 2026: -0.20, 2027: -0.25, 2028: -0.25, 2029: -0.20, 2030: -0.20 },
-      (year) => +(Math.pow(hardwareGainForYear(year), -TOKEN_PRICE_PASS_THROUGH) - 1).toFixed(3)
+      // frontier index) with H100 rental up. 2027-29: committed compute keeps
+      // capacity short (S-1: demand "outstrips supply for the foreseeable
+      // future"), so price per unit of compute falls ~10%/yr; 2030 steeper.
+      { 2026: -0.20, 2027: -0.10, 2028: -0.10, 2029: -0.10, 2030: -0.15 },
+      (year) => {
+        const costBased = Math.pow(hardwareGainForYear(year), -TOKEN_PRICE_PASS_THROUGH);
+        const fade = year >= PRICE_NORMALIZATION.fromYear && year <= PRICE_NORMALIZATION.toYear
+          ? 1 + PRICE_NORMALIZATION.extraChange : 1;
+        return +(costBased * fade - 1).toFixed(3);
+      }
     ),
     // Effective utilization of the ENERGIZED fleet (MFU, idle, hoarded
     // capacity). Chips bought but not yet energized are tracked separately.
@@ -1111,9 +1135,9 @@ export const FINANCING_ASSUMPTIONS_BASE = {
     { id: 'bank', name: 'Bank loans / project finance', type: 'debt', capacity: 80, growth: 0.06, alloc: [0.3, 0.5, 0.2], note: 'AMZN $17.5B loan; DDTL facilities' },
     { id: 'spv', name: 'SPV / JV / lease financing', type: 'debt', capacity: 120, growth: 0.10, alloc: [0.6, 0.3, 0.1], note: 'Meta Hyperion-style off-balance-sheet' },
     { id: 'public_equity', name: 'Public equity follow-ons / ATM', type: 'equity', capacity: 100, growth: -1.0, alloc: [0.8, 0.2, 0], note: 'Hyperscalers done issuing after 2026 (Alphabet $84.75B Jun-2026)' },
-    { id: 'ipo_private', name: 'IPOs & private rounds', type: 'equity', capacity: 80, growth: -0.75, alloc: [0, 0.7, 0.3], note: 'Tail from lab/neocloud rounds only' },
+    { id: 'ipo_private', name: 'IPOs & private rounds', type: 'equity', capacity: 200, growth: -0.30, alloc: [0, 0.7, 0.3], note: 'Lab, neocloud and IPO equity: Anthropic alone raised $110B of preferred in H1-26 (S-1) and is listing; fades as labs self-fund' },
     { id: 'sovereign', name: 'Sovereign wealth', type: 'equity', capacity: 80, growth: -0.50, alloc: [0.1, 0.3, 0.6], note: 'MGX, PIF, QIA, Mubadala; tapering' },
-    { id: 'vendor', name: 'Strategic / vendor equity', type: 'equity', capacity: 40, growth: -0.50, alloc: [0.1, 0.6, 0.3], note: 'Circular financing flag (BIS)' }
+    { id: 'vendor', name: 'Strategic / vendor equity', type: 'equity', capacity: 80, growth: -0.15, alloc: [0.1, 0.6, 0.3], note: 'Circular financing flag (BIS). S-1: Broadcom $42B, Google $20B, Amazon $15B note facilities and AMD $5B equity for one lab, tied to compute deliveries' }
   ],
 
   source: 'AI_Capex_Funding_Model.xlsx (Sept 2026 calibration anchors)'
@@ -1145,7 +1169,7 @@ export const SCENARIOS = {
   base: {
     id: 'base',
     name: 'Base Case',
-    description: 'Measured token growth (~7x in Year 1, decelerating) with matching software efficiency (~3.8x in Year 1); after 2030 demand keeps responding to cheaper compute as in 2027-30 and algorithmic gains stay strong. Sourced physical pools that respond to demand within physical limits, and the Excel funding model.',
+    description: 'Measured token growth (~7x in Year 1, decelerating) with matching software efficiency (~3.8x in Year 1); after 2030 demand keeps responding to cheaper compute as in 2027-30 and algorithmic gains stay strong. Training and R&D hold ~half of compute through 2030 and price per unit of compute falls ~10%/yr in 2027-29 while capacity is short (Anthropic S-1). Sourced physical pools that respond to demand within physical limits, and the Excel funding model.',
     summary: { demand: 'Base', efficiency: 'Base', supply: 'Base' },
     overrides: {}
   },
@@ -1202,7 +1226,7 @@ export const SCENARIOS = {
     // Relative to base, so it stays meaningful as base token and efficiency
     // rates change: absolute token rates set when efficiency improved ~2x/yr
     // made compute demand collapse once efficiency was calibrated to ~5x/yr.
-    description: 'Adoption disappoints for five years: token growth multiples 25% below base (training 20% below), so compute demand grows ~+20%/yr instead of +40-55%. The opening shortage is mostly built out, capex falls ~30%/yr in 2027-28 (a telecom-2001-style hangover), then base growth resumes from the lower level.',
+    description: 'Adoption disappoints for five years: token growth multiples 25% below base (training 20% below), so compute demand grows ~+20%/yr instead of +40-55%. The opening shortage is mostly built out, capex falls ~25%/yr in 2027-28 (a telecom-2001-style hangover), then base growth resumes from the lower level.',
     summary: { demand: 'Base × 0.75 per year (Years 1-5)', efficiency: 'Base', supply: 'Base' },
     overrides: {
       scaling: {

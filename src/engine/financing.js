@@ -128,7 +128,7 @@ export function sanitizeFinancing(fin = {}, defaults = {}) {
     ...fin,
     applyFundingConstraint: fin.applyFundingConstraint !== false,
     baseYear: {
-      blendedPricePerMTokens: num(fin.baseYear?.blendedPricePerMTokens, d.baseYear?.blendedPricePerMTokens ?? 0.55, 0)
+      blendedPricePerMTokens: num(fin.baseYear?.blendedPricePerMTokens, d.baseYear?.blendedPricePerMTokens ?? 0.68, 0)
     },
     scalars, paths, tiers, channels,
     marketCapacityMultiplier: {
