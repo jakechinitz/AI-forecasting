@@ -24,7 +24,8 @@ const SCALAR_FIELDS = [
   { key: 'scarcityElasticity', label: 'Scarcity price elasticity', kind: 'num', step: 0.05, help: 'Premium per unit of prior-year unmet-demand ratio' },
   { key: 'maxScarcityPremium', label: 'Max scarcity premium (x base price)', kind: 'num', step: 0.1 },
   { key: 'otherRevenuePerGwYr', label: 'Non-token revenue per GW-yr ($B)', kind: 'num' },
-  { key: 'legacyCapexPerGw', label: 'Cost of the pre-2026 fleet per GW ($B)', kind: 'num', help: 'Sets opening D&A and invested capital for fleet ROIC' }
+  { key: 'legacyCapexPerGw', label: 'Cost of the pre-2026 fleet per GW ($B)', kind: 'num', help: 'Sets opening D&A and invested capital for fleet ROIC' },
+  { key: 'spillAbsorption', label: 'Spill-over absorption (× share)', kind: 'num', step: 0.05, help: 'How far builders with funding room expand beyond their share to take on a constrained builder’s projects' }
 ];
 
 const TIER_FIELDS = [

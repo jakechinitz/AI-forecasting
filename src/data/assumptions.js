@@ -1055,7 +1055,11 @@ export const FINANCING_ASSUMPTIONS_BASE = {
     scarcityElasticity: 0.50,      // price premium per unit of unmet-demand ratio (prior year)
     maxScarcityPremium: 2.0,
     otherRevenuePerGwYr: 0,        // $B, GPU rental / fine-tuning not captured as tokens
-    legacyCapexPerGw: 32           // $B per GW IT for the pre-2026 fleet (2023-25 AI capex ≈ $770B for ~24 GW; sets opening D&A and invested capital)
+    legacyCapexPerGw: 32,          // $B per GW IT for the pre-2026 fleet (2023-25 AI capex ≈ $770B for ~24 GW; sets opening D&A and invested capital)
+    // How far a builder with funding room expands beyond its share to pick up
+    // a constrained builder's projects (×share). Oct-26: hyperscalers came in
+    // below on capex while neocloud debt dried up, so take-over is partial.
+    spillAbsorption: 0.15
   },
 
   // Multipliers on all capital-markets channel capacity (scenario levers)
@@ -1106,12 +1110,18 @@ export const FINANCING_ASSUMPTIONS_BASE = {
     {
       // Oracle (~$50B), CoreWeave (~$30-35B), xAI (~$30B), other neoclouds and
       // third-party developers of leased AI shells; ~85-90% externally financed
-      // (DDTLs, project finance, ABS).
+      // in 2025-26 (DDTLs, project finance, ABS). Oct-26: debt markets have
+      // largely shut for neoclouds without non-AI revenue (CoreWeave CDS at
+      // distress levels) and Oracle capped new capital-markets funding at $20B
+      // for FY27-30, aiming to self-fund from FY29.
       id: 'B', name: 'Leveraged builders', note: 'Oracle, CoreWeave/Nebius/neoclouds, xAI, DC developers',
       share: 0.22, legacyOcf: 25, legacyOcfGrowth: 0.05, shareholderReturns: 5,
       cash: 40, minCash: 15, debt: 170, legacyEbitda: 40, legacyEbitdaGrowth: 0.05,
-      // Contracted-offtake project finance supports ~6x (CoreWeave runs above 6x)
-      maxExternalShareOfCapex: 0.88, costOfDebt: 0.09, maxDebtToEbitda: 6.0
+      // Contracted-offtake project finance supports ~6x (CoreWeave runs above
+      // 6x); outside money now capped at ~3/4 of capex, at wider spreads
+      maxExternalShareOfCapex: 0.75, costOfDebt: 0.10, maxDebtToEbitda: 6.0,
+      // 2026 was already financed at ~88% outside money; tighter from 2027
+      maxExternalShareSchedule: { 2026: 0.88, 2027: 0.75 }
     },
     {
       // Stargate UAE, Humain (PIF), G42, SoftBank, EU/Asia sovereign AI
@@ -1126,13 +1136,13 @@ export const FINANCING_ASSUMPTIONS_BASE = {
   // Capital-markets absorption capacity (AI-available, $B/yr). capacity = first
   // model year; compounds at growth thereafter. alloc = share to tiers A/B/C.
   channels: [
-    { id: 'us_ig', name: 'US investment-grade bonds', type: 'debt', capacity: 220, growth: 0.08, alloc: [0.8, 0.2, 0], note: 'Big-5 issued $121B in 2025; order-book coverage fell 5x → <2x Feb→Jul 2026' },
-    { id: 'exus_ig', name: 'Ex-US IG bonds (EUR/JPY/CHF)', type: 'debt', capacity: 50, growth: 0.10, alloc: [0.7, 0.3, 0], note: 'Reverse Yankee / Samurai' },
-    { id: 'private_credit', name: 'Private credit / direct lending', type: 'debt', capacity: 200, growth: 0.08, alloc: [0.3, 0.6, 0.1], note: 'Morgan Stanley: ~$800B of $1.5T gap through 2028' },
-    { id: 'abs', name: 'Data-center ABS / CMBS', type: 'debt', capacity: 35, growth: 0.10, alloc: [0.2, 0.7, 0.1], note: 'JPM $30-40B/yr' },
-    { id: 'hy', name: 'Leveraged loans / high yield', type: 'debt', capacity: 25, growth: 0.10, alloc: [0, 0.9, 0.1], note: '9-12.5% coupons' },
-    { id: 'converts', name: 'Convertibles', type: 'debt', capacity: 20, growth: 0.05, alloc: [0, 0.9, 0.1], note: 'CRWV converts at 1.75%' },
-    { id: 'bank', name: 'Bank loans / project finance', type: 'debt', capacity: 80, growth: 0.06, alloc: [0.3, 0.5, 0.2], note: 'AMZN $17.5B loan; DDTL facilities' },
+    { id: 'us_ig', name: 'US investment-grade bonds', type: 'debt', capacity: 220, growth: 0.08, alloc: [0.8, 0.1, 0], note: 'Big-5 issued $121B in 2025; order-book coverage fell 5x → <2x Feb→Jul 2026' },
+    { id: 'exus_ig', name: 'Ex-US IG bonds (EUR/JPY/CHF)', type: 'debt', capacity: 50, growth: 0.10, alloc: [0.7, 0.15, 0], note: 'Reverse Yankee / Samurai' },
+    { id: 'private_credit', name: 'Private credit / direct lending', type: 'debt', capacity: 200, growth: 0.08, alloc: [0.3, 0.36, 0.1], note: 'Morgan Stanley: ~$800B of $1.5T gap through 2028; leveraged-builder access cut ~40% (Oct-26 neocloud credit stress)' },
+    { id: 'abs', name: 'Data-center ABS / CMBS', type: 'debt', capacity: 25, growth: 0.10, alloc: [0.2, 0.7, 0.1], note: 'JPM $30-40B/yr' },
+    { id: 'hy', name: 'Leveraged loans / high yield', type: 'debt', capacity: 15, growth: 0.10, alloc: [0, 0.9, 0.1], note: '9-12.5% coupons; CoreWeave CDS at distress levels (Oct-26)' },
+    { id: 'converts', name: 'Convertibles', type: 'debt', capacity: 12, growth: 0.05, alloc: [0, 0.9, 0.1], note: 'CRWV converts at 1.75%' },
+    { id: 'bank', name: 'Bank loans / project finance', type: 'debt', capacity: 80, growth: 0.06, alloc: [0.3, 0.4, 0.2], note: 'AMZN $17.5B loan; DDTL facilities. Neocloud builds for Anthropic (Nscale $44.6B, Lambda $41.3B) depend on this financing' },
     { id: 'spv', name: 'SPV / JV / lease financing', type: 'debt', capacity: 120, growth: 0.10, alloc: [0.6, 0.3, 0.1], note: 'Meta Hyperion-style off-balance-sheet' },
     { id: 'public_equity', name: 'Public equity follow-ons / ATM', type: 'equity', capacity: 100, growth: -1.0, alloc: [0.8, 0.2, 0], note: 'Hyperscalers done issuing after 2026 (Alphabet $84.75B Jun-2026)' },
     { id: 'ipo_private', name: 'IPOs & private rounds', type: 'equity', capacity: 200, growth: -0.30, alloc: [0, 0.7, 0.3], note: 'Lab, neocloud and IPO equity: Anthropic alone raised $110B of preferred in H1-26 (S-1) and is listing; fades as labs self-fund' },
