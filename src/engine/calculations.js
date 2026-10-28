@@ -268,6 +268,12 @@ const CONSUMPTION_HEADROOM = 1.5;
 // Component order backlogs are paid down over this many months
 const BACKLOG_PAYDOWN_MONTHS_COMPONENTS = 6;
 
+function avgOver(arr, from, to) {
+  let s = 0; let n = 0;
+  for (let i = Math.max(0, from); i < Math.min(arr.length, to); i++) { s += arr[i]; n++; }
+  return n ? s / n : 1;
+}
+
 function clamp(x, lo, hi) {
   return Math.max(lo, Math.min(hi, x));
 }
@@ -928,6 +934,62 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
   // Precompute demand trajectories (block-chained, no discontinuities)
   const demandTrajectories = precomputeDemandTrajectories(months, demandAssumptions);
+
+  // Token demand responds to the price of tokens. The input growth rates embed
+  // the base response (tokens ∝ price^−ε, ε = baseTokenPriceElasticity) to the
+  // base price path. Two adjustments on inference tokens:
+  //  1. Price path: a scenario that cuts prices more (less) than base sells
+  //     (price ÷ base price)^−ε more (fewer) tokens.
+  //  2. Elasticity: from elasticityStartYear, a different ε keeps the adoption
+  //     trend but changes how much the base fall in price per token (compute
+  //     price ÷ software efficiency) adds to demand.
+  // Training and research are sized to the token market they pay for (Anthropic
+  // S-1: R&D ~60% of revenue), so they scale with token REVENUE: the same
+  // elasticity term, and (price ÷ base price)^(1−ε) for the price path.
+  const priceDemand = (() => {
+    const drIn = buildAssumptions?.demandResponse || {};
+    const eps = Math.max(0, numOr(drIn.tokenPriceElasticity, 1.45));
+    const epsBase = Math.max(0, numOr(drIn.baseTokenPriceElasticity, 1.45));
+    const startYear = numOr(drIn.elasticityStartYear, GLOBAL_PARAMS.startYear + 1);
+    const refPath = FINANCING_ASSUMPTIONS_BASE.paths?.priceChange || {};
+    const scenPath = financingAssumptions?.paths?.priceChange || refPath;
+    const changeIn = (path, year) => {
+      const v = numOr(path[year], NaN);
+      return Number.isFinite(v) ? Math.max(-0.99, v) : Math.max(-0.99, numOr(refPath[year], 0));
+    };
+    const refEffCache = {};
+    const refPrice = new Float64Array(months);
+    const scenPrice = new Float64Array(months);
+    const refTokenPrice = new Float64Array(months);
+    refPrice[0] = 1; scenPrice[0] = 1; refTokenPrice[0] = 1;
+    for (let m = 1; m < months; m++) {
+      const year = calendarYearOf(m);
+      refPrice[m] = refPrice[m - 1] * Math.pow(1 + changeIn(refPath, year), 1 / 12);
+      scenPrice[m] = scenPrice[m - 1] * Math.pow(1 + changeIn(scenPath, year), 1 / 12);
+      const e = getEfficiencyMultipliers(m, EFFICIENCY_ASSUMPTIONS, refEffCache, [], new Set());
+      const softwareGain = (1 / Math.max(e.M_inference, EPSILON)) * e.S_inference;
+      refTokenPrice[m] = refPrice[m] / Math.max(softwareGain, EPSILON);
+    }
+    const startMonth = Math.max(0, (startYear - GLOBAL_PARAMS.startYear) * 12);
+    const factor = new Float64Array(months);
+    const revenueFactor = new Float64Array(months);
+    for (let m = 0; m < months; m++) {
+      const rel = scenPrice[m] / refPrice[m];
+      const epsTerm = m > startMonth && startMonth < months
+        ? Math.pow(refTokenPrice[m] / refTokenPrice[startMonth], epsBase - eps) : 1;
+      factor[m] = clamp(Math.pow(rel, -eps) * epsTerm, 1e-4, 1e4);
+      revenueFactor[m] = clamp(Math.pow(rel, 1 - eps) * epsTerm, 1e-4, 1e4);
+    }
+    return { factor, revenueFactor, eps, scenPrice };
+  })();
+  for (const seg of Object.keys(demandTrajectories.inference)) {
+    const arr = demandTrajectories.inference[seg];
+    for (let m = 0; m < arr.length; m++) arr[m] *= priceDemand.factor[m];
+  }
+  for (const seg of Object.keys(demandTrajectories.training)) {
+    const arr = demandTrajectories.training[seg];
+    for (let m = 0; m < arr.length; m++) arr[m] *= priceDemand.revenueFactor[m];
+  }
 
   // Organic supply growth: running multiplier per node. Growth is demand-driven
   // (shortage × elasticity); SUPPLY_ASSUMPTIONS.expansionRates adds baseline
@@ -2416,7 +2478,14 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
           fundingShortfallShare: yearAccum.desiredSpend > EPSILON ? Math.max(0, 1 - yearAccum.actualSpend / yearAccum.desiredSpend) : 0,
           procurementBinding: mostCommon(results.fleet.procurementBinding.slice(month + 1 - yearAccum.months, month + 1)),
           startsBinding: mostCommon(results.fleet.startsBinding.slice(month + 1 - yearAccum.months, month + 1)),
-          servedFraction: yearAccum.servedSum / yearAccum.months
+          servedFraction: yearAccum.servedSum / yearAccum.months,
+          // Token demand vs the base response to price (1 = base), and the
+          // price per token (compute price ÷ software efficiency, Jan-26 = 1)
+          priceDemandFactor: avgOver(priceDemand.factor, month + 1 - yearAccum.months, month + 1),
+          tokenPriceIndex: (() => {
+            const e = getEfficiencyMultipliers(month, efficiencyAssumptions, effCache, results.warnings, warnedSet);
+            return priceDemand.scenPrice[month] / Math.max((1 / Math.max(e.M_inference, EPSILON)) * e.S_inference, EPSILON);
+          })()
         } : {}
       });
     }

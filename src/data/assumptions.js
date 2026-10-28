@@ -894,7 +894,18 @@ const PROCUREMENT = {
  *    adoption); growth is scaled by (served share vs baseline)^feedback.
  */
 const DEMAND_RESPONSE = {
+  // Short-run rationing: demand expressed falls with the scarcity premium
   priceElasticity: 0.5,
+  // Long-run response of token demand to the price per token (tokens ∝
+  // price^−ε). The growth inputs embed ε ≈ 1.45 against the base price path
+  // (2027 base: ~4.5x tokens vs ~2.9x cheaper tokens; post-2030 rates are set
+  // from ε ≈ 1.45 × cost gains). A scenario's price path moves demand by
+  // (price ÷ base price)^−ε; a different ε from elasticityStartYear changes how
+  // much falling token prices add to demand. Ramp card data (Aug-Oct 2026):
+  // price −42%, usage +65%, spend +1.5% → ε ≈ 0.9 over ten weeks.
+  tokenPriceElasticity: 1.45,
+  baseTokenPriceElasticity: 1.45,
+  elasticityStartYear: 2027,
   unservedHalfLifeMonths: 6,
   capabilityFeedback: 0,
   source: 'Model design: growth rates are measured on served tokens (see DEMAND_ASSUMPTIONS year 1)'
@@ -1307,6 +1318,50 @@ export const SCENARIOS = {
     summary: { demand: 'Opening gap 1.8x installed (base 1.5x)', efficiency: 'Base', supply: 'Base' },
     overrides: {
       calibration: { targetRatio: 1.8 }
+    }
+  },
+
+  // ---- How strongly token demand responds to cheaper tokens (Jevons) ----
+  // Base ε ≈ 1.45: each 1% fall in price per token adds ~1.45% more tokens, so
+  // spend grows as supply is unlocked. Same adoption trend in all four; only
+  // the response to the price decline changes from 2027.
+  priceResponseLow: {
+    id: 'priceResponseLow',
+    name: 'Low Price Response (ε 0.9)',
+    description: 'From 2027 token demand responds to cheaper tokens with ε ≈ 0.9 (Ramp Aug-Oct 2026: price −42%, usage +65%, spend flat). Cheaper tokens add usage but not spend; compute demand stalls once the shortage clears.',
+    summary: { demand: 'ε 0.9 from 2027 (base 1.45)', efficiency: 'Base', supply: 'Base' },
+    overrides: {
+      build: { demandResponse: { tokenPriceElasticity: 0.9 } }
+    }
+  },
+
+  priceResponseModerate: {
+    id: 'priceResponseModerate',
+    name: 'Moderate Price Response (ε 1.2)',
+    description: 'From 2027 token demand responds to cheaper tokens with ε ≈ 1.2 (2026 measured: ~7x tokens on ~4.7x cheaper tokens ≈ 1.25). Spend still grows as prices fall, but more slowly than base.',
+    summary: { demand: 'ε 1.2 from 2027 (base 1.45)', efficiency: 'Base', supply: 'Base' },
+    overrides: {
+      build: { demandResponse: { tokenPriceElasticity: 1.2 } }
+    }
+  },
+
+  priceResponseHigh: {
+    id: 'priceResponseHigh',
+    name: 'High Price Response (ε 1.7)',
+    description: 'From 2027 token demand responds to cheaper tokens with ε ≈ 1.7: each wave of cheaper tokens unlocks disproportionately more agent and automation use. The Jevons bull case.',
+    summary: { demand: 'ε 1.7 from 2027 (base 1.45)', efficiency: 'Base', supply: 'Base' },
+    overrides: {
+      build: { demandResponse: { tokenPriceElasticity: 1.7 } }
+    }
+  },
+
+  priceWar: {
+    id: 'priceWar',
+    name: 'Token Price War',
+    description: 'Open-weight and rival labs cut prices: price per unit of compute falls 35%/yr in 2027-28 and 25% in 2029 (base −10%). Demand responds at the base ε ≈ 1.45, so usage rises while revenue per GW falls.',
+    summary: { demand: 'Responds to lower prices (ε 1.45)', efficiency: 'Base', supply: 'Base; price −35%/yr 2027-28' },
+    overrides: {
+      financing: { paths: { priceChange: { 2027: -0.35, 2028: -0.35, 2029: -0.25 } } }
     }
   }
 };

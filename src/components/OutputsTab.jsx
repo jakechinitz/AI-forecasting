@@ -55,6 +55,8 @@ function buildSheet(annual, tiers, tierMeta, gates, spend, vintages) {
       rows: [
         { label: 'Token demand growth (YoY)', unit: '%', values: growth(annual, 'tokenDemandIndex'), f: fmt.pct },
         { label: 'Training share of required fleet', unit: '%', values: col('trainingShare'), f: fmt.pct },
+        { label: 'Price per token (compute price ÷ software efficiency, Jan-26 = 1)', unit: 'index', values: col('tokenPriceIndex'), f: (v) => (v == null ? '' : v.toPrecision(2)) },
+        { label: 'Token demand vs base price response (1 = base)', unit: 'x', values: col('priceDemandFactor'), f: fmt.num2 },
         { label: 'Required installed GW (year average)', unit: 'GW', values: col('requiredGW'), f: fmt.gw },
         { label: 'Required installed GW (year-end)', unit: 'GW', values: col('requiredGWYearEnd'), f: fmt.gw },
         { label: 'Installed GW, opening', unit: 'GW', values: col('openingGW'), f: fmt.gw },
