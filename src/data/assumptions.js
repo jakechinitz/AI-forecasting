@@ -896,16 +896,30 @@ const PROCUREMENT = {
 const DEMAND_RESPONSE = {
   // Short-run rationing: demand expressed falls with the scarcity premium
   priceElasticity: 0.5,
-  // Long-run response of token demand to the price per token (tokens ∝
-  // price^−ε). The growth inputs embed ε ≈ 1.45 against the base price path
-  // (2027 base: ~4.5x tokens vs ~2.9x cheaper tokens; post-2030 rates are set
-  // from ε ≈ 1.45 × cost gains). A scenario's price path moves demand by
-  // (price ÷ base price)^−ε; a different ε from elasticityStartYear changes how
-  // much falling token prices add to demand. Ramp card data (Aug-Oct 2026):
-  // price −42%, usage +65%, spend +1.5% → ε ≈ 0.9 over ten weeks.
-  tokenPriceElasticity: 1.45,
+  // Token demand responds to the price per token relative to its VALUE to the
+  // user: tokens ∝ (price ÷ value per token)^−ε (see calculations.js).
+  // Pure price elasticity ε ≈ 1.0: Fradkin (Dec 2025, OpenRouter/Azure) finds
+  // ~0.55-1.1 short run; Ramp month to Oct 11, 2026: spend +23%, volume +52%
+  // (≈2 on actual prices, incl. new uses). The growth inputs embed a combined
+  // 1.45 vs cost per token (2027: ~4.5x tokens on ~2.9x cheaper tokens); with
+  // ε = 1.0 the rest is value per token rising (~+60%/yr in 2027).
+  tokenPriceElasticity: 1.0,
+  calibrationPriceElasticity: 1.0,
   baseTokenPriceElasticity: 1.45,
   elasticityStartYear: 2027,
+  // Value per token: implied by measured growth through 2030, then its own
+  // path as capability compounds instead of tracking cost declines (tied to
+  // cost, value would have grown ~31%/yr in 2031-35, ~24% in 2036-40, ~20% in
+  // 2041-45; here never slower than that). Evidence: METR task
+  // horizons doubling every ~3.5-4.5 months in 2024-26; frontier per-token
+  // prices rising, e.g. $10/$50 per M for GPT-6 Astra and Claude Fable 5.1;
+  // S-1: models <6 months old were >80% of Q3-26 revenue).
+  valueGrowthSchedule: [
+    { until: 2030, growth: 'implied' },
+    { until: 2035, growth: 0.40 },
+    { until: 2040, growth: 0.30 },
+    { until: 2045, growth: 0.20 }
+  ],
   unservedHalfLifeMonths: 6,
   capabilityFeedback: 0,
   source: 'Model design: growth rates are measured on served tokens (see DEMAND_ASSUMPTIONS year 1)'
@@ -1024,10 +1038,10 @@ const hardwareGainForYear = (year) => {
 const TOKEN_PRICE_PASS_THROUGH = 1.0;
 // Price per unit of compute holds up while demand outruns supply (Anthropic
 // S-1: revenue per $ of compute up ~3.7x y/y; cost per task cut 25-40% per
-// release "while preserving our margins"). Once supply catches up, the
-// premium over the cost-based path fades: an extra decline in these years
-// brings the price back to within ~20% of where cost alone would put it.
-const PRICE_NORMALIZATION = { fromYear: 2031, toYear: 2033, extraChange: -0.12 };
+// release "while preserving our margins"). Once supply catches up, part of
+// the premium over the cost-based path fades; rising value per token (frontier
+// tiers priced up) keeps the rest, ending ~45% above the cost-only path.
+const PRICE_NORMALIZATION = { fromYear: 2031, toYear: 2033, extraChange: -0.06 };
 
 const buildPath = (explicit, extend) => {
   const out = {};
@@ -1321,45 +1335,54 @@ export const SCENARIOS = {
     }
   },
 
-  // ---- How strongly token demand responds to cheaper tokens (Jevons) ----
-  // Base ε ≈ 1.45: each 1% fall in price per token adds ~1.45% more tokens, so
-  // spend grows as supply is unlocked. Same adoption trend in all four; only
-  // the response to the price decline changes from 2027.
+  // ---- Demand: response to price, and value per token ----
+  // Base: tokens ∝ (price ÷ value per token)^−1.0, value per token as measured
+  // through 2030, then +40%/yr (2031-35), +30% (2036-40), +20% (2041-45).
   priceResponseLow: {
     id: 'priceResponseLow',
-    name: 'Low Price Response (ε 0.9)',
-    description: 'From 2027 token demand responds to cheaper tokens with ε ≈ 0.9 (Ramp Aug-Oct 2026: price −42%, usage +65%, spend flat). Cheaper tokens add usage but not spend; compute demand stalls once the shortage clears.',
-    summary: { demand: 'ε 0.9 from 2027 (base 1.45)', efficiency: 'Base', supply: 'Base' },
+    name: 'Low Price Response (ε 0.7)',
+    description: 'From 2027 token demand responds weakly to cheaper (value-adjusted) tokens, ε ≈ 0.7 instead of 1.0 (close to the short-run OpenRouter estimates). Cheaper tokens add usage but not spend; value growth still pulls demand out.',
+    summary: { demand: 'ε 0.7 from 2027 (base 1.0)', efficiency: 'Base', supply: 'Base' },
     overrides: {
-      build: { demandResponse: { tokenPriceElasticity: 0.9 } }
-    }
-  },
-
-  priceResponseModerate: {
-    id: 'priceResponseModerate',
-    name: 'Moderate Price Response (ε 1.2)',
-    description: 'From 2027 token demand responds to cheaper tokens with ε ≈ 1.2 (2026 measured: ~7x tokens on ~4.7x cheaper tokens ≈ 1.25). Spend still grows as prices fall, but more slowly than base.',
-    summary: { demand: 'ε 1.2 from 2027 (base 1.45)', efficiency: 'Base', supply: 'Base' },
-    overrides: {
-      build: { demandResponse: { tokenPriceElasticity: 1.2 } }
+      build: { demandResponse: { tokenPriceElasticity: 0.7 } }
     }
   },
 
   priceResponseHigh: {
     id: 'priceResponseHigh',
-    name: 'High Price Response (ε 1.7)',
-    description: 'From 2027 token demand responds to cheaper tokens with ε ≈ 1.7: each wave of cheaper tokens unlocks disproportionately more agent and automation use. The Jevons bull case.',
-    summary: { demand: 'ε 1.7 from 2027 (base 1.45)', efficiency: 'Base', supply: 'Base' },
+    name: 'High Price Response (ε 1.3)',
+    description: 'From 2027 token demand responds strongly to cheaper (value-adjusted) tokens, ε ≈ 1.3: each wave of cheaper tokens unlocks disproportionately more agent and automation use. The Jevons bull case.',
+    summary: { demand: 'ε 1.3 from 2027 (base 1.0)', efficiency: 'Base', supply: 'Base' },
     overrides: {
-      build: { demandResponse: { tokenPriceElasticity: 1.7 } }
+      build: { demandResponse: { tokenPriceElasticity: 1.3 } }
+    }
+  },
+
+  valuePlateau: {
+    id: 'valuePlateau',
+    name: 'Capability Plateau',
+    description: 'Value per token stops rising after 2027 (models stop getting more useful per token: task horizons stall, frontier pricing fades). Demand then grows only as tokens get cheaper. The bear case that matters most.',
+    summary: { demand: 'Value per token flat from 2028', efficiency: 'Base', supply: 'Base' },
+    overrides: {
+      build: { demandResponse: { valueGrowthSchedule: [{ until: 2027, growth: 'implied' }, { until: 2045, growth: 0 }] } }
+    }
+  },
+
+  valueBoom: {
+    id: 'valueBoom',
+    name: 'Capability Compounds',
+    description: 'Value per token keeps compounding fast after 2030 (+60%/yr 2031-35, +45% 2036-40, +30% 2041-45) as agents take on longer, higher-value work. The bull case.',
+    summary: { demand: 'Value per token +60/45/30%/yr after 2030', efficiency: 'Base', supply: 'Base' },
+    overrides: {
+      build: { demandResponse: { valueGrowthSchedule: [{ until: 2030, growth: 'implied' }, { until: 2035, growth: 0.60 }, { until: 2040, growth: 0.45 }, { until: 2045, growth: 0.30 }] } }
     }
   },
 
   priceWar: {
     id: 'priceWar',
     name: 'Token Price War',
-    description: 'Open-weight and rival labs cut prices: price per unit of compute falls 35%/yr in 2027-28 and 25% in 2029 (base −10%). Demand responds at the base ε ≈ 1.45, so usage rises while revenue per GW falls.',
-    summary: { demand: 'Responds to lower prices (ε 1.45)', efficiency: 'Base', supply: 'Base; price −35%/yr 2027-28' },
+    description: 'Open-weight and rival labs cut prices: price per unit of compute falls 35%/yr in 2027-28 and 25% in 2029 (base −10%). Demand responds at the base ε ≈ 1.0, so usage rises but spend per GW falls.',
+    summary: { demand: 'Responds to lower prices (ε 1.0)', efficiency: 'Base', supply: 'Base; price −35%/yr 2027-28' },
     overrides: {
       financing: { paths: { priceChange: { 2027: -0.35, 2028: -0.35, 2029: -0.25 } } }
     }

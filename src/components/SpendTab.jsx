@@ -329,7 +329,7 @@ function SpendTab({ results, costs, onCostChange, onResetCosts, build, onBuildCh
                   <tr><td>Months to work stock back to target</td><td><NumInput value={proc.inventoryAdjustMonths} kind="num" onChange={(v) => onBuildChange(['procurement', 'inventoryAdjustMonths'], v)} /></td></tr>
                   <tr><td>Chips bought but not energized at start (GW)</td><td><NumInput value={proc.openingStrandedGW} kind="num" step={0.5} onChange={(v) => onBuildChange(['procurement', 'openingStrandedGW'], v)} /></td></tr>
                   <tr><td>Short-run rationing elasticity (vs scarcity premium)</td><td><NumInput value={dr.priceElasticity} kind="num" step={0.1} onChange={(v) => onBuildChange(['demandResponse', 'priceElasticity'], v)} /></td></tr>
-                  <tr><td>Token demand response to cheaper tokens, ε (base 1.45; from 2027)</td><td><NumInput value={dr.tokenPriceElasticity} kind="num" step={0.05} onChange={(v) => onBuildChange(['demandResponse', 'tokenPriceElasticity'], v)} /></td></tr>
+                  <tr><td>Token demand response to value-adjusted token price, ε (base 1.0; from 2027)</td><td><NumInput value={dr.tokenPriceElasticity} kind="num" step={0.05} onChange={(v) => onBuildChange(['demandResponse', 'tokenPriceElasticity'], v)} /></td></tr>
                   <tr><td>Half-life of unserved demand (months)</td><td><NumInput value={dr.unservedHalfLifeMonths} kind="num" onChange={(v) => onBuildChange(['demandResponse', 'unservedHalfLifeMonths'], v)} /></td></tr>
                   <tr>
                     <td>
