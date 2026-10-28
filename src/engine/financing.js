@@ -62,7 +62,7 @@ const SCALAR_BOUNDS = {
   computeLifeYears: [1, 50], facilityLifeYears: [1, 100],
   scarcityElasticity: [0, Infinity], maxScarcityPremium: [1, Infinity],
   electricityPricePerKwh: [0, Infinity], electricityPriceGrowth: [-0.5, 1], otherOpexPerGwYr: [0, Infinity],
-  legacyCapexPerGw: [0, Infinity]
+  legacyCapexPerGw: [0, Infinity], spillAbsorption: [0, 100]
 };
 
 // Compute share of capex for fleet built before the model starts
@@ -102,6 +102,18 @@ export function sanitizeFinancing(fin = {}, defaults = {}) {
       .forEach((k) => { out[k] = num(t?.[k], def[k] ?? 0); });
     out.share = Math.max(0, out.share);
     out.maxExternalShareOfCapex = Math.min(1, Math.max(0, out.maxExternalShareOfCapex));
+    // Optional { year: share } steps (each holds until the next year listed)
+    const sched = isPlainObject(t?.maxExternalShareSchedule) ? t.maxExternalShareSchedule
+      : (isPlainObject(def.maxExternalShareSchedule) ? def.maxExternalShareSchedule : null);
+    out.maxExternalShareSchedule = null;
+    if (sched) {
+      const clean = {};
+      Object.entries(sched).forEach(([y, v]) => {
+        const n = num(v, NaN);
+        if (Number.isFinite(n) && Number.isFinite(Number(y))) clean[y] = Math.min(1, Math.max(0, n));
+      });
+      if (Object.keys(clean).length) out.maxExternalShareSchedule = clean;
+    }
     out.id = out.id ?? String.fromCharCode(65 + i);
     out.name = out.name ?? `Tier ${out.id}`;
     return out;
@@ -128,7 +140,7 @@ export function sanitizeFinancing(fin = {}, defaults = {}) {
     ...fin,
     applyFundingConstraint: fin.applyFundingConstraint !== false,
     baseYear: {
-      blendedPricePerMTokens: num(fin.baseYear?.blendedPricePerMTokens, d.baseYear?.blendedPricePerMTokens ?? 0.55, 0)
+      blendedPricePerMTokens: num(fin.baseYear?.blendedPricePerMTokens, d.baseYear?.blendedPricePerMTokens ?? 0.68, 0)
     },
     scalars, paths, tiers, channels,
     marketCapacityMultiplier: {
@@ -248,6 +260,34 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
     };
   }
 
+  // A tier's cap on outside money in a year (schedule steps, else the constant)
+  const externalShareIn = (t, year) => {
+    const sched = t.maxExternalShareSchedule;
+    if (!sched) return t.maxExternalShareOfCapex;
+    const years = Object.keys(sched).map(Number).filter((y) => y <= year).sort((a, b) => a - b);
+    return years.length ? sched[years[years.length - 1]] : t.maxExternalShareOfCapex;
+  };
+
+  // Builders with funding slack take on only part of a constrained builder's
+  // share: each tier can fund at most (1 + spillAbsorption) × its share of the
+  // system build. A large spillAbsorption reproduces full spill-over.
+  const spill = Math.max(0, scalars.spillAbsorption ?? Infinity);
+  const absorbCap = (share, total) => (Number.isFinite(spill) ? (1 + spill) * share * total : Infinity);
+  // Largest system capex X the tiers can fund together:
+  // Σ min(F_i, (1 + spill) · share_i · X) ≥ X
+  function systemFundable(fundables) {
+    const sum = fundables.reduce((s, f) => s + f, 0);
+    if (!Number.isFinite(spill) || !(sum > 0)) return sum;
+    const covered = (X) => fundables.reduce((s, f, i) => s + Math.min(f, absorbCap(tiers[i].share, X)), 0);
+    if (covered(sum) >= sum - 1e-9) return sum;
+    let lo = 0; let hi = sum;
+    for (let k = 0; k < 60; k++) {
+      const mid = (lo + hi) / 2;
+      if (covered(mid) >= mid) lo = mid; else hi = mid;
+    }
+    return lo;
+  }
+
   /**
    * Start of a calendar year: compute unit economics on the opening fleet and
    * each tier's maximum fundable capex (Funding rows 34-38 in the Excel).
@@ -287,7 +327,8 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
       const debtCap = Math.min(headroom, marketDebt);
       const internal = ocf - t.shareholderReturns;
       const maxMarkets = internal + cashAvail + debtCap + marketEquity;
-      const maxBehavioral = t.maxExternalShareOfCapex >= 1 ? Infinity : Math.max(0, internal) / (1 - t.maxExternalShareOfCapex);
+      const maxExternal = externalShareIn(t, year);
+      const maxBehavioral = maxExternal >= 1 ? Infinity : Math.max(0, internal) / (1 - maxExternal);
       const maxFundable = Math.max(0, Math.min(maxMarkets, maxBehavioral));
       const governor = maxBehavioral < maxMarkets
         ? 'Behavioral cap'
@@ -299,7 +340,7 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
       };
     });
 
-    const fundableCapex = tierPlans.reduce((s, p) => s + p.maxFundable, 0);
+    const fundableCapex = systemFundable(tierPlans.map((p) => p.maxFundable));
 
     current = {
       year, ctx, econ, openingGW, fleetDA, nicOpen, aiRevenue, aiEbitdaTotal, aiOcfTotal,
@@ -354,7 +395,7 @@ export function createFinancingModel(rawFin, { startYear: firstModelYear, pue, d
     let alloc;
     if (useFundableCaps) {
       const unallocated = Math.max(0, C - base.reduce((s, v) => s + v, 0));
-      const slack = tiers.map((_, i) => Math.max(0, c.tierPlans[i].maxFundable - base[i]));
+      const slack = tiers.map((t, i) => Math.max(0, Math.min(c.tierPlans[i].maxFundable, absorbCap(t.share, C)) - base[i]));
       const totalSlack = slack.reduce((s, v) => s + v, 0);
       alloc = base.map((b, i) => b + (totalSlack > 0 ? Math.min(slack[i], unallocated * slack[i] / totalSlack) : 0));
     } else {

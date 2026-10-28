@@ -268,6 +268,12 @@ const CONSUMPTION_HEADROOM = 1.5;
 // Component order backlogs are paid down over this many months
 const BACKLOG_PAYDOWN_MONTHS_COMPONENTS = 6;
 
+function avgOver(arr, from, to) {
+  let s = 0; let n = 0;
+  for (let i = Math.max(0, from); i < Math.min(arr.length, to); i++) { s += arr[i]; n++; }
+  return n ? s / n : 1;
+}
+
 function clamp(x, lo, hi) {
   return Math.max(lo, Math.min(hi, x));
 }
@@ -928,6 +934,91 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
 
   // Precompute demand trajectories (block-chained, no discontinuities)
   const demandTrajectories = precomputeDemandTrajectories(months, demandAssumptions);
+
+  // Token demand responds to the price of a token RELATIVE TO ITS VALUE to the
+  // user (a quality-adjusted price): tokens ∝ (price per token ÷ value per
+  // token)^−ε. Better models make each token worth more (longer tasks, agents,
+  // frontier tiers priced up), which shifts demand out independently of price.
+  //   Price per token = compute price ÷ software efficiency (cost-based).
+  //   The input growth rates embed a combined response of baseTokenPriceElasticity
+  //   (1.45) to the base fall in price per token. Split with a pure price
+  //   elasticity of calibrationPriceElasticity (1.0), the rest is value growth:
+  //   ln V grows (1.45/1.0 − 1) × the fall in ln price ("implied") — this keeps
+  //   2026-30 exactly as measured.
+  //   valueGrowthSchedule sets value growth by year: 'implied' (tied to cost
+  //   declines, as above) or an explicit annual rate (after 2030 by default),
+  //   so demand no longer slows just because efficiency gains slow.
+  //   tokenPriceElasticity (scenario) changes the response to the
+  //   quality-adjusted price from elasticityStartYear; a scenario price path
+  //   moves demand by (price ÷ base price)^−ε.
+  // Training and research are sized to the token market they pay for (Anthropic
+  // S-1: R&D ~60% of revenue), so they scale with token REVENUE (demand × price).
+  const priceDemand = (() => {
+    const drIn = buildAssumptions?.demandResponse || {};
+    const eps = Math.max(0, numOr(drIn.tokenPriceElasticity, 1.0));
+    const epsCal = Math.max(0.05, numOr(drIn.calibrationPriceElasticity, 1.0));
+    const epsBase = Math.max(0, numOr(drIn.baseTokenPriceElasticity, 1.45));
+    const startYear = numOr(drIn.elasticityStartYear, GLOBAL_PARAMS.startYear + 1);
+    const valueSchedule = Array.isArray(drIn.valueGrowthSchedule) && drIn.valueGrowthSchedule.length
+      ? drIn.valueGrowthSchedule : [{ until: 9999, growth: 'implied' }];
+    const valueGrowthIn = (year) => {
+      for (const step of valueSchedule) if (year <= numOr(step.until, 9999)) return step.growth;
+      return valueSchedule[valueSchedule.length - 1].growth;
+    };
+    const refPath = FINANCING_ASSUMPTIONS_BASE.paths?.priceChange || {};
+    const scenPath = financingAssumptions?.paths?.priceChange || refPath;
+    const changeIn = (path, year) => {
+      const v = numOr(path[year], NaN);
+      return Number.isFinite(v) ? Math.max(-0.99, v) : Math.max(-0.99, numOr(refPath[year], 0));
+    };
+    const refEffCache = {};
+    const refPrice = new Float64Array(months);
+    const scenPrice = new Float64Array(months);
+    const refTokenPrice = new Float64Array(months);
+    refPrice[0] = 1; scenPrice[0] = 1; refTokenPrice[0] = 1;
+    for (let m = 1; m < months; m++) {
+      const year = calendarYearOf(m);
+      refPrice[m] = refPrice[m - 1] * Math.pow(1 + changeIn(refPath, year), 1 / 12);
+      scenPrice[m] = scenPrice[m - 1] * Math.pow(1 + changeIn(scenPath, year), 1 / 12);
+      const e = getEfficiencyMultipliers(m, EFFICIENCY_ASSUMPTIONS, refEffCache, [], new Set());
+      const softwareGain = (1 / Math.max(e.M_inference, EPSILON)) * e.S_inference;
+      refTokenPrice[m] = refPrice[m] / Math.max(softwareGain, EPSILON);
+    }
+    const startMonth = Math.min(months - 1, Math.max(0, (startYear - GLOBAL_PARAMS.startYear) * 12));
+    const impliedShare = epsBase / epsCal - 1;
+    const factor = new Float64Array(months);
+    const revenueFactor = new Float64Array(months);
+    const valueIndex = new Float64Array(months); // ln value per token since Jan-26
+    let lnValue = 0;
+    for (let m = 0; m < months; m++) {
+      if (m > 0) {
+        const g = valueGrowthIn(calendarYearOf(m));
+        lnValue += g === 'implied'
+          ? impliedShare * Math.log(refTokenPrice[m - 1] / refTokenPrice[m])
+          : Math.log(1 + Math.max(-0.99, numOr(g, 0))) / 12;
+      }
+      valueIndex[m] = lnValue;
+      const lnRel = Math.log(scenPrice[m] / refPrice[m]);
+      let lnF = -eps * lnRel;
+      if (m > startMonth) {
+        const x = Math.log(refTokenPrice[startMonth] / refTokenPrice[m]); // fall in ln price since start
+        const v = lnValue - valueIndex[startMonth];
+        lnF += eps * (v + x) - epsBase * x;
+      }
+      factor[m] = clamp(Math.exp(lnF), 1e-4, 1e4);
+      revenueFactor[m] = clamp(Math.exp(lnF + lnRel), 1e-4, 1e4);
+    }
+    for (let m = 0; m < months; m++) valueIndex[m] = Math.exp(valueIndex[m]);
+    return { factor, revenueFactor, eps, scenPrice, valueIndex };
+  })();
+  for (const seg of Object.keys(demandTrajectories.inference)) {
+    const arr = demandTrajectories.inference[seg];
+    for (let m = 0; m < arr.length; m++) arr[m] *= priceDemand.factor[m];
+  }
+  for (const seg of Object.keys(demandTrajectories.training)) {
+    const arr = demandTrajectories.training[seg];
+    for (let m = 0; m < arr.length; m++) arr[m] *= priceDemand.revenueFactor[m];
+  }
 
   // Organic supply growth: running multiplier per node. Growth is demand-driven
   // (shortage × elasticity); SUPPLY_ASSUMPTIONS.expansionRates adds baseline
@@ -2416,7 +2507,15 @@ export function runSimulation(assumptions, scenarioOverrides = {}) {
           fundingShortfallShare: yearAccum.desiredSpend > EPSILON ? Math.max(0, 1 - yearAccum.actualSpend / yearAccum.desiredSpend) : 0,
           procurementBinding: mostCommon(results.fleet.procurementBinding.slice(month + 1 - yearAccum.months, month + 1)),
           startsBinding: mostCommon(results.fleet.startsBinding.slice(month + 1 - yearAccum.months, month + 1)),
-          servedFraction: yearAccum.servedSum / yearAccum.months
+          servedFraction: yearAccum.servedSum / yearAccum.months,
+          // Token demand vs the base response to price (1 = base), and the
+          // price per token (compute price ÷ software efficiency, Jan-26 = 1)
+          priceDemandFactor: avgOver(priceDemand.factor, month + 1 - yearAccum.months, month + 1),
+          valuePerTokenIndex: priceDemand.valueIndex[month],
+          tokenPriceIndex: (() => {
+            const e = getEfficiencyMultipliers(month, efficiencyAssumptions, effCache, results.warnings, warnedSet);
+            return priceDemand.scenPrice[month] / Math.max((1 / Math.max(e.M_inference, EPSILON)) * e.S_inference, EPSILON);
+          })()
         } : {}
       });
     }
